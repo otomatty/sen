@@ -113,6 +113,68 @@
 .inbox-detail-pane .empty-state {
   margin: auto;
 }
+/* 通知がひとつもないときは、選ぶものがないので右側を閉じて 1 列にする */
+.inbox-page.empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+.inbox-page.empty .inbox-list-pane {
+  border-right: 0;
+}
+.inbox-page.empty .inbox-detail-pane {
+  display: none;
+}
+.inbox-guide {
+  width: 100%;
+  max-width: 400px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  text-align: left;
+}
+.inbox-guide-title {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.inbox-guide ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.inbox-guide li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+.inbox-guide-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-secondary);
+}
+.inbox-guide-note {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.inbox-guide-note svg {
+  vertical-align: -2px;
+}
 
 /* =========================================================================
    検索

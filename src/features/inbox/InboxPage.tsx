@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Archive, CheckCheck, Inbox, MailOpen, Mail } from "lucide-react";
+import { Archive, ArrowRightLeft, AtSign, Bell, CheckCheck, Inbox, MailOpen, Mail, MessageSquare, UserPlus } from "lucide-react";
 import type { AppNotification } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { useInbox } from "../../store/selectors";
 import { archiveNotification, markAllNotificationsRead, setNotificationRead } from "../../store/actions";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { cx, identifier, shortTimeAgo } from "../../lib/utils";
-import { Avatar, EmptyState, Kbd, Tooltip } from "../../components/ui";
+import { Avatar, Button, EmptyState, Kbd, Tooltip } from "../../components/ui";
 import { PageHeader } from "../../components/PageHeader";
 import { StateIcon } from "../../components/pickers";
 import { IssueDetail } from "../issues/IssueDetail";
@@ -38,6 +38,68 @@ interface InboxEntry {
   unread: boolean;
 }
 
+/** 通知が届くきっかけ（worker/mutations.ts の addNotifications の呼び出しと対応） */
+const TRIGGERS = [
+  { icon: <UserPlus size={14} />, label: "課題の担当者になったとき" },
+  { icon: <AtSign size={14} />, label: "コメントでメンションされたとき" },
+  { icon: <MessageSquare size={14} />, label: "購読中の課題にコメントがついたとき" },
+  { icon: <ArrowRightLeft size={14} />, label: "購読中の課題のステータスが変わったとき" },
+];
+
+/** 受信トレイが空のときの表示。通知が届く条件と、次にできることを案内する */
+function InboxEmpty() {
+  const navigate = useNavigate();
+  const p = useWsPath();
+  // 自分の操作は通知されないので、メンバーが自分だけのワークスペースには通知が届かない
+  const solo = useData((s) => Object.keys(s.users).length <= 1);
+  return (
+    <EmptyState
+      icon={<Inbox size={26} />}
+      title="受信トレイは空です"
+      description={
+        solo ? (
+          <>
+            通知は、ほかのメンバーが課題を動かしたときに届きます。
+            <br />
+            メンバーを招待して、一緒に課題を進めましょう。
+          </>
+        ) : (
+          "あなたに関わる課題が動くと、ここに通知が届きます。"
+        )
+      }
+      action={
+        <>
+          {solo && (
+            <Button variant="primary" icon={<UserPlus size={14} />} onClick={() => navigate(p("/settings/workspace"))} data-testid="inbox-invite">
+              メンバーを招待
+            </Button>
+          )}
+          <Button onClick={() => navigate(p("/my-issues"))} data-testid="inbox-my-issues">
+            自分の課題を見る
+          </Button>
+        </>
+      }
+    >
+      <div className="inbox-guide" data-testid="inbox-guide">
+        <div className="inbox-guide-title">通知が届くタイミング</div>
+        <ul>
+          {TRIGGERS.map((t) => (
+            <li key={t.label}>
+              <span className="inbox-guide-icon">{t.icon}</span>
+              {t.label}
+            </li>
+          ))}
+        </ul>
+        <p className="inbox-guide-note">
+          作成・担当・コメントした課題は自動で購読されます。
+          <br />
+          課題の詳細にある <Bell size={12} role="img" aria-label="ベル" /> ボタンで、購読を切り替えられます。
+        </p>
+      </div>
+    </EmptyState>
+  );
+}
+
 export function InboxPage() {
   const all = useInbox();
   const issues = useData((s) => s.issues);
@@ -63,6 +125,7 @@ export function InboxPage() {
   useDocumentTitle("受信トレイ");
 
   const selected = list.find((e) => e.issueId === selectedId) ?? null;
+  const hasUnread = all.some((n) => !n.readAt);
 
   // 最初の通知を自動で選ぶ（削除後は次の通知へ）
   useEffect(() => {
@@ -113,7 +176,7 @@ export function InboxPage() {
   );
 
   return (
-    <div className="page inbox-page" data-testid="inbox-page">
+    <div className={cx("page inbox-page", list.length === 0 && "empty")} data-testid="inbox-page">
       <div className="inbox-list-pane">
         <PageHeader
           title={
@@ -131,7 +194,7 @@ export function InboxPage() {
                 </button>
               </Tooltip>
               <Tooltip label="すべて既読にする">
-                <button className="icon-btn" onClick={() => markAllNotificationsRead()} aria-label="すべて既読にする" data-testid="inbox-mark-all">
+                <button className="icon-btn" onClick={() => markAllNotificationsRead()} disabled={!hasUnread} aria-label="すべて既読にする" data-testid="inbox-mark-all">
                   <CheckCheck size={15} />
                 </button>
               </Tooltip>
@@ -139,9 +202,21 @@ export function InboxPage() {
           }
         />
         <div className="inbox-list" data-testid="inbox-list">
-          {list.length === 0 && (
-            <EmptyState icon={<Inbox size={26} />} title={unreadOnly ? "未読の通知はありません" : "受信トレイは空です"} description="割り当て・コメント・メンションがここに届きます。" />
-          )}
+          {list.length === 0 &&
+            (all.length === 0 ? (
+              <InboxEmpty />
+            ) : (
+              <EmptyState
+                icon={<CheckCheck size={26} />}
+                title="未読の通知はありません"
+                description="すべての通知を確認済みです。"
+                action={
+                  <Button onClick={() => setUnreadOnly(false)} data-testid="inbox-show-all">
+                    すべての通知を表示
+                  </Button>
+                }
+              />
+            ))}
           {list.map((entry) => {
             const n = entry.latest;
             const issue = issues[n.issueId];
