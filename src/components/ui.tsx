@@ -299,12 +299,26 @@ export function Menu({
 }
 
 // ---------------- 空状態 ----------------
-export function EmptyState({ title, description, action, icon }: { title: string; description?: ReactNode; action?: ReactNode; icon?: ReactNode }) {
+export function EmptyState({
+  title,
+  description,
+  action,
+  icon,
+  children,
+}: {
+  title: string;
+  description?: ReactNode;
+  action?: ReactNode;
+  icon?: ReactNode;
+  /** 説明とボタンのあいだに置く補足（使い方の案内など） */
+  children?: ReactNode;
+}) {
   return (
     <div className="empty-state">
       {icon && <div className="empty-icon">{icon}</div>}
       <div className="empty-title">{title}</div>
       {description && <div className="empty-desc">{description}</div>}
+      {children}
       {action && <div className="empty-action">{action}</div>}
     </div>
   );
