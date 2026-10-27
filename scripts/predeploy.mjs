@@ -14,6 +14,6 @@ if (existsSync(devVars)) {
 }
 const config = readFileSync(path.join(root, "wrangler.jsonc"), "utf8");
 if (/"database_id"\s*:\s*"0{8}-0{4}-0{4}-0{4}-0{12}"/.test(config)) {
-  console.error("\n✗ wrangler.jsonc の database_id が未設定です。先に `npm run cf:setup` を実行してください。\n");
+  console.error("\n✗ wrangler.jsonc の database_id が未設定です。先に `bun run cf:setup` を実行してください。\n");
   process.exit(1);
 }

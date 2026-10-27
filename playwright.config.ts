@@ -24,7 +24,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } } }],
   webServer: {
     // 毎回まっさらな DB で、本番と同じビルドを動かす
-    command: `rm -rf ${persist} && npx vite build && npx vite preview --port ${PORT} --strictPort`,
+    command: `rm -rf ${persist} && bunx vite build && bunx vite preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/api/health`,
     env: { SEN_PERSIST_DIR: persist, PORT: String(PORT) },
     reuseExistingServer: !process.env.CI,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-// 操作説明動画のメタデータ。動画本体と manifest.json は `npm run tutorials` が自動生成する。
+// 操作説明動画のメタデータ。動画本体と manifest.json は `bun run tutorials` が自動生成する。
 
 export interface TutorialChapter {
   t: number; // 秒

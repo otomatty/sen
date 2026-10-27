@@ -45,7 +45,7 @@ export function HelpPage() {
               title="まだ動画がありません"
               description={
                 <>
-                  ターミナルで <code>npm run tutorials</code> を実行すると、全画面の説明動画が自動で収録されます。
+                  ターミナルで <code>bun run tutorials</code> を実行すると、全画面の説明動画が自動で収録されます。
                 </>
               }
             />
