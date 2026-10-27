@@ -1,0 +1,237 @@
+/* =========================================================================
+   デザイントークン
+   ========================================================================= */
+:root,
+[data-theme="dark"] {
+  --bg: #0b0c0e;
+  --panel: #111215;
+  --panel-2: #17181b;
+  --panel-3: #1c1d21;
+  --overlay: #1a1b1f;
+  --border: #212226;
+  --border-strong: #2d2f34;
+  --hover: rgba(255, 255, 255, 0.04);
+  --active: rgba(255, 255, 255, 0.07);
+  --text: #e6e6e9;
+  --text-secondary: #a1a3a9;
+  --text-tertiary: #6b6d74;
+  --accent: #6470e8;
+  --accent-hover: #7480f2;
+  --accent-soft: rgba(100, 112, 232, 0.16);
+  --accent-text: #a0a8ff;
+  --urgent: #f2683c;
+  --danger: #eb5757;
+  --warn: #f0a63a;
+  --success: #3fb27f;
+  --icon-on-color: #111215;
+  --backdrop: rgba(4, 4, 6, 0.55);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.035);
+  --radius: 8px;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f3f3f5;
+  --panel: #ffffff;
+  --panel-2: #f7f7f9;
+  --panel-3: #f0f0f3;
+  --overlay: #ffffff;
+  --border: #e7e7eb;
+  --border-strong: #d6d7dc;
+  --hover: rgba(15, 15, 30, 0.04);
+  --active: rgba(15, 15, 30, 0.065);
+  --text: #1b1c21;
+  --text-secondary: #5c5f68;
+  --text-tertiary: #979aa2;
+  --accent: #5865e3;
+  --accent-hover: #4b58d8;
+  --accent-soft: rgba(88, 101, 227, 0.12);
+  --accent-text: #4b58d8;
+  --icon-on-color: #ffffff;
+  --backdrop: rgba(20, 20, 30, 0.22);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow: 0 12px 40px rgba(20, 20, 40, 0.14), 0 0 0 1px rgba(20, 20, 40, 0.06);
+  color-scheme: light;
+}
+
+/* =========================================================================
+   リセットと基本
+   ========================================================================= */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter Variable", "Inter", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI",
+    Meiryo, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-feature-settings: "palt" 1;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+code,
+kbd,
+pre {
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, "Noto Sans Mono CJK JP", monospace;
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+.small {
+  font-size: 12px;
+}
+.spacer {
+  flex: 1;
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.text-danger {
+  color: var(--danger) !important;
+}
+.text-warn {
+  color: var(--warn) !important;
+}
+.mobile-only {
+  display: none !important;
+}
+.center-pad {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot.big {
+  width: 12px;
+  height: 12px;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

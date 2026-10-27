@@ -1,0 +1,66 @@
+import { expect, test } from "@playwright/test";
+import { row, seedDemo, signupViaUi, waitForSynced } from "./helpers";
+
+test("課題の詳細でタイトル・説明・サブ課題・コメントを編集できる", async ({ page }) => {
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+  await page.goto(`/${ws}/team/ENG/all`);
+  await row(page, "ENG-15").click();
+  const detail = page.getByTestId("issue-detail");
+  await expect(detail).toBeVisible();
+
+  // タイトル
+  const title = page.getByTestId("issue-title");
+  await title.fill("迷惑メール判定の原因を調べる");
+  await title.press("Enter");
+
+  // 説明（Markdown の見出し記法）
+  await page.getByTestId("issue-description").click();
+  await page.keyboard.type("## 調査メモ");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("SPF を確認する");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("issue-description").locator("h2")).toHaveText("調査メモ");
+
+  // サブ課題
+  await page.getByTestId("add-sub-issue").click();
+  await page.getByTestId("sub-issue-input").fill("DKIM を設定する");
+  await page.getByTestId("sub-issue-input").press("Enter");
+  await expect(page.getByTestId("sub-issues")).toContainText("DKIM を設定する");
+  await page.getByTestId("sub-issue-input").press("Escape");
+
+  // メンション付きコメント
+  await page.getByTestId("comment-input").click();
+  await page.keyboard.type("@佐藤");
+  await expect(page.getByTestId("mention-menu")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("確認お願いします");
+  await page.keyboard.press("Control+Enter");
+  await expect(page.getByTestId("comment").last()).toContainText("@佐藤 花子 確認お願いします");
+
+  // 履歴にタイトル変更が残る
+  await expect(page.getByTestId("activity")).toContainText("タイトルを");
+  await waitForSynced(page);
+
+  // 再読み込み後も保存されている
+  await page.reload();
+  await expect(page.getByTestId("issue-title")).toHaveValue("迷惑メール判定の原因を調べる");
+  await expect(page.getByTestId("issue-description").locator("h2")).toHaveText("調査メモ");
+  await expect(page.getByTestId("comment").last()).toContainText("確認お願いします");
+  await expect(page.getByTestId("sub-issues")).toContainText("DKIM を設定する");
+});
+
+test("プロパティを変更すると履歴に残り、削除と復元ができる", async ({ page }) => {
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+  await page.goto(`/${ws}/issue/ENG-7`);
+  await page.getByTestId("prop-labels").click();
+  await page.getByTestId("picker-labels").getByRole("option", { name: /バグ/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("activity")).toContainText("ラベル");
+  await page.keyboard.press("Control+Backspace");
+  await expect(page.getByTestId("toast").filter({ hasText: "削除しました" })).toBeVisible();
+  await page.getByTestId("toast").getByRole("button", { name: "元に戻す" }).click();
+  await page.goto(`/${ws}/team/ENG/all`);
+  await expect(row(page, "ENG-7")).toBeVisible();
+});

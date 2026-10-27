@@ -1,0 +1,345 @@
+/* =========================================================================
+   アプリの骨組み（サイドバー + パネル）
+   ========================================================================= */
+.app {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  height: 100%;
+  background: var(--bg);
+}
+
+.fullscreen-center {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.error-text {
+  color: var(--danger);
+}
+
+/* サイドバー */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 8px 8px;
+  user-select: none;
+}
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 8px;
+}
+.ws-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.ws-switcher:hover {
+  background: var(--hover);
+}
+.ws-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--accent), #a76be8);
+  color: #fff;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-actions {
+  display: flex;
+  gap: 2px;
+}
+.compose-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.nav-section {
+  padding: 14px 8px 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  width: 100%;
+  text-align: left;
+  font-weight: 500;
+}
+.nav-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.nav-item.active {
+  background: var(--active);
+  color: var(--text);
+}
+.nav-icon {
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.nav-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.nav-team-head {
+  color: var(--text);
+}
+.nav-team-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nav-team-children .nav-item {
+  padding-left: 30px;
+  font-weight: 400;
+}
+.fav-star {
+  color: var(--warn);
+}
+.sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px 2px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+.sync-status.syncing .sync-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent);
+}
+.sync-status.offline .sync-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.sidebar-scrim {
+  display: none;
+}
+
+/* メインのパネル */
+.main {
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 8px 8px 0;
+}
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.page-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.page-title-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.page-body.scroll {
+  overflow-y: auto;
+}
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  border-radius: 5px;
+  padding: 2px 4px;
+  margin: 0 -4px;
+}
+a.crumb:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.crumb.current {
+  color: var(--text);
+}
+.crumb-sep {
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+
+/* タブ */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tab {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.tab.active {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--panel-2);
+}
+
+/* =========================================================================
+   レスポンシブ
+   ========================================================================= */
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 272px;
+    z-index: 800;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .sidebar-open .sidebar {
+    transform: none;
+    box-shadow: var(--shadow);
+  }
+  .sidebar-open .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 790;
+    background: var(--backdrop);
+  }
+  .main {
+    padding: 0;
+  }
+  .page {
+    border-radius: 0;
+    border: 0;
+  }
+  .mobile-only {
+    display: inline-flex !important;
+  }
+  .page-header {
+    padding-left: 8px;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .toolbar-btn span {
+    display: none;
+  }
+}
+.error-actions {
+  display: flex;
+  gap: 8px;
+}
+.error-text {
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.7;
+}

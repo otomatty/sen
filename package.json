@@ -1,0 +1,56 @@
+{
+  "name": "sen",
+  "version": "1.0.0",
+  "description": "Linear の思想を受け継いだ日本語の課題管理アプリ（Cloudflare Workers + D1）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:demo": "vite build --mode demo && node scripts/build-demo.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "test:e2e": "playwright test",
+    "tutorials": "tsx tutorials/run.ts",
+    "cf:setup": "node scripts/cf-setup.mjs",
+    "deploy": "vite build && node scripts/predeploy.mjs && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply sen-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply sen-db --remote"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@tiptap/extension-link": "^3.32.0",
+    "@tiptap/extension-placeholder": "^3.32.0",
+    "@tiptap/extension-task-item": "^3.32.0",
+    "@tiptap/extension-task-list": "^3.32.0",
+    "@tiptap/react": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
+    "hono": "^4.13.14",
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.5.0",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.65.0",
+    "@cloudflare/workers-types": "^5.20261027.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright": "^1.63.0",
+    "sql.js": "^1.15.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "wrangler": "^4.153.0"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

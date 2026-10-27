@@ -1,0 +1,14 @@
+{
+  "name": "Sen — 課題管理",
+  "short_name": "Sen",
+  "description": "Linear の思想を受け継いだ、速くて静かな日本語の課題管理アプリ",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0c0e",
+  "theme_color": "#0b0c0e",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
