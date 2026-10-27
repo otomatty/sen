@@ -156,7 +156,7 @@ async function main() {
         content: [
           "var __name = (f) => f;",
           "Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel', configurable: true });",
-          "try { localStorage.setItem('sen:theme', 'dark'); localStorage.setItem('sen:theme-v', JSON.stringify('dark')); } catch (e) {}",
+          "try { localStorage.setItem('sen:theme', 'dark'); localStorage.setItem('sen:theme-v', JSON.stringify('dark')); localStorage.setItem('sen:recording', '1'); } catch (e) {}",
           `(${overlayScript.toString()})(${JSON.stringify({ accent: ACCENT })});`,
         ].join("\n"),
       });

@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { useLocation, useNavigate } from "react-router";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
-import { openCreateIssue, useUI } from "../../store/ui";
+import { openCreateIssue, toast, useUI } from "../../store/ui";
+import { updateIssues } from "../../store/actions";
 import type { IssueGroup, ViewOptions } from "../../store/view";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { cx, identifier, readLocal, writeLocal } from "../../lib/utils";
@@ -140,6 +152,35 @@ export function useListNavigation(ids: string[], opts: { enabled?: boolean; labe
   return { focusedId, toggleSelect, rangeSelect, onMouseMove };
 }
 
+/** ドラッグで並べ替え・別グループへ移動できる行 */
+function DraggableRow(props: Parameters<typeof IssueRow>[0] & { groupKey: string; dndEnabled: boolean }) {
+  const { groupKey, dndEnabled, ...rest } = props;
+  const id = `${groupKey}::${props.issue.id}`;
+  const { setNodeRef: dragRef, listeners, attributes, isDragging } = useDraggable({ id, disabled: !dndEnabled });
+  const { setNodeRef: dropRef, isOver } = useDroppable({ id: `row:${id}`, disabled: !dndEnabled });
+  return (
+    <IssueRow
+      {...rest}
+      rowRef={(el) => {
+        dragRef(el);
+        dropRef(el);
+      }}
+      dragProps={dndEnabled ? { ...listeners, ...attributes, role: "row", tabIndex: -1 } : undefined}
+      dragging={isDragging}
+      dropBefore={isOver && !isDragging}
+    />
+  );
+}
+
+function GroupDropZone({ groupKey, enabled, children }: { groupKey: string; enabled: boolean; children: ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `group:${groupKey}`, disabled: !enabled });
+  return (
+    <div ref={setNodeRef} className={cx(isOver && enabled && "group-drop-over")}>
+      {children}
+    </div>
+  );
+}
+
 export function IssueList({
   groups,
   view,
@@ -227,13 +268,67 @@ export function IssueList({
     writeLocal(`sen:collapsed:${listKey}`, next);
   };
 
+  // ---- ドラッグ＆ドロップ（別のグループへ移す / 手動の並び順で並べ替える） ----
+  const dndEnabled = !hideGroupHeaders && (view.grouping !== "none" || view.ordering === "manual") && view.grouping !== "label";
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const [dragId, setDragId] = useState<string | null>(null);
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragId(null);
+    const [fromKey, issueId] = String(e.active.id).split("::");
+    const over = e.over ? String(e.over.id) : null;
+    if (!over || !issuesMap[issueId]) return;
+    let targetKey: string;
+    let beforeId: string | null = null;
+    if (over.startsWith("row:")) {
+      const [k, id] = over.slice(4).split("::");
+      targetKey = k;
+      beforeId = id;
+      if (id === issueId) return;
+    } else targetKey = over.slice(6);
+    const target = groups.find((g) => g.key === targetKey);
+    if (!target) return;
+    const sameGroup = targetKey === fromKey;
+    if (sameGroup && view.ordering !== "manual") {
+      toast("並び順を「手動」にすると、ドラッグで順番を入れ替えられます（表示 → 並び順）");
+      return;
+    }
+    if (!sameGroup && !target.patchFor) return;
+    const sel = useUI.getState().selectedIssueIds;
+    const ids = sel.includes(issueId) ? sel : [issueId];
+    let sortOrder: number | undefined;
+    if (view.ordering === "manual") {
+      const list = target.issues.filter((i) => !ids.includes(i.id));
+      const idx = beforeId ? list.findIndex((i) => i.id === beforeId) : list.length;
+      const prev = list[idx - 1]?.sortOrder;
+      const next = list[idx]?.sortOrder;
+      sortOrder = prev === undefined && next === undefined ? 0 : prev === undefined ? next! - 1 : next === undefined ? prev + 1 : (prev + next) / 2;
+    }
+    updateIssues(ids, (i) => ({
+      ...(!sameGroup && target.patchFor ? target.patchFor(i) : {}),
+      ...(sortOrder !== undefined && i.id === issueId ? { sortOrder } : {}),
+    }));
+  };
+  const dragIssue = dragId ? issuesMap[dragId.split("::")[1]] : null;
+
   const total = groups.reduce((n, g) => n + g.issues.length, 0);
   if (!total && empty) return <>{empty}</>;
 
   return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={(args) => {
+        const hits = pointerWithin(args);
+        const rows = hits.filter((h) => String(h.id).startsWith("row:"));
+        return rows.length ? rows : hits;
+      }}
+      onDragStart={(e) => setDragId(String(e.active.id))}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => setDragId(null)}
+    >
     <div className="issue-list" role="grid" data-testid="issue-list">
       {groups.map((g) => (
         <section key={g.key} className="issue-group" data-testid="issue-group" data-group={g.label}>
+          <GroupDropZone groupKey={g.key} enabled={dndEnabled && !!g.patchFor}>
           {!hideGroupHeaders && view.grouping !== "none" && (
             <div className="group-header" onClick={() => toggleGroup(g.key)}>
               <span className="group-chevron">{collapsed[g.key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span>
@@ -257,8 +352,10 @@ export function IssueList({
           )}
           {!collapsed[g.key] &&
             g.issues.map((issue) => (
-              <IssueRow
+              <DraggableRow
                 key={`${g.key}:${issue.id}`}
+                groupKey={g.key}
+                dndEnabled={dndEnabled}
                 issue={issue}
                 props={view.props}
                 focused={nav.focusedId === issue.id}
@@ -269,9 +366,20 @@ export function IssueList({
                 onContextMenu={onContextMenu}
               />
             ))}
+          </GroupDropZone>
         </section>
       ))}
     </div>
+      <DragOverlay dropAnimation={null}>
+        {dragIssue ? (
+          <div className="row-drag-ghost">
+            <span className="row-id">{identifier(dragIssue, teams)}</span>
+            <span className="row-title-text">{dragIssue.title}</span>
+            {selected.length > 1 && selected.includes(dragIssue.id) && <span className="chip">{selected.length}件</span>}
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   );
 }
 

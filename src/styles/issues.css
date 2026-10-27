@@ -1031,3 +1031,35 @@
   color: var(--text-tertiary);
   white-space: nowrap;
 }
+
+/* 一覧のドラッグ＆ドロップ */
+.issue-row.dragging {
+  opacity: 0.4;
+}
+.issue-row.drop-before::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: 3;
+}
+.group-drop-over > .group-header {
+  background: var(--accent-soft);
+}
+.row-drag-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: var(--overlay);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+  cursor: grabbing;
+}

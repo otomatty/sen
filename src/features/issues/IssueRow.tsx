@@ -27,6 +27,10 @@ export const IssueRow = memo(function IssueRow({
   onMouseMove,
   onSelectToggle,
   onContextMenu,
+  rowRef,
+  dragProps,
+  dragging,
+  dropBefore,
 }: {
   issue: Issue;
   props: Record<PropKey, boolean>;
@@ -36,6 +40,10 @@ export const IssueRow = memo(function IssueRow({
   onMouseMove: (id: string, e: MouseEvent) => void;
   onSelectToggle: (id: string, e: MouseEvent) => void;
   onContextMenu: (id: string, e: MouseEvent) => void;
+  rowRef?: (el: HTMLElement | null) => void;
+  dragProps?: Record<string, unknown>;
+  dragging?: boolean;
+  dropBefore?: boolean;
 }) {
   const teams = useData((s) => s.teams);
   const assignee = useData((s) => (issue.assigneeId ? s.users[issue.assigneeId] : null));
@@ -44,7 +52,9 @@ export const IssueRow = memo(function IssueRow({
   const id = identifier(issue, teams);
   return (
     <div
-      className={cx("issue-row", focused && "focused", selected && "selected", done && "done")}
+      ref={rowRef}
+      {...dragProps}
+      className={cx("issue-row", focused && "focused", selected && "selected", done && "done", dragging && "dragging", dropBefore && "drop-before")}
       data-issue-id={issue.id}
       data-testid="issue-row"
       data-identifier={id}

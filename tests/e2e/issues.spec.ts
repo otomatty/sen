@@ -84,6 +84,20 @@ test.describe("課題の操作", () => {
     await waitForSynced(page);
   });
 
+  test("一覧で行をドラッグすると、別のステータスに移せる", async ({ page }) => {
+    const src = row(page, "ENG-7");
+    const target = page.locator("[data-testid=issue-group][data-group='進行中'] [data-testid=issue-row]").first();
+    const from = (await src.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    await page.mouse.move(from.x + 200, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 210, from.y + from.height / 2 - 20, { steps: 4 });
+    await page.mouse.move(to.x + 200, to.y + 8, { steps: 12 });
+    await page.mouse.up();
+    await expect(page.locator("[data-testid=issue-group][data-group='進行中']").locator("[data-identifier='ENG-7']")).toBeVisible();
+    await waitForSynced(page);
+  });
+
   test("コマンドパレットから画面を移動できる", async ({ page }) => {
     await page.keyboard.press("Control+k");
     await expect(page.getByTestId("command-palette")).toBeVisible();

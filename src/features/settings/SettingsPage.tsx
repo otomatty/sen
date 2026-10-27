@@ -12,6 +12,7 @@ import {
   deleteState,
   regenerateInvite,
   removeMember,
+  restoreIssues,
   setMemberRole,
   updateLabel,
   updateMe,
@@ -21,7 +22,7 @@ import {
 } from "../../store/actions";
 import { useLabels, useMembers, useStates, useTeams } from "../../store/selectors";
 import { setTheme, toast, useUI, type Theme } from "../../store/ui";
-import { appUrl, copyText, cx } from "../../lib/utils";
+import { appUrl, copyText, cx, identifier, timeAgo } from "../../lib/utils";
 import { Avatar, Button, Popover, Switch } from "../../components/ui";
 import { LabelDot, TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
@@ -134,6 +135,15 @@ function ProfileSettings() {
   );
 }
 
+/** 使い方動画の収録中は、利用者に関係のない開発用ツールを映さない */
+function isRecording() {
+  try {
+    return localStorage.getItem("sen:recording") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function DevTools() {
   const ws = useData((s) => s.workspace);
   const admin = useIsAdmin();
@@ -144,8 +154,8 @@ function DevTools() {
       .then((r) => setEnabled(!!r.devTools))
       .catch(() => setEnabled(false));
   }, []);
-  if (!enabled || !admin || !ws) return null;
   const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
+  if (!enabled || !admin || !ws || (!isDemo && isRecording())) return null;
   return (
     <Section
       title={isDemo ? "デモ" : "開発用ツール"}
@@ -458,6 +468,31 @@ function TeamSettings({ teamId }: { teamId: string }) {
   );
 }
 
+function TrashSettings() {
+  const issues = useData((s) => s.issues);
+  const teams = useData((s) => s.teams);
+  const list = Object.values(issues)
+    .filter((i) => i.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+  return (
+    <Section title="削除した課題" description="削除した課題はここから元に戻せます。">
+      {list.length === 0 && <p className="muted settings-empty">削除した課題はありません。</p>}
+      {list.map((i) => (
+        <div key={i.id} className="label-row" data-testid="trash-row">
+          <StateIcon stateId={i.stateId} />
+          <span className="row-id">{identifier(i, teams)}</span>
+          <span className="truncate">{i.title}</span>
+          <span className="spacer" />
+          <span className="muted small">{i.archivedAt ? timeAgo(i.archivedAt) : ""}</span>
+          <Button size="sm" onClick={() => restoreIssues([i.id])}>
+            元に戻す
+          </Button>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
 function TeamsSettings() {
   const teams = useTeams();
   const [name, setName] = useState("");
@@ -515,6 +550,7 @@ export function SettingsPage() {
         ["members", "メンバー"],
         ["labels", "ラベル"],
         ["teams", "チーム"],
+        ["trash", "削除した課題"],
       ],
     ],
   ] as const;
@@ -549,6 +585,7 @@ export function SettingsPage() {
           {section === "members" && <MembersSettings />}
           {section === "labels" && <LabelsSettings />}
           {section === "teams" && <TeamsSettings />}
+          {section === "trash" && <TrashSettings />}
           {section === "team" && id && <TeamSettings key={id} teamId={id} />}
         </div>
       </div>
