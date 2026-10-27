@@ -1,6 +1,6 @@
 import { addDays, mondayOf, todayYmd } from "../shared/dates";
 import { batch, first, stmt } from "./db";
-import { hashPassword, randomToken } from "./auth";
+import { randomToken } from "./auth";
 import { insertTeam } from "./mutations";
 import type { IssueRelation, RelationType } from "../shared/types";
 
@@ -412,7 +412,6 @@ const DEMO_RELATIONS: [string, RelationType, string][] = [
 export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<void> {
   const now = Date.now();
   const st: D1PreparedStatement[] = [];
-  const pw = await hashPassword(randomToken());
 
   // メンバー
   const userIds = [ownerId];
@@ -423,11 +422,10 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
       st.push(
         stmt(
           db,
-          "INSERT INTO users (id, email, name, password_hash, avatar_color, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '{}', ?, ?)",
+          "INSERT INTO users (id, email, name, avatar_color, settings, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)",
           id,
           m.email,
           m.name,
-          pw,
           m.color,
           now - 60 * DAY,
           now,

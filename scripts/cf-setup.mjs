@@ -54,3 +54,9 @@ step("スキーマを本番の D1 に適用しています");
 execSync(`npx wrangler d1 migrations apply ${DB_NAME} --remote`, { cwd: root, stdio: "inherit" });
 
 console.log(`\n\x1b[32m✓ 準備ができました。\x1b[0m 次のコマンドでデプロイします:\n\n  npm run deploy\n`);
+console.log(`ログイン（Google）に使う秘密の値も、初回だけ登録してください（README の「Cloudflare へのデプロイ」を参照）:
+
+  openssl rand -base64 32 | npx wrangler secret put BETTER_AUTH_SECRET
+  npx wrangler secret put GOOGLE_CLIENT_ID
+  npx wrangler secret put GOOGLE_CLIENT_SECRET
+`);

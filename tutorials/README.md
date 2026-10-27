@@ -54,7 +54,7 @@ AI は画面のコードを読んで操作手順を組み立て、収録した�
 
 1. `vite build` で本番と同じビルドを作る
 2. `vite preview` を、まっさらなローカル D1（`/tmp/sen-tutorials/state`）で起動
-3. デモ用アカウントを作成し、シナリオごとに `/api/dev/seed-demo` でデータを初期状態に戻す（`DEV_TOOLS=1` のときだけ有効）
+3. 開発用のログイン（`/api/auth/dev/sign-in`。Google を通さない）でデモ用アカウントに入り、シナリオごとに `/api/dev/seed-demo` でデータを初期状態に戻す（どちらも `DEV_TOOLS=1` のときだけ有効）
 4. Chromium（1280×800・1.5 倍）で開き、Mac として振る舞わせて `⌘` 表記にそろえる
 5. CDP スクリーンキャストで録画 → ffmpeg で 30fps / 1600×1000 / H.264 に変換、サムネイルも書き出す
 6. `public/tutorials/manifest.json` にタイトル・説明・長さ・チャプター時刻と、収録時の画面のハッシュ（`sourceHash`）を書き込む

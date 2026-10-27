@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { BootstrapPayload, MutateRequest, MutateResponse, Mutation, Role } from "../shared/types";
-import { AVATAR_COLORS } from "../shared/constants";
-import { createSession, destroySession, getSessionUser, hashPassword, verifyPassword } from "./auth";
+import { getAuth, getSessionUser, isGoogleConfigured } from "./auth";
 import { all, ensureMigrated, first, run } from "./db";
 import type { AppEnv, WorkspaceRow } from "./env";
 import { applyMutation, MutationError, type MutationCtx } from "./mutations";
@@ -21,8 +20,6 @@ import {
   toWorkspace,
 } from "./serialize";
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
@@ -89,79 +86,16 @@ export function createApp() {
 
   app.get("/health", (c) => c.json({ ok: true, devTools: c.env.DEV_TOOLS === "1" }));
 
-  // ---------------- 認証 ----------------
-  app.post("/auth/signup", async (c) => {
-    const body = await readJson<{ name?: string; email?: string; password?: string; workspaceName?: string; inviteCode?: string }>(c);
-    const name = (body.name ?? "").trim();
-    const email = (body.email ?? "").trim().toLowerCase();
-    const password = body.password ?? "";
-    if (!name || name.length > 40) return err(c, "名前を40文字以内で入力してください");
-    if (!EMAIL.test(email)) return err(c, "メールアドレスの形式が正しくありません");
-    if (password.length < 8) return err(c, "パスワードは8文字以上にしてください");
-    if (await first(c.env.DB, "SELECT id FROM users WHERE email = ?", email))
-      return err(c, "このメールアドレスはすでに登録されています", 409);
-
-    let invited: WorkspaceRow | null = null;
-    if (body.inviteCode) {
-      invited = await first<WorkspaceRow>(c.env.DB, "SELECT * FROM workspaces WHERE invite_code = ?", body.inviteCode);
-      if (!invited) return err(c, "招待リンクが無効です", 404);
+  // ---------------- 認証（Google のみ。Better Auth） ----------------
+  app.post("/auth/sign-in/social", async (c, next) => {
+    if (!isGoogleConfigured(c.env)) {
+      return err(c, "Google ログインが設定されていません（GOOGLE_CLIENT_ID と GOOGLE_CLIENT_SECRET を設定してください）", 503);
     }
-
-    const now = Date.now();
-    const userId = crypto.randomUUID();
-    await run(
-      c.env.DB,
-      "INSERT INTO users (id, email, name, password_hash, avatar_color, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '{}', ?, ?)",
-      userId,
-      email,
-      name,
-      await hashPassword(password),
-      AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
-      now,
-      now,
-    );
-    let urlKey: string;
-    if (invited) {
-      await run(
-        c.env.DB,
-        "INSERT INTO members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)",
-        invited.id,
-        userId,
-        now,
-      );
-      const last = await writeChanges(c.env.DB, invited.id, [{ entity: "user", entityId: userId, op: "upsert" }]);
-      c.executionCtx?.waitUntil?.(notifyRealtime(c.env, invited.id, last));
-      urlKey = invited.url_key;
-    } else {
-      const wsName = (body.workspaceName ?? "").trim() || `${name}のワークスペース`;
-      urlKey = (await createWorkspace(c.env.DB, { name: wsName.slice(0, 60), ownerId: userId })).urlKey;
-    }
-    const token = await createSession(c, userId);
-    return c.json({ ok: true, workspaceKey: urlKey, ...(c.env.DEMO_MODE === "1" ? { token } : {}) });
+    await next();
   });
+  app.on(["GET", "POST"], "/auth/*", (c) => getAuth(c).handler(c.req.raw));
 
-  app.post("/auth/login", async (c) => {
-    const body = await readJson<{ email?: string; password?: string }>(c);
-    const email = (body.email ?? "").trim().toLowerCase();
-    const row = await first<{ id: string; password_hash: string }>(
-      c.env.DB,
-      "SELECT id, password_hash FROM users WHERE email = ?",
-      email,
-    );
-    if (!row || !(await verifyPassword(body.password ?? "", row.password_hash))) {
-      return err(c, "メールアドレスまたはパスワードが正しくありません", 401);
-    }
-    const token = await createSession(c, row.id);
-    const workspaces = await listWorkspaces(c, row.id);
-    return c.json({ ok: true, workspaceKey: workspaces[0]?.urlKey ?? null, ...(c.env.DEMO_MODE === "1" ? { token } : {}) });
-  });
-
-  app.post("/auth/logout", async (c) => {
-    await destroySession(c);
-    return c.json({ ok: true });
-  });
-
-  app.get("/auth/me", async (c) => {
+  app.get("/me", async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ user: null, workspaces: [] });
     return c.json({ user, workspaces: await listWorkspaces(c, user.id) });

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { AppShell, Toasts } from "./app/AppShell";
 import { lastWorkspaceKey, loadSession, useSession } from "./app/session";
-import { LoginPage, NewWorkspacePage, SignupPage } from "./features/auth/AuthPages";
+import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPages";
 import { IssuePage, MyIssuesPage, SearchPage, TeamIssuesPage, WorkspaceHome } from "./features/issues/pages";
 import { InboxPage } from "./features/inbox/InboxPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
@@ -69,15 +69,9 @@ function AppRoutes() {
             </GuestOnly>
           }
         />
-        <Route
-          path="/signup"
-          element={
-            <GuestOnly>
-              <SignupPage />
-            </GuestOnly>
-          }
-        />
-        <Route path="/invite/:code" element={<SignupPage />} />
+        {/* ログインは Google のみ。初めての人もログイン画面からアカウントを作る */}
+        <Route path="/signup" element={<Navigate to="/login" replace />} />
+        <Route path="/invite/:code" element={<InvitePage />} />
         <Route
           path="/new-workspace"
           element={

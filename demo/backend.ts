@@ -70,7 +70,7 @@ class Stmt {
     return new Stmt(this.shim, this.sql, params);
   }
   private exec(): { rows: Record<string, unknown>[]; changes: number; lastId: number } {
-    const db = this.shim.db;
+    const db = this.shim.sqlite;
     const st = db.prepare(this.sql);
     try {
       st.bind(this.params.map((p) => (p === undefined ? null : typeof p === "boolean" ? (p ? 1 : 0) : p)));
@@ -108,35 +108,36 @@ class Stmt {
 }
 
 class D1Shim {
-  constructor(readonly db: SqlDb) {}
+  // Better Auth は `db` というプロパティを持つオブジェクトを Kysely の設定とみなすので、別の名前にする
+  constructor(readonly sqlite: SqlDb) {}
   dirty() {
-    scheduleSave(this.db);
+    scheduleSave(this.sqlite);
   }
   prepare(sql: string) {
     return new Stmt(this, sql);
   }
   async batch(stmts: Stmt[]) {
-    this.db.run("BEGIN");
+    this.sqlite.run("BEGIN");
     try {
       const out = stmts.map((s) => {
         const r = s.runSync();
         return { results: r.rows, success: true, meta: { changes: r.changes, last_row_id: r.lastId } };
       });
-      this.db.run("COMMIT");
+      this.sqlite.run("COMMIT");
       return out;
     } catch (e) {
-      this.db.run("ROLLBACK");
+      this.sqlite.run("ROLLBACK");
       throw e;
     }
   }
   async exec(sql: string) {
-    this.db.exec(sql);
+    this.sqlite.exec(sql);
     this.dirty();
     return { count: 1, duration: 0 };
   }
 }
 
-const DEMO_USER = { name: "山田 太郎", email: "taro@example.com", password: "password123", workspaceName: "ミライ株式会社" };
+const DEMO_USER = { name: "山田 太郎", email: "taro@example.com", workspaceName: "ミライ株式会社" };
 
 export async function startDemoBackend() {
   const SQL = await initSqlJs();
@@ -155,12 +156,12 @@ export async function startDemoBackend() {
   engine.realtimeEnabled = false;
   engine.cacheEnabled = false;
 
-  const call = async <T>(path: string, body: unknown, token?: string): Promise<T> => {
+  const call = async <T>(path: string, body?: unknown, token?: string | null): Promise<T> => {
     const res = await app.fetch(
       new Request(new URL(path, location.href), {
-        method: "POST",
+        method: body === undefined ? "GET" : "POST",
         headers: { "content-type": "application/json", "x-sen-client": "1", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
       }),
       env,
       ctx,
@@ -171,13 +172,16 @@ export async function startDemoBackend() {
   let token = readLocal<string | null>(TOKEN_KEY, null);
   const loggedOut = readLocal<boolean>("sen:demo-logged-out", false);
   if (!bytes || (!token && !loggedOut)) {
-    // 初回：デモ用アカウントとサンプルデータを作り、そのままログインした状態にする
-    let res = await call<{ token?: string; workspaceKey?: string; error?: string }>("/api/auth/signup", DEMO_USER);
-    if (!res.token) res = await call("/api/auth/login", DEMO_USER);
-    token = res.token ?? null;
-    if (token && res.workspaceKey) {
-      await call(`/api/dev/seed-demo?ws=${res.workspaceKey}`, {}, token);
-      writeLocal("sen:last-ws", res.workspaceKey);
+    // 初回：デモ用アカウントでログインし、サンプルデータ入りのワークスペースを用意する
+    token = (await call<{ token?: string }>("/api/auth/dev/sign-in", { email: DEMO_USER.email, name: DEMO_USER.name })).token ?? null;
+    if (token) {
+      const me = await call<{ workspaces: { urlKey: string }[] }>("/api/me", undefined, token);
+      let key = me.workspaces[0]?.urlKey;
+      if (!key) {
+        key = (await call<{ workspaceKey: string }>("/api/workspaces", { name: DEMO_USER.workspaceName }, token)).workspaceKey;
+        await call(`/api/dev/seed-demo?ws=${key}`, {}, token);
+      }
+      writeLocal("sen:last-ws", key);
     }
     writeLocal(TOKEN_KEY, token);
   }
