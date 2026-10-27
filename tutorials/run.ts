@@ -182,7 +182,7 @@ async function main() {
       t.posterFile = path.join(OUT_DIR, `${s.id}.jpg`);
       await recorder.start();
       try {
-        await t.title(`ステップ ${s.order}`, s.title, s.summary);
+        await t.title(`レッスン ${s.order}`, s.title, s.summary);
         await s.run(t);
         await t.finish();
         await t.hideCaption();
