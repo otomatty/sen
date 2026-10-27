@@ -149,5 +149,7 @@ export async function getSessionUser(c: Context<AppEnv>): Promise<Me | null> {
     );
     row = await select();
   }
-  return row ? toMe(row) : null;
+  // 同じメールアドレスのプロフィールが別の ID で既にある（users と auth_users の ID がずれている）
+  if (!row) throw new Error(`ログイン中のユーザー（${user.email}）のプロフィールを作成できませんでした`);
+  return toMe(row);
 }

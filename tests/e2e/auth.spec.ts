@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { devSignIn, dismissWelcome, signupViaUi } from "./helpers";
+import { devSignIn, dismissWelcome, seedDemo, signupViaUi } from "./helpers";
 
 test("初めてログインするとワークスペースを作る画面になり、サンプル課題入りのワークスペースが作られる", async ({ page }) => {
   await signupViaUi(page, { name: "鈴木 次郎", workspace: "テスト株式会社" });
@@ -64,8 +64,10 @@ test("招待リンクから Google でログインすると、そのままワー
 
   const ctx = await browser.newContext();
   const p2 = await ctx.newPage();
+  await ctx.route("https://accounts.google.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "Google" }));
   await p2.goto(`/invite/${code}`);
-  await expect(p2.getByTestId("google-sign-in")).toHaveText("Google でログインして参加");
+  await p2.getByTestId("google-sign-in").filter({ hasText: "Google でログインして参加" }).click();
+  await expect(p2).toHaveURL(/accounts\.google\.com/);
 
   // Google でログインして戻ってきたところ（戻り先は /invite/:code?join=1）
   await devSignIn(p2, { name: "新人 次郎" });
@@ -73,5 +75,35 @@ test("招待リンクから Google でログインすると、そのままワー
   await expect(p2.getByTestId("app")).toBeVisible();
   await dismissWelcome(p2);
   await expect(p2).toHaveURL(new RegExp(`/${ws}/`));
+  await ctx.close();
+});
+
+test("?join=1 付きの招待リンクを開いただけでは、勝手に参加しない", async ({ page, browser }) => {
+  const { ws } = await signupViaUi(page, { name: "管理 花子" });
+  await page.goto(`/${ws}/settings/members`);
+  const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
+
+  const ctx = await browser.newContext();
+  const p2 = await ctx.newPage();
+  await devSignIn(p2, { name: "別の 人" });
+  await p2.goto(`/invite/${code}?join=1`);
+  await expect(p2.getByTestId("invite-accept")).toBeVisible();
+  await p2.waitForTimeout(1000);
+  await expect(p2).toHaveURL(/\/invite\//);
+  const me = await (await p2.request.get("/api/me")).json();
+  expect(me.workspaces).toEqual([]);
+  await ctx.close();
+});
+
+test("デモデータのメンバーとして開発用ログインで入れる", async ({ page, browser }) => {
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+
+  const ctx = await browser.newContext();
+  const p2 = await ctx.newPage();
+  await devSignIn(p2, { email: "hanako@example.com" });
+  const me = await (await p2.request.get("/api/me")).json();
+  expect(me.user?.name).toBe("佐藤 花子");
+  expect(me.workspaces.map((w: { urlKey: string }) => w.urlKey)).toContain(ws);
   await ctx.close();
 });

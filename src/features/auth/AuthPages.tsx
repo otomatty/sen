@@ -40,6 +40,27 @@ function authErrorMessage(code: string | null): string | null {
   return AUTH_ERRORS[code] ?? `Google でログインできませんでした${detail}。もう一度お試しください。`;
 }
 
+// 招待ページから Google へ移る直前に、このタブへ残す印（値は招待コード）。
+// 戻ってきたとき（?join=1）に印が一致した場合だけ自動で参加し、URL を開かせるだけでは参加させられないようにする
+const INVITE_JOIN_MARK = "sen:invite-join";
+
+function readJoinMark(): string | null {
+  try {
+    return sessionStorage.getItem(INVITE_JOIN_MARK);
+  } catch {
+    return null;
+  }
+}
+
+function writeJoinMark(code: string | null) {
+  try {
+    if (code) sessionStorage.setItem(INVITE_JOIN_MARK, code);
+    else sessionStorage.removeItem(INVITE_JOIN_MARK);
+  } catch {
+    // 保存できなければ、戻ってきたあとに「参加する」を押してもらう
+  }
+}
+
 /** アプリ内のパスだけを戻り先にする（外部サイトへのリダイレクトを防ぐ） */
 function safePath(path: string | null): string | null {
   return path && path.startsWith("/") && !path.startsWith("//") && !path.startsWith("/\\") ? path : null;
@@ -166,13 +187,14 @@ export function InvitePage() {
     }
   }, [code, navigate]);
 
-  // 「Google でログインして参加」から戻ってきたときは、そのまま参加する
-  const autoJoin = params.get("join") === "1";
+  // 「Google でログインして参加」から戻ってきたときだけ、そのまま参加する
+  const autoJoin = params.get("join") === "1" && readJoinMark() === code;
   const authed = session.status === "authed";
   const autoJoined = useRef(false);
   useEffect(() => {
     if (!autoJoin || !authed || !invite || autoJoined.current) return;
     autoJoined.current = true;
+    writeJoinMark(null);
     join();
   }, [autoJoin, authed, invite, join]);
 
@@ -207,7 +229,10 @@ export function InvitePage() {
             errorCallbackURL={`/invite/${code}`}
             error={authed ? null : authErrorMessage(params.get("error"))}
             disabled={busy || !invite}
-            beforeSignIn={authed ? signOut : undefined}
+            beforeSignIn={async () => {
+              writeJoinMark(code);
+              if (authed) await signOut();
+            }}
           />
         )}
       </div>

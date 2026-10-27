@@ -416,9 +416,12 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
   // メンバー
   const userIds = [ownerId];
   for (const m of TEAMMATES) {
-    const existing = await first<{ id: string }>(db, "SELECT id FROM users WHERE email = ?", m.email);
-    const id = existing?.id ?? crypto.randomUUID();
-    if (!existing) {
+    // プロフィール（users）とログインの情報（auth_users）は同じ ID でそろえる。
+    // 片方しか無いと、開発用ログインでこのメンバーとして入ったときにプロフィールを結び付けられない
+    const profile = await first<{ id: string }>(db, "SELECT id FROM users WHERE email = ?", m.email);
+    const account = await first<{ id: string }>(db, "SELECT id FROM auth_users WHERE email = ?", m.email);
+    const id = profile?.id ?? account?.id ?? crypto.randomUUID();
+    if (!profile) {
       st.push(
         stmt(
           db,
@@ -429,6 +432,20 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
           m.color,
           now - 60 * DAY,
           now,
+        ),
+      );
+    }
+    if (!account) {
+      st.push(
+        stmt(
+          db,
+          // Better Auth の日時は ISO 8601 の文字列
+          "INSERT INTO auth_users (id, name, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)",
+          id,
+          m.name,
+          m.email,
+          new Date(now - 60 * DAY).toISOString(),
+          new Date(now).toISOString(),
         ),
       );
     }
