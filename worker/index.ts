@@ -13,7 +13,7 @@ export default {
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   },
 
-  /** 毎日の掃除：30日より古い同期ログと、期限切れのセッションを削除する */
+  /** 毎日の掃除：30日より古い同期ログと、期限切れのセッション・ログイン途中のデータを削除する */
   async scheduled(_event, env) {
     await ensureMigrated(env.DB);
     const cutoff = Date.now() - 30 * 86_400_000;
@@ -32,7 +32,10 @@ export default {
       );
       await run(env.DB, "DELETE FROM sync_log WHERE workspace_id = ? AND id <= ?", r.workspace_id, r.m);
     }
-    await run(env.DB, "DELETE FROM sessions WHERE expires_at < ?", Date.now());
+    // Better Auth は日時を ISO 8601 の文字列で保存するので、文字列のまま比べられる
+    const now = new Date().toISOString();
+    await run(env.DB, "DELETE FROM auth_sessions WHERE expires_at < ?", now);
+    await run(env.DB, "DELETE FROM auth_verifications WHERE expires_at < ?", now);
   },
 } satisfies ExportedHandler<Env>;
 

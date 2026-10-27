@@ -43,7 +43,9 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     // 本文なし
   }
   if (!res.ok) {
-    const msg = (data as { error?: string } | null)?.error ?? `エラーが発生しました (${res.status})`;
+    // アプリの API は { error }、Better Auth（/api/auth/*）は { message } でエラーを返す
+    const body = data as { error?: string; message?: string } | null;
+    const msg = body?.error ?? body?.message ?? `エラーが発生しました (${res.status})`;
     throw new ApiError(msg, res.status);
   }
   return data as T;

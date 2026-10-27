@@ -19,7 +19,7 @@ const SESSION_CACHE = "sen:session";
 
 export async function loadSession() {
   try {
-    const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/auth/me");
+    const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me");
     if (!res.user) {
       writeLocal(SESSION_CACHE, null);
       useSession.setState({ status: "anon", user: null, workspaces: [] });
@@ -57,23 +57,23 @@ export function restoreDemoToken() {
   if (t) setBearerToken(t);
 }
 
-export async function login(email: string, password: string): Promise<string | null> {
-  const res = await api<{ workspaceKey: string | null; token?: string }>("/api/auth/login", { body: { email, password } });
-  rememberToken(res.token);
-  await loadSession();
-  return res.workspaceKey;
+/** Google のログイン画面へ移る。ログインできたら callbackURL、失敗したら errorCallbackURL（?error=...）に戻ってくる */
+export async function signInWithGoogle(opts: { callbackURL: string; errorCallbackURL: string }) {
+  const res = await api<{ url: string }>("/api/auth/sign-in/social", { body: { provider: "google", ...opts } });
+  window.location.assign(res.url);
 }
 
-export async function signup(input: { name: string; email: string; password: string; workspaceName?: string; inviteCode?: string }) {
-  const res = await api<{ workspaceKey: string; token?: string }>("/api/auth/signup", { body: input });
+/** 開発用のログイン（DEV_TOOLS=1 の環境だけ。ブラウザ内デモで使う） */
+export async function devSignIn(email: string, name: string) {
+  const res = await api<{ token?: string }>("/api/auth/dev/sign-in", { body: { email, name } });
   rememberToken(res.token);
-  await loadSession();
-  return res.workspaceKey;
+  return loadSession();
 }
 
-export async function logout() {
+/** セッションと手元のデータを消す（画面の移動はしない） */
+export async function signOut() {
   try {
-    await api("/api/auth/logout", { body: {} });
+    await api("/api/auth/sign-out", { body: {} });
   } catch {
     // 失敗しても画面上はログアウトさせる
   }
@@ -84,11 +84,13 @@ export async function logout() {
     setBearerToken(null);
     writeLocal("sen:demo-token", null);
     writeLocal("sen:demo-logged-out", true);
-    useSession.setState({ status: "anon", user: null, workspaces: [] });
-    return;
   }
   useSession.setState({ status: "anon", user: null, workspaces: [] });
-  window.location.assign("/login");
+}
+
+export async function logout() {
+  await signOut();
+  if (!DEMO) window.location.assign("/login");
 }
 
 export function lastWorkspaceKey(): string | null {

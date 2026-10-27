@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // デプロイ前の安全チェック
-//  - ローカル開発用の .dev.vars（DEV_TOOLS=1）を本番の成果物から取り除く
+//  - ローカル開発用の変数（.env の DEV_TOOLS=1、.env.local の秘密の値）をまとめた dist/sen/.dev.vars を本番の成果物から取り除く
 //  - D1 の database_id が仮の値のままなら止める
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";

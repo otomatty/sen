@@ -54,3 +54,9 @@ step("スキーマを本番の D1 に適用しています");
 execSync(`bunx wrangler d1 migrations apply ${DB_NAME} --remote`, { cwd: root, stdio: "inherit" });
 
 console.log(`\n\x1b[32m✓ 準備ができました。\x1b[0m 次のコマンドでデプロイします:\n\n  bun run deploy\n`);
+console.log(`ログイン（Google）に使う秘密の値も、初回だけ登録してください（README の「Cloudflare へのデプロイ」を参照）:
+
+  openssl rand -base64 32 | bunx wrangler secret put BETTER_AUTH_SECRET
+  bunx wrangler secret put GOOGLE_CLIENT_ID
+  bunx wrangler secret put GOOGLE_CLIENT_SECRET
+`);

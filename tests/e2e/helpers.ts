@@ -1,20 +1,31 @@
-import { expect, type APIRequestContext, type Browser, type Page } from "@playwright/test";
-
-export const PASSWORD = "password123";
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 
 export function uniqueEmail(prefix = "user") {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 }
 
-/** 画面からサインアップしてワークスペースに入る */
-export async function signupViaUi(page: Page, opts: { name?: string; email?: string; workspace?: string } = {}) {
+/**
+ * Google を通さずにログインする（DEV_TOOLS=1 のときだけ使える開発用のログイン。@example.com のアドレスに限る）。
+ * page.request はブラウザと Cookie を共有するので、このページはログイン済みになる。
+ */
+export async function devSignIn(page: Page, opts: { name?: string; email?: string } = {}) {
   const email = opts.email ?? uniqueEmail();
-  await page.goto("/signup");
-  await page.getByTestId("signup-name").fill(opts.name ?? "テスト 太郎");
-  await page.getByTestId("signup-email").fill(email);
-  await page.getByTestId("signup-password").fill(PASSWORD);
-  if (opts.workspace) await page.getByTestId("signup-workspace").fill(opts.workspace);
-  await page.getByTestId("signup-submit").click();
+  const r = await page.request.post("/api/auth/dev/sign-in", {
+    data: { email, name: opts.name ?? "テスト 太郎" },
+    // Better Auth は Cookie 付きの POST に Origin を求める（ログイン途中の Cookie が残っている場合など）
+    headers: { "x-sen-client": "1", origin: new URL(test.info().project.use.baseURL!).origin },
+  });
+  expect(r.ok()).toBeTruthy();
+  return email;
+}
+
+/** 初めてログインし、画面からワークスペースを作って入る */
+export async function signupViaUi(page: Page, opts: { name?: string; email?: string; workspace?: string } = {}) {
+  const email = await devSignIn(page, opts);
+  await page.goto("/");
+  await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+  if (opts.workspace) await page.getByTestId("new-workspace-name").fill(opts.workspace);
+  await page.getByTestId("new-workspace-submit").click();
   await expect(page.getByTestId("app")).toBeVisible();
   await dismissWelcome(page);
   const ws = new URL(page.url()).pathname.split("/")[1];

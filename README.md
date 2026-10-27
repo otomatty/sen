@@ -26,6 +26,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **検索**：タイトル・説明・ID を即時検索（ひらがな / カタカナ / 全角半角の違いを吸収）
 - **リアルタイム同期**：Durable Object（WebSocket Hibernation）が変更を通知し、各クライアントが差分を取得
 - **ローカルファースト**：IndexedDB キャッシュによる瞬時の起動、サービスワーカーによるオフライン起動（PWA としてインストール可能）、`⌘Z` で直前の操作を元に戻す
+- **ログイン**：Google アカウントのみ（[Better Auth](https://www.better-auth.com)）。初めての人はログイン後にワークスペースを作るか、招待リンクから参加
 - **設定**：プロフィール、テーマ（ライト / ダーク / システム）、メンバー招待リンク・権限、ラベル、チーム、ワークフロー、サイクル期間
 - **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`bun run tutorials:check` で古い動画も検出）
 
@@ -39,11 +40,12 @@ flowchart LR
   end
   subgraph CF["Cloudflare"]
     Assets["Static Assets<br/>SPA・使い方動画"]
-    Worker["Worker（Hono API）"]
+    Worker["Worker（Hono API + Better Auth）"]
     D1[("D1<br/>データ + 同期ログ")]
     DO["Durable Object<br/>ワークスペースごとの WebSocket"]
   end
   Engine -- "bootstrap / mutate / sync" --> Worker
+  UI -- "Google でログイン" --> Google["Google（OAuth）"] -- "/api/auth/callback/google" --> Worker
   Worker --> D1
   Worker -- "新しい syncId を通知" --> DO
   DO -- "WebSocket" --> Engine
@@ -52,6 +54,7 @@ flowchart LR
 
 - **同期の仕組み**：すべての変更は `sync_log` に連番で記録されます。クライアントは「最後に受け取った番号」以降だけを取得します。Durable Object は「新しい変更がある」ことだけを通知するので、接続が切れても取りこぼしません。
 - **楽観的更新**：画面の状態 =「サーバー確定値」+「未送信の変更」。他人の変更が届くたびに未送信の変更を重ね直すため、衝突しても表示が崩れません。失敗した変更は自動で巻き戻し、トーストで知らせます。
+- **ログイン**：Better Auth の Google ログインだけを有効にしています。ログインの情報は `auth_*` テーブル、アプリのプロフィール（表示名・設定）は `users` テーブルが持ち、同じ ID で結び付けます。以前のメール + パスワードのアカウントは、同じメールアドレスの Google アカウントで初めてログインしたときに引き継がれます（ワークスペースや課題はそのまま）。
 - **自動マイグレーション**：初回のリクエストでスキーマを作成します（`wrangler d1 migrations` と同じ管理テーブルを使うので併用できます）。
 - **定期メンテナンス**：Cron Trigger（毎日 3:17 JST）で 30 日より古い同期ログと期限切れセッションを削除します。古いキャッシュを持つクライアントには全体の読み込み直しを指示します。
 
@@ -64,10 +67,22 @@ bun install
 bun run dev          # http://localhost:5173
 ```
 
-1. 「新規登録」からアカウントとワークスペースを作成します（使い方を学べるサンプル課題が入ります）。
-2. チームメンバーや大量の課題を入れて試したいときは、設定 → ワークスペース の「デモデータを投入」を押します（ローカル開発時のみ表示）。
+ログインには Google の OAuth クライアントが必要です（初回だけ）。
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) で「OAuth クライアント ID」（種類：ウェブ アプリケーション）を作成し、承認済みのリダイレクト URI に `http://localhost:5173/api/auth/callback/google` を追加します。
+2. プロジェクト直下に `.env.local` を作り、クライアント ID とシークレットを書きます（Git には含まれません）。
+
+   ```bash
+   GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=xxxxxxxx
+   ```
+
+3. 「Google でログイン」を押します。初回はワークスペース名を決めると、使い方を学べるサンプル課題入りのワークスペースが作られます。
+4. チームメンバーや大量の課題を入れて試したいときは、設定 → ワークスペース の「デモデータを投入」を押します（ローカル開発時のみ表示）。
 
 > ローカルの D1 / Durable Object は Miniflare で動きます。データは `.wrangler/state` に保存されます。
+> `.env`（Git に含まれる）は `DEV_TOOLS=1` だけを持つローカル専用の設定です。`DEV_TOOLS=1` の環境では、E2E テストや動画収録のために Google を通さない開発用のログイン（`POST /api/auth/dev/sign-in`、`@example.com` のアドレス限定）も有効になります。本番には含まれません。
+> `.dev.vars` を作ると Wrangler は `.env` / `.env.local` を読まなくなるので、使う場合は `DEV_TOOLS=1` もそちらに書いてください。
 
 ## Cloudflare へのデプロイ
 
@@ -80,6 +95,16 @@ bun run deploy       # ビルド → 開発用設定の除去 → wrangler deplo
 
 `https://sen.<あなたのサブドメイン>.workers.dev` で公開されます。独自ドメインは Cloudflare のダッシュボード（Workers → sen → Settings → Domains & Routes）から設定できます。
 
+続けて、ログインに使う秘密の値を Worker に登録します（初回だけ。デプロイし直しても消えません）。
+
+```bash
+openssl rand -base64 32 | bunx wrangler secret put BETTER_AUTH_SECRET   # セッションの署名用（必須）
+bunx wrangler secret put GOOGLE_CLIENT_ID
+bunx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Google Cloud Console の OAuth クライアントには、公開する URL のリダイレクト URI（例：`https://sen.<あなたのサブドメイン>.workers.dev/api/auth/callback/google`、独自ドメインがあればそれも）を追加してください。ログインの戻り先はリクエストの URL から決まります。公開 URL を 1 つに固定したいときは、`BETTER_AUTH_URL`（例：`https://sen.example.com`）も登録します。
+
 ### GitHub Actions（main へのプッシュで自動デプロイ）
 
 `.github/workflows/deploy.yml` が「型チェック → E2E テスト → デプロイ」を行います。リポジトリの Secrets に次を登録してください。
@@ -88,6 +113,8 @@ bun run deploy       # ビルド → 開発用設定の除去 → wrangler deplo
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | 「Edit Cloudflare Workers」テンプレートで作成し、D1 の編集権限を追加したトークン |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare のアカウント ID |
+
+ログイン用の `BETTER_AUTH_SECRET` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` は GitHub ではなく、上の `wrangler secret put` で Worker に登録しておきます。
 
 手動実行（Run workflow）で「操作説明動画を AI に再収録させてからデプロイする」にチェックを入れると、デプロイするビルドそのものを AI が操作して動画を撮り直します。
 
@@ -145,7 +172,8 @@ bun run typecheck
 bun run test:e2e     # ビルド → まっさらな DB で起動 → Playwright で実際に操作して検証
 ```
 
-サインアップ / ログイン、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、招待メンバーへのリアルタイム反映と通知、オフライン時の再送などを確認します。
+Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、招待リンクからの参加、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、招待メンバーへのリアルタイム反映と通知、オフライン時の再送などを確認します。
+Google ログインは、ダミーの認証情報で「Google の画面へ移るところ」と「戻ってきたときの表示」までを確かめます（実際の Google には接続しません）。それ以外のテストは開発用のログインを使います。
 
 ## キーボードショートカット
 
@@ -170,7 +198,7 @@ Windows / Linux では `⌘` の代わりに `Ctrl` を使います。
 ## ディレクトリ構成
 
 ```
-worker/        Cloudflare Worker（Hono API・認証・ミューテーション・同期・Durable Object）
+worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・ミューテーション・同期・Durable Object）
 shared/        クライアントとサーバーで共有する型・定数
 migrations/    D1 のスキーマ
 src/           React アプリ
@@ -189,4 +217,4 @@ scripts/       Cloudflare の初期設定・デプロイ前チェック・デモ
 bun run build:demo   # dist-demo/index.html（単一ファイル）を出力
 ```
 
-本番と同じ Hono のバックエンドを、SQLite（sql.js）の上でブラウザ内に動かします。データは IndexedDB に保存され、サーバーなしで全機能（リアルタイム同期を除く）を試せます。
+本番と同じ Hono のバックエンドを、SQLite（sql.js）の上でブラウザ内に動かします。データは IndexedDB に保存され、サーバーなしで全機能（リアルタイム同期を除く）を試せます。Google から戻ってくる先のサーバーが無いため、デモ版では Google の代わりにデモ用のアカウントでログインします。

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { PASSWORD, dismissWelcome, signupViaUi, uniqueEmail, waitForSynced } from "./helpers";
+import { devSignIn, dismissWelcome, signupViaUi, waitForSynced } from "./helpers";
 
 test("招待リンクで参加したメンバーに、変更がリアルタイムで届く", async ({ page, browser }) => {
   // 1人目: ワークスペースを作る
@@ -11,11 +11,9 @@ test("招待リンクで参加したメンバーに、変更がリアルタイ�
   // 2人目: 招待リンクから参加
   const ctx2 = await browser.newContext();
   const p2 = await ctx2.newPage();
+  await devSignIn(p2, { name: "参加 太郎" });
   await p2.goto(`/invite/${code}`);
-  await p2.getByTestId("signup-name").fill("参加 太郎");
-  await p2.getByTestId("signup-email").fill(uniqueEmail("member"));
-  await p2.getByTestId("signup-password").fill(PASSWORD);
-  await p2.getByTestId("signup-submit").click();
+  await p2.getByTestId("invite-accept").click();
   await expect(p2.getByTestId("app")).toBeVisible();
   await dismissWelcome(p2);
   await expect(p2).toHaveURL(new RegExp(`/${ws}/`));

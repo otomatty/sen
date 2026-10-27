@@ -31,7 +31,7 @@ const VIEWPORT = { width: 1280, height: 800 };
 const SCALE = 1.5;
 const VIDEO_WIDTH = 1600;
 const ACCENT = "#6470e8";
-const USER = { name: "山田 太郎", email: "taro@example.com", password: "password123", workspaceName: "ミライ株式会社" };
+const USER = { name: "山田 太郎", email: "taro@example.com", workspaceName: "ミライ株式会社" };
 
 const args = process.argv.slice(2);
 const skipBuild = args.includes("--skip-build");
@@ -79,11 +79,14 @@ async function startServer(): Promise<{ base: string; proc: ChildProcess | null 
 }
 
 async function prepareAccount(api: APIRequestContext): Promise<string> {
-  let res = await api.post("/api/auth/signup", { data: USER });
-  if (res.status() === 409) res = await api.post("/api/auth/login", { data: USER });
-  if (!res.ok()) throw new Error(`ログインに失敗しました: ${res.status()} ${await res.text()}`);
-  const body = (await res.json()) as { workspaceKey: string };
-  return body.workspaceKey;
+  // Google を通さない開発用のログイン（DEV_TOOLS=1 のときだけ使える）
+  const res = await api.post("/api/auth/dev/sign-in", { data: { email: USER.email, name: USER.name } });
+  if (!res.ok()) throw new Error(`ログインに失敗しました（DEV_TOOLS=1 が必要です）: ${res.status()} ${await res.text()}`);
+  const me = (await (await api.get("/api/me")).json()) as { workspaces: { urlKey: string }[] };
+  if (me.workspaces[0]) return me.workspaces[0].urlKey;
+  const ws = await api.post("/api/workspaces", { data: { name: USER.workspaceName } });
+  if (!ws.ok()) throw new Error(`ワークスペースを作れませんでした: ${ws.status()} ${await ws.text()}`);
+  return ((await ws.json()) as { workspaceKey: string }).workspaceKey;
 }
 
 async function resetData(api: APIRequestContext, ws: string, freshUser: boolean) {

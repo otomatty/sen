@@ -9,3 +9,6 @@ tutorials/.out
 *.log
 .shots.mjs
 .tmp
+.env.local
+.env.*.local
+.dev.vars*
