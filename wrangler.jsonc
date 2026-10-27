@@ -17,7 +17,7 @@
     {
       "binding": "DB",
       "database_name": "sen-db",
-      // Cloudflare 上に作成済みの D1（sen-db, APAC）。別のアカウントに出すときは `npm run cf:setup` で書き換わります。
+      // Cloudflare 上に作成済みの D1（sen-db, APAC）。別のアカウントに出すときは `bun run cf:setup` で書き換わります。
       "database_id": "e90e08a4-48fe-4662-9a18-5433a62ecb78",
       "migrations_dir": "migrations"
     }

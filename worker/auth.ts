@@ -64,7 +64,7 @@ function devSignIn(env: Env): BetterAuthPlugin {
 function createAuth(env: Env, baseURL: string) {
   const dev = env.DEV_TOOLS === "1";
   const secret = env.BETTER_AUTH_SECRET || (dev ? DEV_SECRET : undefined);
-  if (!secret) throw new Error("BETTER_AUTH_SECRET が設定されていません（npx wrangler secret put BETTER_AUTH_SECRET）");
+  if (!secret) throw new Error("BETTER_AUTH_SECRET が設定されていません（bunx wrangler secret put BETTER_AUTH_SECRET）");
   return betterAuth({
     appName: "Sen",
     baseURL,

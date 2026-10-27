@@ -28,7 +28,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **ローカルファースト**：IndexedDB キャッシュによる瞬時の起動、サービスワーカーによるオフライン起動（PWA としてインストール可能）、`⌘Z` で直前の操作を元に戻す
 - **ログイン**：Google アカウントのみ（[Better Auth](https://www.better-auth.com)）。初めての人はログイン後にワークスペースを作るか、招待リンクから参加
 - **設定**：プロフィール、テーマ（ライト / ダーク / システム）、メンバー招待リンク・権限、ラベル、チーム、ワークフロー、サイクル期間
-- **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`npm run tutorials:check` で古い動画も検出）
+- **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`bun run tutorials:check` で古い動画も検出）
 
 ## 構成
 
@@ -60,9 +60,11 @@ flowchart LR
 
 ## はじめかた（ローカル）
 
+必要なもの：[Bun](https://bun.sh)（パッケージ管理）と Node.js 20 以上（Vite・Wrangler の実行に使います）。
+
 ```bash
-npm install
-npm run dev          # http://localhost:5173
+bun install
+bun run dev          # http://localhost:5173
 ```
 
 ログインには Google の OAuth クライアントが必要です（初回だけ）。
@@ -87,8 +89,8 @@ npm run dev          # http://localhost:5173
 ### 手元から（初回）
 
 ```bash
-npm run cf:setup     # Cloudflare にログイン → D1「sen-db」を作成 → wrangler.jsonc に ID を記入 → スキーマ適用
-npm run deploy       # ビルド → 開発用設定の除去 → wrangler deploy
+bun run cf:setup     # Cloudflare にログイン → D1「sen-db」を作成 → wrangler.jsonc に ID を記入 → スキーマ適用
+bun run deploy       # ビルド → 開発用設定の除去 → wrangler deploy
 ```
 
 `https://sen.<あなたのサブドメイン>.workers.dev` で公開されます。独自ドメインは Cloudflare のダッシュボード（Workers → sen → Settings → Domains & Routes）から設定できます。
@@ -96,9 +98,9 @@ npm run deploy       # ビルド → 開発用設定の除去 → wrangler deplo
 続けて、ログインに使う秘密の値を Worker に登録します（初回だけ。デプロイし直しても消えません）。
 
 ```bash
-openssl rand -base64 32 | npx wrangler secret put BETTER_AUTH_SECRET   # セッションの署名用（必須）
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
+openssl rand -base64 32 | bunx wrangler secret put BETTER_AUTH_SECRET   # セッションの署名用（必須）
+bunx wrangler secret put GOOGLE_CLIENT_ID
+bunx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
 Google Cloud Console の OAuth クライアントには、公開する URL のリダイレクト URI（例：`https://sen.<あなたのサブドメイン>.workers.dev/api/auth/callback/google`、独自ドメインがあればそれも）を追加してください。ログインの戻り先はリクエストの URL から決まります。公開 URL を 1 つに固定したいときは、`BETTER_AUTH_URL`（例：`https://sen.example.com`）も登録します。
@@ -119,9 +121,9 @@ Google Cloud Console の OAuth クライアントには、公開する URL の�
 ## 使い方動画の自動収録
 
 ```bash
-npm run tutorials                  # すべての動画を収録
-npm run tutorials -- board inbox   # id の一部で絞り込み
-npm run tutorials -- --skip-build  # ビルド済みなら省略
+bun run tutorials                  # すべての動画を収録
+bun run tutorials -- board inbox   # id の一部で絞り込み
+bun run tutorials -- --skip-build  # ビルド済みなら省略
 ```
 
 **何が起きるか**
@@ -134,7 +136,7 @@ npm run tutorials -- --skip-build  # ビルド済みなら省略
 5. 各ステップで `t.expect` により操作の結果を確かめ、期待と違えばその動画は書き出さずに失敗させる
 6. `public/tutorials/` に動画・サムネイル・`manifest.json`（チャプターの時刻と、収録時の画面のハッシュつき）を出力
 
-`npm run tutorials:check` で、画面やシナリオが変わったのに撮り直していない動画を見つけられます。
+`bun run tutorials:check` で、画面やシナリオが変わったのに撮り直していない動画を見つけられます。
 
 アプリは `manifest.json` を読み、各画面の「▶ 使い方」ボタンとヘルプ画面に動画を表示します。画面を変更したら再収録するだけで、説明動画も最新になります。
 
@@ -161,13 +163,13 @@ export default defineScenario({
 });
 ```
 
-必要なもの：Node.js 20 以上、ffmpeg、日本語フォント（Linux では `fonts-noto-cjk`）、`npx playwright install chromium`。
+必要なもの：Node.js 20 以上、Bun、ffmpeg、日本語フォント（Linux では `fonts-noto-cjk`）、`bunx playwright install chromium`。
 
 ## テスト
 
 ```bash
-npm run typecheck
-npm run test:e2e     # ビルド → まっさらな DB で起動 → Playwright で実際に操作して検証
+bun run typecheck
+bun run test:e2e     # ビルド → まっさらな DB で起動 → Playwright で実際に操作して検証
 ```
 
 Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、招待リンクからの参加、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、招待メンバーへのリアルタイム反映と通知、オフライン時の再送などを確認します。
@@ -212,7 +214,7 @@ scripts/       Cloudflare の初期設定・デプロイ前チェック・デモ
 ## ブラウザだけで動くデモ版
 
 ```bash
-npm run build:demo   # dist-demo/index.html（単一ファイル）を出力
+bun run build:demo   # dist-demo/index.html（単一ファイル）を出力
 ```
 
 本番と同じ Hono のバックエンドを、SQLite（sql.js）の上でブラウザ内に動かします。データは IndexedDB に保存され、サーバーなしで全機能（リアルタイム同期を除く）を試せます。Google から戻ってくる先のサーバーが無いため、デモ版では Google の代わりにデモ用のアカウントでログインします。

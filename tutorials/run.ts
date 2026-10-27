@@ -1,10 +1,10 @@
 /**
  * 操作説明動画の自動収録
  *
- *   npm run tutorials                 # すべて収録
- *   npm run tutorials -- create board # id の一部で絞り込み
- *   npm run tutorials -- --skip-build # ビルドを省略
- *   npm run tutorials -- --url https://xxx.workers.dev  # 既存の環境で収録（DEV_TOOLS=1 が必要）
+ *   bun run tutorials                 # すべて収録
+ *   bun run tutorials -- create board # id の一部で絞り込み
+ *   bun run tutorials -- --skip-build # ビルドを省略
+ *   bun run tutorials -- --url https://xxx.workers.dev  # 既存の環境で収録（DEV_TOOLS=1 が必要）
  *
  * 流れ: アプリをビルド → まっさらな DB でローカル起動 → デモデータを投入 →
  *       ヘッドレス Chromium で各シナリオを AI（スクリプト）が操作 → CDP で録画 → ffmpeg で MP4 化 →
@@ -61,12 +61,12 @@ async function startServer(): Promise<{ base: string; proc: ChildProcess | null 
   if (urlArg) return { base: urlArg.replace(/\/$/, ""), proc: null };
   if (!skipBuild) {
     log("アプリをビルドしています…");
-    execSync("npx vite build", { cwd: ROOT, stdio: "inherit" });
+    execSync("bunx vite build", { cwd: ROOT, stdio: "inherit" });
   }
   const persist = path.join(WORK_DIR, "state");
   await rm(persist, { recursive: true, force: true });
   log(`ローカルサーバーを起動しています（ポート ${PORT}、まっさらな DB）…`);
-  const proc = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
+  const proc = spawn("bunx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
     cwd: ROOT,
     env: { ...process.env, SEN_PERSIST_DIR: persist, PORT: String(PORT) },
     stdio: ["ignore", "pipe", "pipe"],
@@ -121,7 +121,7 @@ interface ManifestEntry {
   poster: string;
   chapters: { t: number; title: string }[];
   recordedAt: string;
-  /** 収録したときの画面・シナリオのハッシュ（npm run tutorials:check で古い動画を見つける） */
+  /** 収録したときの画面・シナリオのハッシュ（bun run tutorials:check で古い動画を見つける） */
   sourceHash?: string;
 }
 

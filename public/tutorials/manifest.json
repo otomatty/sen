@@ -6,7 +6,7 @@
       "summary": "サイドバーの構成と、どの画面でも使える基本のショートカットを紹介します。",
       "screen": "overview",
       "order": 1,
-      "duration": 35.2,
+      "duration": 34.9,
       "video": "/tutorials/overview.mp4",
       "poster": "/tutorials/overview.jpg",
       "chapters": [
@@ -15,44 +15,44 @@
           "title": "はじめてログインすると、Sen の考え方が表示されます"
         },
         {
-          "t": 7.9,
+          "t": 7.8,
           "title": "左のサイドバーが、すべての画面への入り口です"
         },
         {
-          "t": 10.6,
+          "t": 10.4,
           "title": "受信トレイには、あなた宛ての通知が届きます"
         },
         {
-          "t": 13.1,
+          "t": 12.9,
           "title": "「自分の課題」には、担当している課題がまとまります"
         },
         {
-          "t": 15.9,
+          "t": 15.7,
           "title": "チームごとの課題一覧は、チーム名の下にあります"
         },
         {
-          "t": 18.5,
+          "t": 18.3,
           "title": "キーボードでも移動できます。G → I で受信トレイへ"
         },
         {
-          "t": 21.4,
+          "t": 21.2,
           "title": "G → M で「自分の課題」へ戻ります"
         },
         {
-          "t": 23.7,
+          "t": 23.5,
           "title": "? を押すと、ショートカットの一覧が開きます"
         },
         {
-          "t": 27.1,
+          "t": 26.9,
           "title": "⌘K（Ctrl+K）のパレットから、ほぼすべての操作ができます"
         },
         {
-          "t": 30.6,
+          "t": 30.4,
           "title": "使い方動画は、サイドバーの下からいつでも見られます"
         }
       ],
-      "recordedAt": "2026-10-27T04:52:09.923Z",
-      "sourceHash": "df13e2f40114d8df"
+      "recordedAt": "2026-10-27T05:39:21.989Z",
+      "sourceHash": "4531405b21525150"
     },
     {
       "id": "create-issue",
@@ -60,7 +60,7 @@
       "summary": "どの画面からでも C キーで課題を作成できます。プロパティもその場で設定できます。",
       "screen": "create",
       "order": 2,
-      "duration": 29,
+      "duration": 28.8,
       "video": "/tutorials/create-issue.mp4",
       "poster": "/tutorials/create-issue.jpg",
       "chapters": [
@@ -77,20 +77,20 @@
           "title": "Enter で説明欄へ。Markdown 記法が使えます"
         },
         {
-          "t": 13.4,
+          "t": 13.5,
           "title": "下のボタンで、優先度や担当者をその場で設定します"
         },
         {
-          "t": 21.5,
+          "t": 21.4,
           "title": "⌘ + Enter（Ctrl + Enter）で作成します"
         },
         {
-          "t": 24.6,
+          "t": 24.4,
           "title": "作成した課題は、すぐ一覧に加わります。保存は自動です"
         }
       ],
-      "recordedAt": "2026-10-27T04:52:48.644Z",
-      "sourceHash": "75c8450332de134e"
+      "recordedAt": "2026-10-27T05:39:59.312Z",
+      "sourceHash": "741bdb2bd08fc9c3"
     },
     {
       "id": "keyboard",
@@ -98,7 +98,7 @@
       "summary": "J / K で移動し、S・P・A・L でステータスや優先度を変更。X で複数選択してまとめて操作します。",
       "screen": "issues",
       "order": 3,
-      "duration": 30.9,
+      "duration": 30.7,
       "video": "/tutorials/keyboard.mp4",
       "poster": "/tutorials/keyboard.jpg",
       "chapters": [
@@ -115,24 +115,24 @@
           "title": "P で優先度。数字キーでもすぐ選べます（1 = 緊急）"
         },
         {
-          "t": 13.5,
+          "t": 13.3,
           "title": "A で担当者を変更します"
         },
         {
-          "t": 16.6,
+          "t": 16.4,
           "title": "X で選ぶと、複数の課題をまとめて操作できます"
         },
         {
-          "t": 21.5,
+          "t": 21.3,
           "title": "選択中も同じキーが使えます。L でラベルを追加"
         },
         {
-          "t": 25.3,
+          "t": 25.2,
           "title": "Esc で選択を解除。⌘Z（Ctrl+Z）で元に戻せます"
         }
       ],
-      "recordedAt": "2026-10-27T04:53:29.446Z",
-      "sourceHash": "3fcabf87ffdb7a9c"
+      "recordedAt": "2026-10-27T05:40:38.667Z",
+      "sourceHash": "b9ef93b43a41fbb4"
     },
     {
       "id": "board",
@@ -140,7 +140,7 @@
       "summary": "⌘B でリストとボードを切り替え。カードをドラッグしてステータスを変更できます。",
       "screen": "board",
       "order": 4,
-      "duration": 26.3,
+      "duration": 25.5,
       "video": "/tutorials/board.mp4",
       "poster": "/tutorials/board.jpg",
       "chapters": [
@@ -153,28 +153,28 @@
           "title": "カードを別の列へドラッグすると、ステータスが変わります"
         },
         {
-          "t": 10.6,
+          "t": 10.2,
           "title": "作業を始めた時刻も、自動で記録されます"
         },
         {
-          "t": 12.6,
+          "t": 12.2,
           "title": "カードのアイコンから、担当者なども直接変えられます"
         },
         {
-          "t": 16.4,
+          "t": 15.6,
           "title": "表示設定で、グループ分けや並び順を変えられます"
         },
         {
-          "t": 19.3,
+          "t": 18.5,
           "title": "担当者ごとに並べると、誰が何を抱えているかが分かります"
         },
         {
-          "t": 21.9,
+          "t": 21.1,
           "title": "もう一度 ⌘B でリストに戻ります"
         }
       ],
-      "recordedAt": "2026-10-27T04:54:05.041Z",
-      "sourceHash": "f8d1d6e6f4278cff"
+      "recordedAt": "2026-10-27T05:41:12.088Z",
+      "sourceHash": "d659ef8d8f8b6d5c"
     },
     {
       "id": "filters",
@@ -182,7 +182,7 @@
       "summary": "担当者・優先度・ラベルなどの条件で一覧を絞り込みます。条件は画面ごとに保存されます。",
       "screen": "issues",
       "order": 5,
-      "duration": 24.7,
+      "duration": 24.3,
       "video": "/tutorials/filters.mp4",
       "poster": "/tutorials/filters.jpg",
       "chapters": [
@@ -191,24 +191,24 @@
           "title": "フィルターで、表示する課題を絞り込みます"
         },
         {
-          "t": 8.4,
+          "t": 8.2,
           "title": "条件はチップで表示。クリックで変更、× で解除します"
         },
         {
-          "t": 11.3,
+          "t": 11,
           "title": "条件は重ねられます。優先度「緊急」と「高」に絞ります"
         },
         {
-          "t": 17.4,
+          "t": 16.9,
           "title": "フィルターは画面ごとに保存され、次回もそのままです"
         },
         {
-          "t": 20,
+          "t": 19.5,
           "title": "F キーでもフィルターを開けます。「すべてクリア」で解除"
         }
       ],
-      "recordedAt": "2026-10-27T04:54:39.174Z",
-      "sourceHash": "9aff47d985eff26a"
+      "recordedAt": "2026-10-27T05:41:43.935Z",
+      "sourceHash": "068c89a63c22e5c7"
     },
     {
       "id": "issue-detail",
@@ -216,7 +216,7 @@
       "summary": "プロパティの変更、Markdown での説明、サブ課題、@メンション付きのコメントまで。",
       "screen": "issue",
       "order": 6,
-      "duration": 39.5,
+      "duration": 39.2,
       "video": "/tutorials/issue-detail.mp4",
       "poster": "/tutorials/issue-detail.jpg",
       "chapters": [
@@ -225,36 +225,36 @@
           "title": "課題をクリックすると、詳細が開きます"
         },
         {
-          "t": 5.6,
+          "t": 5.5,
           "title": "右側のプロパティは、クリックしてその場で変更できます"
         },
         {
-          "t": 11.1,
+          "t": 11,
           "title": "説明は Markdown で書けます。## で見出し、- で箇条書き"
         },
         {
-          "t": 18.6,
+          "t": 18.5,
           "title": "大きな作業は、サブ課題に分けて進められます"
         },
         {
-          "t": 23.4,
+          "t": 23.1,
           "title": "コメントで @ を入力すると、メンバーに通知できます"
         },
         {
-          "t": 28.7,
+          "t": 28.4,
           "title": "⌘ + Enter（Ctrl + Enter）で送信します"
         },
         {
-          "t": 31.7,
+          "t": 31.4,
           "title": "変更の履歴とコメントは、時系列でまとまります"
         },
         {
-          "t": 33.9,
+          "t": 33.6,
           "title": "J / K で前後の課題へ、Esc で一覧に戻ります"
         }
       ],
-      "recordedAt": "2026-10-27T04:55:30.659Z",
-      "sourceHash": "f68a2e2304618f04"
+      "recordedAt": "2026-10-27T05:42:34.024Z",
+      "sourceHash": "8e5d696f228a5c24"
     },
     {
       "id": "command-palette",
@@ -262,7 +262,7 @@
       "summary": "⌘K で開くコマンドパレットから、移動・作成・変更・検索まで、ほぼすべての操作ができます。",
       "screen": "palette",
       "order": 7,
-      "duration": 26.7,
+      "duration": 26.8,
       "video": "/tutorials/command-palette.mp4",
       "poster": "/tutorials/command-palette.jpg",
       "chapters": [
@@ -283,12 +283,12 @@
           "title": "課題を開いていると、その課題への操作が先頭に並びます"
         },
         {
-          "t": 18.1,
+          "t": 18.2,
           "title": "テーマの切り替えも、パレットから呼び出せます"
         }
       ],
-      "recordedAt": "2026-10-27T04:56:06.364Z",
-      "sourceHash": "6339bb5f7dc3be27"
+      "recordedAt": "2026-10-27T05:43:08.544Z",
+      "sourceHash": "e022efd2289ce3e2"
     },
     {
       "id": "inbox",
@@ -325,8 +325,8 @@
           "title": "右上のボタンで、すべてまとめて既読にできます"
         }
       ],
-      "recordedAt": "2026-10-27T04:56:38.834Z",
-      "sourceHash": "673bda1de3f04125"
+      "recordedAt": "2026-10-27T05:43:39.869Z",
+      "sourceHash": "08a851cc41d2e2d7"
     },
     {
       "id": "my-issues",
@@ -334,7 +334,7 @@
       "summary": "担当・作成・購読中の課題を切り替えて確認します。I キーで課題を自分に割り当てられます。",
       "screen": "my-issues",
       "order": 9,
-      "duration": 24.5,
+      "duration": 24,
       "video": "/tutorials/my-issues.mp4",
       "poster": "/tutorials/my-issues.jpg",
       "chapters": [
@@ -355,12 +355,12 @@
           "title": "チームの一覧で I を押すと、自分に割り当てられます"
         },
         {
-          "t": 20.2,
+          "t": 19.7,
           "title": "割り当てた課題が「自分の課題」に加わりました"
         }
       ],
-      "recordedAt": "2026-10-27T04:57:11.587Z",
-      "sourceHash": "91706b5193044a9f"
+      "recordedAt": "2026-10-27T05:44:11.429Z",
+      "sourceHash": "ffb1d0f93193c3c2"
     },
     {
       "id": "projects",
@@ -368,7 +368,7 @@
       "summary": "複数の課題にまたがる目標をプロジェクトにまとめ、進捗と目標日を追いかけます。",
       "screen": "projects",
       "order": 10,
-      "duration": 33,
+      "duration": 32.9,
       "video": "/tutorials/projects.mp4",
       "poster": "/tutorials/projects.jpg",
       "chapters": [
@@ -393,16 +393,16 @@
           "title": "概要から、そのまま課題を追加できます"
         },
         {
-          "t": 24.4,
+          "t": 24.3,
           "title": "「課題」タブには、このプロジェクトの課題だけが並びます"
         },
         {
-          "t": 27.3,
+          "t": 27.2,
           "title": "★ でお気に入りにすると、サイドバーから開けます"
         }
       ],
-      "recordedAt": "2026-10-27T04:57:54.913Z",
-      "sourceHash": "8279e1c9e98128ff"
+      "recordedAt": "2026-10-27T05:44:53.396Z",
+      "sourceHash": "74ac44c45fc9f0dc"
     },
     {
       "id": "cycles",
@@ -410,7 +410,7 @@
       "summary": "1〜4週間の区切りで計画と振り返りを行います。進み具合はグラフで確認できます。",
       "screen": "cycles",
       "order": 11,
-      "duration": 27.2,
+      "duration": 26.9,
       "video": "/tutorials/cycles.mp4",
       "poster": "/tutorials/cycles.jpg",
       "chapters": [
@@ -419,11 +419,11 @@
           "title": "サイクルは 1〜4 週間の区切りです"
         },
         {
-          "t": 5.5,
+          "t": 5.4,
           "title": "いまのサイクルの進み具合が、ひと目で分かります"
         },
         {
-          "t": 7.3,
+          "t": 7.2,
           "title": "グラフは、スコープ・進行中・完了の推移です"
         },
         {
@@ -431,24 +431,24 @@
           "title": "バックログの課題を、今のサイクルに入れてみます"
         },
         {
-          "t": 14.2,
+          "t": 14,
           "title": "Shift + C でサイクルを選びます"
         },
         {
-          "t": 18.7,
+          "t": 18.6,
           "title": "スコープが増え、統計とグラフに反映されました"
         },
         {
-          "t": 21.6,
+          "t": 21.3,
           "title": "サイクルの課題一覧です"
         },
         {
-          "t": 23,
+          "t": 22.7,
           "title": "終わらなかった課題は、次のサイクルに持ち越して計画します"
         }
       ],
-      "recordedAt": "2026-10-27T04:58:30.918Z",
-      "sourceHash": "578f9f98bd7fc908"
+      "recordedAt": "2026-10-27T05:45:28.024Z",
+      "sourceHash": "a035702760f90580"
     },
     {
       "id": "search",
@@ -465,11 +465,11 @@
           "title": "/ キーで、どこからでも検索を開けます"
         },
         {
-          "t": 5.7,
+          "t": 5.6,
           "title": "入力したそばから、結果が絞り込まれます"
         },
         {
-          "t": 7.7,
+          "t": 7.6,
           "title": "↓ で結果に移り、Enter で開きます"
         },
         {
@@ -477,8 +477,8 @@
           "title": "課題の ID でも探せます"
         }
       ],
-      "recordedAt": "2026-10-27T04:58:52.927Z",
-      "sourceHash": "ad88937656802a8b"
+      "recordedAt": "2026-10-27T05:45:49.645Z",
+      "sourceHash": "3120eca53bd982d7"
     },
     {
       "id": "settings",
@@ -486,7 +486,7 @@
       "summary": "メンバーの招待、ラベルの管理、チームのワークフロー、テーマの切り替えを行います。",
       "screen": "settings",
       "order": 13,
-      "duration": 31.6,
+      "duration": 31.1,
       "video": "/tutorials/settings.mp4",
       "poster": "/tutorials/settings.jpg",
       "chapters": [
@@ -499,24 +499,24 @@
           "title": "招待リンクを共有すると、メンバーが参加できます"
         },
         {
-          "t": 12.8,
+          "t": 12.4,
           "title": "ラベルを追加してみます"
         },
         {
-          "t": 18.8,
+          "t": 18.4,
           "title": "追加したラベルは、課題の L キーからすぐ使えます"
         },
         {
-          "t": 21.3,
+          "t": 20.8,
           "title": "チームごとに、ID の接頭辞やワークフローを設定できます"
         },
         {
-          "t": 25,
+          "t": 24.6,
           "title": "テーマは、ライト・ダーク・システムから選べます"
         }
       ],
-      "recordedAt": "2026-10-27T04:59:35.214Z",
-      "sourceHash": "e03a1e5e1a502d06"
+      "recordedAt": "2026-10-27T05:46:29.622Z",
+      "sourceHash": "942c4573578c8da7"
     },
     {
       "id": "relations",
@@ -524,7 +524,7 @@
       "summary": "「ブロックされている」「関連」「重複」で、課題のつながりと、進められない理由を見えるようにします。",
       "screen": "issue",
       "order": 14,
-      "duration": 24.2,
+      "duration": 24,
       "video": "/tutorials/relations.mp4",
       "poster": "/tutorials/relations.jpg",
       "chapters": [
@@ -537,24 +537,24 @@
           "title": "ブロックされている課題には、一覧でも印が付きます"
         },
         {
-          "t": 9.2,
+          "t": 9.1,
           "title": "関係を追加してみます。課題を開いて…"
         },
         {
-          "t": 12.5,
+          "t": 12.2,
           "title": "M → B で「ブロックされている」課題を指定します"
         },
         {
-          "t": 16.2,
+          "t": 16,
           "title": "M → R で関連、M → M で重複としてマークできます"
         },
         {
-          "t": 18.4,
+          "t": 18.2,
           "title": "相手の課題からも、関係をたどれます"
         }
       ],
-      "recordedAt": "2026-10-27T05:00:07.759Z",
-      "sourceHash": "9dccfb57ab545dbe"
+      "recordedAt": "2026-10-27T05:47:00.814Z",
+      "sourceHash": "b1ef3636990f37e3"
     }
   ]
 }

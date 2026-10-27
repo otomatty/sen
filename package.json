@@ -51,6 +51,7 @@
     "wrangler": "^4.153.0"
   },
   "private": true,
+  "packageManager": "bun@1.4.4",
   "type": "module",
   "engines": {
     "node": ">=20"

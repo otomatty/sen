@@ -1,6 +1,6 @@
 # 使い方動画の自動収録
 
-Sen の使い方動画は、人が画面を録画するのではなく、**AI が書いたシナリオをヘッドレスブラウザが実行して自動で撮影**します。画面を変更したら `npm run tutorials` を実行するだけで、すべての動画が最新の画面で撮り直されます。
+Sen の使い方動画は、人が画面を録画するのではなく、**AI が書いたシナリオをヘッドレスブラウザが実行して自動で撮影**します。画面を変更したら `bun run tutorials` を実行するだけで、すべての動画が最新の画面で撮り直されます。
 
 ```
 tutorials/
@@ -45,7 +45,7 @@ tutorials/scenarios/ に、Sen の「〇〇」画面の使い方動画のシナ�
 - 各ステップで「何を押すと、何が起きるか」が画面上で分かるようにする
 - 操作のあとに t.expect で結果を確かめ、いちばん分かりやすい瞬間で t.poster() を呼ぶ
 - セレクタは src/ の data-testid を使う
-- 書いたら `npm run tutorials -- <id>` で収録し、動画のフレームを確認して不自然な点を直す
+- 書いたら `bun run tutorials -- <id>` で収録し、動画のフレームを確認して不自然な点を直す
 ```
 
 AI は画面のコードを読んで操作手順を組み立て、収録した動画のフレームを見て自分で手直しできます（このリポジトリの動画もその方法で作られています）。
@@ -64,7 +64,7 @@ AI は画面のコードを読んで操作手順を組み立て、収録した�
 ## 動画が古くなっていないか確かめる
 
 ```bash
-npm run tutorials:check
+bun run tutorials:check
 ```
 
 `src/`・`tutorials/lib/`・シナリオのどれかが収録時から変わっていると、撮り直しが必要な動画を一覧にします（CI でも警告として表示されます）。
@@ -74,8 +74,8 @@ npm run tutorials:check
 ## オプション
 
 ```bash
-npm run tutorials -- board inbox        # id の一部で絞り込み
-npm run tutorials -- --skip-build       # ビルド済みなら省略
-npm run tutorials -- --keep-frames      # 録画したフレーム画像を残す（調査用）
-npm run tutorials -- --url http://...   # 起動済みの環境で収録（DEV_TOOLS=1 が必要）
+bun run tutorials -- board inbox        # id の一部で絞り込み
+bun run tutorials -- --skip-build       # ビルド済みなら省略
+bun run tutorials -- --keep-frames      # 録画したフレーム画像を残す（調査用）
+bun run tutorials -- --url http://...   # 起動済みの環境で収録（DEV_TOOLS=1 が必要）
 ```

@@ -1,6 +1,6 @@
 /**
  * 使い方動画が最新の画面で撮られているかを確かめる。
- *   npm run tutorials:check
+ *   bun run tutorials:check
  * 画面やシナリオを変えたのに撮り直していない動画があれば一覧を出して終了コード 1 で終わる。
  */
 import { readFile, readdir } from "node:fs/promises";
@@ -24,7 +24,7 @@ for (const f of (await readdir(dir)).filter((x) => x.endsWith(".ts")).sort()) {
   else if (entry.sourceHash !== hash) stale.push(`${s.id}（画面かシナリオが変わっています）`);
 }
 if (stale.length) {
-  console.error(`撮り直しが必要な動画があります（npm run tutorials）:\n- ${stale.join("\n- ")}`);
+  console.error(`撮り直しが必要な動画があります（bun run tutorials）:\n- ${stale.join("\n- ")}`);
   process.exit(1);
 }
 console.log(`すべての動画（${manifest.tutorials.length}本）が最新の画面で収録されています。`);
