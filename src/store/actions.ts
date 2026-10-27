@@ -4,8 +4,10 @@ import type {
   Issue,
   IssuePatch,
   Label,
+  IssueRelation,
   Mutation,
   Project,
+  RelationType,
   StateType,
   Team,
   UserSettings,
@@ -187,6 +189,7 @@ export function createIssue(input: NewIssueInput): { id: string; identifier: str
     parentId: input.parentId ?? null,
     labelIds: input.labelIds ?? [],
     subscriberIds: [...new Set([meId, input.assigneeId].filter(Boolean) as string[])],
+    relations: [],
     estimate: input.estimate ?? null,
     dueDate: input.dueDate ?? null,
     sortOrder,
@@ -263,7 +266,102 @@ export function toggleSubscription(issueId: string) {
     { subscriberIds: on ? issue.subscriberIds.filter((x) => x !== d.meId) : [...issue.subscriberIds, d.meId] },
     { undo: false },
   );
-  toast(on ? "通知の購読を解除しました" : "この課題の通知を購読しました");
+  toast(on ? "この課題の通知をオフにしました" : "この課題の通知を受け取ります");
+}
+
+// ---------------- 課題どうしの関係 ----------------
+/** 画面から見た関係の向き。保存するときは「元 → 先」の形に直す */
+export type RelationKind = "blocks" | "blockedBy" | "related" | "duplicate" | "duplicatedBy";
+
+/** 課題から見た関係の見出し */
+export const RELATION_LABEL: Record<RelationKind, string> = {
+  blockedBy: "ブロックされている",
+  blocks: "ブロックしている",
+  related: "関連",
+  duplicate: "重複元",
+  duplicatedBy: "重複",
+};
+
+interface StoredRelation {
+  id: string;
+  type: RelationType;
+  targetId: string;
+}
+
+export function normalizeRelation(issueId: string, kind: RelationKind, otherId: string): StoredRelation {
+  switch (kind) {
+    case "blocks":
+      return { id: issueId, type: "blocks", targetId: otherId };
+    case "blockedBy":
+      return { id: otherId, type: "blocks", targetId: issueId };
+    case "duplicate":
+      return { id: issueId, type: "duplicate", targetId: otherId };
+    case "duplicatedBy":
+      return { id: otherId, type: "duplicate", targetId: issueId };
+    default:
+      return { id: issueId, type: "related", targetId: otherId };
+  }
+}
+
+const relsOf = (v: Issue): IssueRelation[] => v.relations ?? [];
+
+function relationEffects(r: StoredRelation, add: boolean, now: number): Effect[] {
+  return [
+    {
+      c: "issues",
+      id: r.id,
+      fn: (v: Issue | undefined) =>
+        v && {
+          ...v,
+          updatedAt: now,
+          relations: add
+            ? [...relsOf(v).filter((x) => x.issueId !== r.targetId), { type: r.type, issueId: r.targetId }]
+            : relsOf(v).filter((x) => !(x.issueId === r.targetId && x.type === r.type)),
+        },
+    },
+    {
+      c: "issues",
+      id: r.targetId,
+      fn: (v: Issue | undefined) => {
+        if (!v) return v;
+        if (add) return { ...v, relations: relsOf(v).filter((x) => x.issueId !== r.id) };
+        if (r.type === "related") return { ...v, relations: relsOf(v).filter((x) => !(x.issueId === r.id && x.type === "related")) };
+        return v;
+      },
+    },
+  ];
+}
+
+/** 関係を追加する。「重複」にした課題は、Linear と同じくキャンセル（重複）に移す */
+export function relateIssues(issueIds: string[], kind: RelationKind, otherId: string, opts: { undo?: boolean } = {}) {
+  const now = Date.now();
+  const done: [string, RelationKind][] = [];
+  for (const id of issueIds) {
+    if (id === otherId) continue;
+    const r = normalizeRelation(id, kind, otherId);
+    m({ type: "issue.relate", args: r }, relationEffects(r, true, now));
+    done.push([id, kind]);
+  }
+  if (kind === "duplicate") {
+    for (const id of issueIds) {
+      const issue = getData().issues[id];
+      if (!issue) continue;
+      const cur = getData().states[issue.stateId];
+      if (cur?.type === "completed" || cur?.type === "canceled") continue;
+      const canceled = statesForTeam(issue.teamId).filter((s) => s.type === "canceled");
+      const st = canceled.find((s) => s.name === "重複") ?? canceled[0];
+      if (st) updateIssues([id], { stateId: st.id }, { undo: false });
+    }
+  }
+  if (opts.undo !== false && done.length) {
+    pushUndo({ label: "関係の追加", run: () => done.forEach(([id, k]) => unrelateIssue(id, k, otherId)) });
+  }
+  return done.length;
+}
+
+export function unrelateIssue(issueId: string, kind: RelationKind, otherId: string) {
+  const r = normalizeRelation(issueId, kind, otherId);
+  return m({ type: "issue.unrelate", args: r }, relationEffects(r, false, Date.now()));
 }
 
 // ---------------- コメント ----------------

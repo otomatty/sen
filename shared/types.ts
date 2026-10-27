@@ -109,6 +109,8 @@ export interface Issue {
   parentId: string | null;
   labelIds: string[];
   subscriberIds: string[];
+  /** この課題から他の課題への関係（逆向きは相手側から計算する） */
+  relations: IssueRelation[];
   estimate: number | null;
   dueDate: string | null;
   sortOrder: number;
@@ -118,6 +120,19 @@ export interface Issue {
   completedAt: number | null;
   canceledAt: number | null;
   archivedAt: number | null;
+}
+
+/**
+ * 課題どうしの関係。関係は「元」の課題にだけ保存する。
+ * - blocks: この課題が issueId をブロックしている（相手から見ると「ブロックされている」）
+ * - related: 関連（向きなし）
+ * - duplicate: この課題は issueId の重複
+ */
+export type RelationType = "blocks" | "related" | "duplicate";
+
+export interface IssueRelation {
+  type: RelationType;
+  issueId: string;
 }
 
 export interface Comment {
@@ -144,7 +159,8 @@ export type ActivityType =
   | "parent"
   | "team"
   | "archived"
-  | "restored";
+  | "restored"
+  | "relation";
 
 export interface Activity {
   id: string;
@@ -247,6 +263,8 @@ export type Mutation =
       };
     }
   | { type: "issue.update"; args: { id: string; patch: IssuePatch } }
+  | { type: "issue.relate"; args: { id: string; type: RelationType; targetId: string } }
+  | { type: "issue.unrelate"; args: { id: string; type: RelationType; targetId: string } }
   | { type: "issue.archive"; args: { id: string } }
   | { type: "issue.restore"; args: { id: string } }
   | { type: "comment.create"; args: { id: string; issueId: string; body: string } }

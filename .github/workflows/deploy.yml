@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: 使い方動画が最新の画面で撮られているか確認
+        run: npm run tutorials:check || echo "::warning::画面が変わった使い方動画があります。workflow_dispatch の record_tutorials で撮り直してください"
       - name: Playwright と日本語フォントを準備
         run: |
           npx playwright install --with-deps chromium

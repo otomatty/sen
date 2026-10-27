@@ -1,7 +1,7 @@
 // ワークスペースのデータを IndexedDB に保存しておき、次回の起動で即座に表示するためのキャッシュ。
 // 起動時はキャッシュから描画 → 差分（/api/sync）だけを取得して最新にする。
 
-export const CACHE_VERSION = 2;
+export const CACHE_VERSION = 3;
 
 export interface Snapshot {
   v: number;

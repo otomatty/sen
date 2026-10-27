@@ -1,6 +1,6 @@
 import { DEFAULT_STATES, PALETTE, AVATAR_COLORS } from "../shared/constants";
 import { addDays, isValidYmd, mondayOf, todayYmd } from "../shared/dates";
-import type { ActivityType, Me, Mutation, NotificationType, Role, StateType } from "../shared/types";
+import type { ActivityType, IssueRelation, Me, Mutation, NotificationType, RelationType, Role, StateType } from "../shared/types";
 import { all, first, run, stmt, batch } from "./db";
 import type { WorkspaceRow } from "./env";
 import { randomToken } from "./auth";
@@ -75,6 +75,21 @@ function parseJsonArray(v: unknown): string[] {
   try {
     const a = JSON.parse(String(v ?? "[]"));
     return Array.isArray(a) ? a.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+const RELATION_TYPES: RelationType[] = ["blocks", "related", "duplicate"];
+
+function parseRelations(v: unknown): IssueRelation[] {
+  try {
+    const a = JSON.parse(String(v ?? "[]"));
+    if (!Array.isArray(a)) return [];
+    return a.filter(
+      (r): r is IssueRelation =>
+        !!r && typeof r.issueId === "string" && RELATION_TYPES.includes(r.type as RelationType),
+    );
   } catch {
     return [];
   }
@@ -511,6 +526,44 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       touch(ctx, "issue", row.id);
       for (const [type, data] of acts) await addActivity(ctx, row.id, type, data);
       for (const [targets, type, data] of notify) await addNotifications(ctx, targets, row.id, type, data);
+      return;
+    }
+
+    case "issue.relate":
+    case "issue.unrelate": {
+      const row = await getIssue(ctx, a.id);
+      const target = await getIssue(ctx, a.targetId);
+      const type = a.type as RelationType;
+      if (!RELATION_TYPES.includes(type)) fail("関係の種類が不正です");
+      if (row.id === target.id) fail("自分自身とは関係を設定できません");
+      const rels = parseRelations(row.relations);
+      const tRels = parseRelations(target.relations);
+      let nextRow: IssueRelation[];
+      let nextTarget: IssueRelation[];
+      if (m.type === "issue.relate") {
+        // 同じ 2 つの課題の間の関係は 1 つだけ。種類を変えたときは置き換える
+        nextRow = [...rels.filter((r) => r.issueId !== target.id), { type, issueId: target.id }];
+        nextTarget = tRels.filter((r) => r.issueId !== row.id);
+        if (nextRow.length > 200) fail("関係が多すぎます");
+      } else {
+        nextRow = rels.filter((r) => !(r.issueId === target.id && r.type === type));
+        // 「関連」は向きがないので、相手側に保存されていても外す
+        nextTarget = type === "related" ? tRels.filter((r) => !(r.issueId === row.id && r.type === "related")) : tRels;
+      }
+      const changedRow = JSON.stringify(nextRow) !== JSON.stringify(rels);
+      const changedTarget = JSON.stringify(nextTarget) !== JSON.stringify(tRels);
+      if (!changedRow && !changedTarget) return;
+      if (changedRow) {
+        await run(db, "UPDATE issues SET relations = ?, updated_at = ? WHERE id = ?", JSON.stringify(nextRow), now, row.id);
+        touch(ctx, "issue", row.id);
+      }
+      if (changedTarget) {
+        await run(db, "UPDATE issues SET relations = ?, updated_at = ? WHERE id = ?", JSON.stringify(nextTarget), now, target.id);
+        touch(ctx, "issue", target.id);
+      }
+      const removed = m.type === "issue.unrelate";
+      await addActivity(ctx, row.id, "relation", { relation: type, issueId: target.id, dir: "out", removed });
+      await addActivity(ctx, target.id, "relation", { relation: type, issueId: row.id, dir: "in", removed });
       return;
     }
 

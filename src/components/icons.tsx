@@ -149,6 +149,15 @@ export function ProjectIcon({ color, size = 14, status }: { color: string; size?
 export function CycleIcon({ size = 14, color = "currentColor", progress = 0 }: { size?: number; color?: string; progress?: number }) {
   const r = 5.6;
   const circ = 2 * Math.PI * r;
+  if (progress >= 1) {
+    // 終わったサイクル：塗りつぶしにチェック
+    return (
+      <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className="cycle-icon">
+        <circle cx="8" cy="8" r="6.4" fill={color} />
+        <path d="M5.3 8.2 7.1 10l3.6-3.8" fill="none" stroke="var(--panel)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className="cycle-icon">
       <circle cx="8" cy="8" r={r} fill="none" stroke={color} strokeOpacity="0.35" strokeWidth="1.6" />

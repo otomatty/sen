@@ -2,10 +2,10 @@ import { useMemo, type ReactNode } from "react";
 import { Ban, CircleSlash, Hash } from "lucide-react";
 import type { Issue } from "../../shared/types";
 import { ESTIMATES, PALETTE, priorityLabel } from "../../shared/constants";
-import { createLabel, statesForTeam, updateIssues } from "../store/actions";
+import { createLabel, relateIssues, RELATION_LABEL, statesForTeam, updateIssues, type RelationKind } from "../store/actions";
 import { useData } from "../store/data";
-import { cycleName, cycleStatus, useCycles, useLabels, useMembers, useProjects, useStates, useTeams } from "../store/selectors";
-import { useUI, type PickerKind } from "../store/ui";
+import { computeRelations, cycleName, cycleStatus, useCycles, useLabels, useMembers, useProjects, useStates, useTeams } from "../store/selectors";
+import { toast, useUI, type PickerKind } from "../store/ui";
 import { formatDate, identifier, fuzzyMatch } from "../lib/utils";
 import { CycleIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon, TeamIcon, startedProgress } from "./icons";
 import { Picker, type PickerOption } from "./Picker";
@@ -137,7 +137,7 @@ function useEstimateOptions(current: number | null): PickerOption[] {
       { id: "none", label: "見積もりなし", icon: <Ban size={14} className="muted" />, selected: current === null },
       ...ESTIMATES.map((e) => ({
         id: String(e),
-        label: `${e} ポイント`,
+        label: `${e}ポイント`,
         icon: <Hash size={14} className="muted" />,
         selected: e === current,
       })),
@@ -217,6 +217,67 @@ function ParentPicker({
       width={380}
       testId="picker-parent"
       onSelect={(o) => onChange(o.id === "none" ? null : o.id)}
+    />
+  );
+}
+
+const RELATION_PLACEHOLDER: Record<RelationKind, string> = {
+  blocks: "ブロックしている課題を検索...",
+  blockedBy: "この課題をブロックしている課題を検索...",
+  related: "関連する課題を検索...",
+  duplicate: "元の課題を検索...",
+  duplicatedBy: "重複している課題を検索...",
+};
+
+/** 関係（ブロック・関連・重複）の相手を選ぶ */
+function RelationPicker({
+  anchor,
+  onClose,
+  issueIds,
+  kind,
+  header,
+}: {
+  anchor: DOMRect | null | undefined;
+  onClose: () => void;
+  issueIds: string[];
+  kind: RelationKind;
+  header?: ReactNode;
+}) {
+  const issues = useData((s) => s.issues);
+  const teams = useData((s) => s.teams);
+  const options = useMemo(() => {
+    const exclude = new Set(issueIds);
+    // 1 件だけのときは、同じ種類の関係がすでにある課題を除く
+    if (issueIds.length === 1) computeRelations(issues, issueIds[0]).forEach((r) => r.kind === kind && exclude.add(r.issue.id));
+    return Object.values(issues)
+      .filter((i) => !i.archivedAt && !exclude.has(i.id))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 300)
+      .map<PickerOption>((i) => ({
+        id: i.id,
+        label: i.title,
+        keywords: identifier(i, teams),
+        icon: <StateIcon stateId={i.stateId} />,
+        hint: identifier(i, teams),
+      }));
+  }, [issues, teams, issueIds, kind]);
+  return (
+    <Picker
+      anchor={anchor}
+      onClose={onClose}
+      options={options}
+      header={header}
+      placeholder={RELATION_PLACEHOLDER[kind]}
+      width={400}
+      testId="picker-relation"
+      onSelect={(o) => {
+        const n = relateIssues(issueIds, kind, o.id);
+        const other = issues[o.id];
+        if (!n || !other) return;
+        const id = identifier(other, teams);
+        if (kind === "duplicate") toast(`${id} の重複としてマークしました`);
+        else toast(`${id} を「${RELATION_LABEL[kind]}」に追加しました`);
+      }}
     />
   );
 }
@@ -398,6 +459,12 @@ export function PickerHost() {
       )}
     </span>
   ) : undefined;
+
+  if (picker.kind === "relation") {
+    return (
+      <RelationPicker anchor={picker.anchor} onClose={close} issueIds={picker.issueIds} kind={picker.relation ?? "related"} header={header} />
+    );
+  }
 
   const onChange = (patch: Partial<Issue> & { toggleLabel?: string }) => {
     if (patch.toggleLabel) {

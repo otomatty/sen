@@ -267,8 +267,8 @@
   opacity: 0.22;
 }
 .burnup .area-started {
-  fill: #f0bf37;
-  opacity: 0.16;
+  fill: var(--warn);
+  opacity: 0.13;
 }
 .burnup .line-ideal {
   stroke: var(--text-tertiary);
@@ -302,7 +302,7 @@
   background: var(--text-tertiary);
 }
 .lg-started {
-  background: #f0bf37;
+  background: var(--warn);
 }
 .lg-done {
   background: var(--accent);
@@ -323,7 +323,7 @@
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 18px 20px 14px;
-  background: linear-gradient(180deg, var(--accent-soft), transparent 140px), var(--panel-2);
+  background: var(--panel-2);
 }
 .current-cycle-head {
   display: flex;
@@ -336,7 +336,7 @@
 }
 .cycle-stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
   margin: 18px 0 6px;
 }
@@ -508,6 +508,24 @@
 }
 .label-row:last-child {
   border-bottom: 0;
+}
+.label-count {
+  min-width: 72px;
+  text-align: right;
+}
+/* 行の削除ボタンなどは、行にカーソルを合わせたときだけ見せる */
+.row-hover-action {
+  opacity: 0;
+}
+.label-row:hover .row-hover-action,
+.state-row:hover .row-hover-action,
+.row-hover-action:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .row-hover-action {
+    opacity: 1;
+  }
 }
 .workflow-group {
   padding: 10px 0 4px;
@@ -917,7 +935,19 @@
     padding: 20px 18px 80px;
   }
   .cycle-stats {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cycle-row {
+    height: auto;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 10px 12px;
+  }
+  .cycle-row > * {
+    white-space: nowrap;
+  }
+  .cycle-row-progress {
+    width: 100%;
   }
   .settings-layout {
     grid-template-columns: 1fr;
@@ -1003,4 +1033,24 @@
 .settings-empty {
   padding: 14px 0;
   margin: 0;
+}
+
+/* タッチ操作の端末では、キーボード操作のヒントを出さない */
+@media (pointer: coarse) {
+  .inbox-hints {
+    display: none;
+  }
+}
+
+.inbox-count {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--active);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
 }

@@ -19,14 +19,14 @@ import { Plus } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { updateIssues } from "../../store/actions";
-import { openCreateIssue, useUI } from "../../store/ui";
+import { openCreateIssue, toast, useUI } from "../../store/ui";
 import type { IssueGroup, ViewOptions } from "../../store/view";
 import { cx, identifier } from "../../lib/utils";
 import { PriorityIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { Avatar, Tooltip } from "../../components/ui";
 import { useWsPath } from "../../app/hooks";
-import { DueChip, EstimateChip, LabelChips, ProjectChip, SubIssueCount } from "./chips";
+import { BlockedChip, DueChip, EstimateChip, LabelChips, ProjectChip, SubIssueCount } from "./chips";
 import { GroupIcon, useListNavigation } from "./IssueList";
 import { pickFrom } from "./IssueRow";
 
@@ -98,6 +98,7 @@ function Card({
           </button>
         )}
         <SubIssueCount issue={issue} />
+        <BlockedChip issueId={issue.id} />
         {props.labels && <LabelChips ids={issue.labelIds} max={2} />}
         {props.project && <ProjectChip projectId={issue.projectId} />}
         {props.dueDate && <DueChip due={issue.dueDate} done={done} />}
@@ -190,6 +191,10 @@ export function IssueBoard({
       target = groupOf(beforeId);
     } else target = groups.find((g) => `col:${g.key}` === overId);
     if (!target || !target.patchFor) return;
+    if (view.ordering !== "manual" && target === groupOf(id)) {
+      toast("並び順を「手動」にすると、ドラッグで順番を入れ替えられます（表示 → 並び順）");
+      return;
+    }
     const patch: Partial<Issue> = { ...target.patchFor(issue) };
     if (view.ordering === "manual") {
       const list = target.issues.filter((i) => i.id !== id);

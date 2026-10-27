@@ -2,6 +2,7 @@ import { addDays, mondayOf, todayYmd } from "../shared/dates";
 import { batch, first, stmt } from "./db";
 import { hashPassword, randomToken } from "./auth";
 import { insertTeam } from "./mutations";
+import type { IssueRelation, RelationType } from "../shared/types";
 
 type Db = D1Database;
 const DAY = 86_400_000;
@@ -399,6 +400,14 @@ const DES_ISSUES: DemoIssue[] = [
   { t: "ダークモード用のシャドウを定義", s: "バックログ", p: 3, l: ["design"], pr: "ds", e: 1, ago: 10 },
 ];
 
+const DEMO_RELATIONS: [string, RelationType, string][] = [
+  ["決済画面で二重送信が発生する", "blocks", "決済プロバイダーの API を v3 に移行"],
+  ["決済プロバイダーの API を v3 に移行", "blocks", "クーポンコード入力欄を追加する"],
+  ["画像の遅延読み込みを導入する", "blocks", "ホーム画面の初回表示を 1 秒以内にする"],
+  ["ダークモードで一部の文字が読みにくい", "related", "ダークモード用のシャドウを定義"],
+  ["初回起動時のチュートリアルを作り直す", "related", "空状態のイラストを作成"],
+];
+
 /** 既存ワークスペースにデモ用メンバー・チーム・課題をまとめて追加する */
 export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<void> {
   const now = Date.now();
@@ -529,11 +538,13 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
 
   const notifyOwner: { issueId: string; actor: string; type: string; data: Record<string, unknown>; at: number }[] = [];
 
+  const byTitle: Record<string, string> = {};
   const insertIssues = (teamId: string, stateIds: Record<string, string>, list: DemoIssue[]) => {
     let number = 0;
     const walk = (it: DemoIssue | Omit<DemoIssue, "sub">, parentId: string | null, order: number) => {
       number++;
       const id = crypto.randomUUID();
+      byTitle[it.t] = id;
       const created = now - it.ago * DAY - (order % 7) * 3_600_000;
       const stName = it.s;
       const started = ["進行中", "レビュー中", "完了"].includes(stName);
@@ -663,6 +674,17 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
   };
   insertIssues(eng, engStates, ENG_ISSUES);
   insertIssues(des, desStates, DES_ISSUES);
+
+  // 課題どうしの関係（ブロック・関連）
+  const relations: Record<string, IssueRelation[]> = {};
+  for (const [from, type, to] of DEMO_RELATIONS) {
+    const a = byTitle[from];
+    const b = byTitle[to];
+    if (a && b) (relations[a] ??= []).push({ type, issueId: b });
+  }
+  for (const [id, list] of Object.entries(relations)) {
+    st.push(stmt(db, "UPDATE issues SET relations = ? WHERE id = ?", JSON.stringify(list), id));
+  }
 
   for (const n of notifyOwner) {
     st.push(

@@ -143,3 +143,72 @@ export function projectProgress(projectId: string, issues: Issue[], states: Reco
   const total = list.length - canceled;
   return { total, done, started, percent: total ? Math.round((done / total) * 100) : 0 };
 }
+
+// ---------------------------------------------------------------------------
+// 課題どうしの関係
+// ---------------------------------------------------------------------------
+export type RelationView = "blocks" | "blockedBy" | "related" | "duplicate" | "duplicatedBy";
+
+export interface RelationEntry {
+  kind: RelationView;
+  issue: Issue;
+}
+
+const FORWARD: Record<string, RelationView> = { blocks: "blocks", related: "related", duplicate: "duplicate" };
+const BACKWARD: Record<string, RelationView> = { blocks: "blockedBy", related: "related", duplicate: "duplicatedBy" };
+
+/** 課題から見たすべての関係（相手側に保存されている逆向きの関係も含む） */
+export function computeRelations(issues: Record<string, Issue>, issueId: string): RelationEntry[] {
+  const self = issues[issueId];
+  if (!self) return [];
+  const out: RelationEntry[] = [];
+  const seen = new Set<string>();
+  for (const r of self.relations ?? []) {
+    const other = issues[r.issueId];
+    if (!other || other.archivedAt || seen.has(other.id)) continue;
+    seen.add(other.id);
+    out.push({ kind: FORWARD[r.type], issue: other });
+  }
+  for (const other of Object.values(issues)) {
+    if (other.archivedAt || other.id === issueId || seen.has(other.id)) continue;
+    const r = (other.relations ?? []).find((x) => x.issueId === issueId);
+    if (r) {
+      seen.add(other.id);
+      out.push({ kind: BACKWARD[r.type], issue: other });
+    }
+  }
+  return out;
+}
+
+export function useIssueRelations(issueId: string): RelationEntry[] {
+  const issues = useData((s) => s.issues);
+  return useMemo(() => computeRelations(issues, issueId), [issues, issueId]);
+}
+
+/** 未完了の課題にブロックされている課題 → ブロックしている課題の ID（issues が変わるまで使い回す） */
+let blockedCache: { issues: Record<string, Issue>; states: Record<string, WorkflowState>; map: Map<string, string[]> } | null = null;
+
+export function blockedMap(issues: Record<string, Issue>, states: Record<string, WorkflowState>): Map<string, string[]> {
+  if (blockedCache && blockedCache.issues === issues && blockedCache.states === states) return blockedCache.map;
+  const map = new Map<string, string[]>();
+  for (const i of Object.values(issues)) {
+    if (i.archivedAt || !i.relations?.length) continue;
+    const t = states[i.stateId]?.type;
+    if (t === "completed" || t === "canceled") continue;
+    for (const r of i.relations) {
+      if (r.type !== "blocks") continue;
+      const target = issues[r.issueId];
+      if (!target || target.archivedAt) continue;
+      const list = map.get(r.issueId);
+      if (list) list.push(i.id);
+      else map.set(r.issueId, [i.id]);
+    }
+  }
+  blockedCache = { issues, states, map };
+  return map;
+}
+
+/** この課題をブロックしている未完了の課題の数（行の表示用。数が変わったときだけ再描画される） */
+export function useBlockerCount(issueId: string): number {
+  return useData((s) => blockedMap(s.issues, s.states).get(issueId)?.length ?? 0);
+}

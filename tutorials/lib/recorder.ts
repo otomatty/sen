@@ -52,7 +52,7 @@ export class ScreenRecorder {
   }
 
   /** フレーム列を可変フレームレートのまま並べ、30fps の MP4 に変換する */
-  async encode(out: string, poster: string, opts: { width: number; posterAt?: number }) {
+  async encode(out: string, poster: string | null, opts: { width: number; posterAt?: number }) {
     // 動画の 0 秒 = start() を呼んだ瞬間。字幕のチャプター時刻と一致させるため。
     const start = this.startedAt;
     let frames = this.frames;
@@ -96,7 +96,7 @@ export class ScreenRecorder {
       out,
     ]);
     const at = opts.posterAt ?? Math.min(4, (this.stoppedAt - start) / 2);
-    await run("ffmpeg", ["-y", "-loglevel", "error", "-ss", at.toFixed(2), "-i", out, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", poster]);
+    if (poster) await run("ffmpeg", ["-y", "-loglevel", "error", "-ss", at.toFixed(2), "-i", out, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", poster]);
     return this.stoppedAt - start;
   }
 

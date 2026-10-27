@@ -35,24 +35,27 @@ export function initials(name: string): string {
 
 const rtf = new Intl.RelativeTimeFormat("ja", { numeric: "auto" });
 
+/** Intl の出力（「3 時間前」）は数字の後に空白が入るので、日本語の表記（「3時間前」）にそろえる */
+const tight = (s: string) => s.replace(/(\d)\s+/g, "$1");
+
 export function timeAgo(ts: number, now = Date.now()): string {
   const diff = Math.round((ts - now) / 1000);
   const abs = Math.abs(diff);
   if (abs < 45) return "たった今";
-  if (abs < 3600) return rtf.format(Math.round(diff / 60), "minute");
-  if (abs < 86400) return rtf.format(Math.round(diff / 3600), "hour");
-  if (abs < 86400 * 7) return rtf.format(Math.round(diff / 86400), "day");
+  if (abs < 3600) return tight(rtf.format(Math.round(diff / 60), "minute"));
+  if (abs < 86400) return tight(rtf.format(Math.round(diff / 3600), "hour"));
+  if (abs < 86400 * 7) return tight(rtf.format(Math.round(diff / 86400), "day"));
   return formatDate(ts);
 }
 
 export function shortTimeAgo(ts: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - ts) / 1000));
   if (s < 60) return "今";
-  if (s < 3600) return `${Math.floor(s / 60)}分`;
-  if (s < 86400) return `${Math.floor(s / 3600)}時間`;
-  if (s < 86400 * 30) return `${Math.floor(s / 86400)}日`;
-  if (s < 86400 * 365) return `${Math.floor(s / 86400 / 30)}か月`;
-  return `${Math.floor(s / 86400 / 365)}年`;
+  if (s < 3600) return `${Math.floor(s / 60)}分前`;
+  if (s < 86400) return `${Math.floor(s / 3600)}時間前`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}日前`;
+  if (s < 86400 * 365) return `${Math.floor(s / 86400 / 30)}か月前`;
+  return `${Math.floor(s / 86400 / 365)}年前`;
 }
 
 export function formatDate(ts: number | string, withYear?: boolean): string {

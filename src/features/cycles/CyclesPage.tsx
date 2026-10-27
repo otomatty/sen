@@ -61,7 +61,7 @@ export function CyclesPage() {
     const s = stats(byCycle.get(c.id) ?? [], states);
     return (
       <Link key={c.id} to={p(`/team/${team.key}/cycle/${c.number}`)} className="cycle-row" data-testid="cycle-row">
-        <CycleIcon size={16} progress={s.percent / 100} color={label === "past" ? "var(--text-tertiary)" : "var(--accent)"} />
+        <CycleIcon size={16} progress={label === "past" ? 1 : s.percent / 100} color={label === "past" ? "var(--text-tertiary)" : "var(--accent)"} />
         <b>{cycleName(c)}</b>
         <span className="muted">
           {formatDate(c.startsAt)} → {formatDate(c.endsAt)}
@@ -120,30 +120,28 @@ export function CyclesPage() {
                         <span className="pill accent">現在のサイクル</span>
                         <h2>{cycleName(current)}</h2>
                         <span className="muted">
-                          {formatDate(current.startsAt)} → {formatDate(current.endsAt)}・残り {Math.max(0, left)} 日
+                          {formatDate(current.startsAt)} → {formatDate(current.endsAt)}・残り{Math.max(0, left)}日
                         </span>
                       </div>
                       <span className="spacer" />
-                      <Button variant="primary" onClick={() => navigate(p(`/team/${team.key}/cycle/${current.number}`))}>
+                      <Button onClick={() => navigate(p(`/team/${team.key}/cycle/${current.number}`))}>
                         課題を見る
                       </Button>
                     </div>
                     <div className="cycle-stats">
                       <div>
                         <b>{s.percent}%</b>
-                        <span>完了率</span>
+                        <span>
+                          完了（{s.done}/{s.total}件）
+                        </span>
                       </div>
                       <div>
                         <b>{s.total}</b>
-                        <span>範囲</span>
+                        <span>スコープ</span>
                       </div>
                       <div>
                         <b>{s.started}</b>
                         <span>進行中</span>
-                      </div>
-                      <div>
-                        <b>{s.done}</b>
-                        <span>完了</span>
                       </div>
                       <div>
                         <b>

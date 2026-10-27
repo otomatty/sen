@@ -1,7 +1,7 @@
-import { CalendarDays, Hash } from "lucide-react";
+import { CalendarDays, Hash, OctagonMinus } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
-import { cycleName } from "../../store/selectors";
+import { cycleName, useBlockerCount } from "../../store/selectors";
 import { cx, dueStatus, formatDate } from "../../lib/utils";
 import { CycleIcon, LabelDot, ProjectIcon } from "../../components/icons";
 
@@ -59,7 +59,7 @@ export function DueChip({ due, done }: { due: string | null; done?: boolean }) {
 export function EstimateChip({ estimate }: { estimate: number | null }) {
   if (estimate === null || estimate === undefined) return null;
   return (
-    <span className="chip estimate-chip" title={`見積もり：${estimate} ポイント`}>
+    <span className="chip estimate-chip" title={`見積もり：${estimate}ポイント`}>
       <Hash size={11} />
       {estimate}
     </span>
@@ -83,11 +83,13 @@ function subCounts(issues: Record<string, Issue>, states: Record<string, { type:
 }
 
 export function SubIssueCount({ issue }: { issue: Issue }) {
-  const issues = useData((s) => s.issues);
-  const states = useData((s) => s.states);
-  const c = subCounts(issues, states).get(issue.id);
-  if (!c) return null;
-  const { done, total } = c;
+  // 文字列で選ぶと、件数が変わったときだけ再描画される
+  const key = useData((s) => {
+    const c = subCounts(s.issues, s.states).get(issue.id);
+    return c ? `${c.done}/${c.total}` : "";
+  });
+  if (!key) return null;
+  const [done, total] = key.split("/");
   return (
     <span className="chip sub-count" title={`サブ課題 ${done}/${total}`}>
       <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
@@ -95,6 +97,18 @@ export function SubIssueCount({ issue }: { issue: Issue }) {
         <path d="M9.5 9.5 12 12l-2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </svg>
       {done}/{total}
+    </span>
+  );
+}
+
+/** 未完了の課題にブロックされているときの印 */
+export function BlockedChip({ issueId }: { issueId: string }) {
+  const n = useBlockerCount(issueId);
+  if (!n) return null;
+  return (
+    <span className="chip blocked-chip" title={`未完了の ${n} 件の課題にブロックされています`} data-testid="blocked-chip">
+      <OctagonMinus size={11} />
+      {n > 1 ? n : null}
     </span>
   );
 }

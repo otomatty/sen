@@ -14,7 +14,7 @@ import { IssuesView } from "./IssuesView";
 import { IssueDetail } from "./IssueDetail";
 import { IssueList } from "./IssueList";
 import { DEFAULT_VIEW } from "../../store/view";
-import type { Issue } from "../../../shared/types";
+import type { Issue, StateType } from "../../../shared/types";
 
 function Tabs({ items }: { items: { to: string; label: string; testId?: string }[] }) {
   return (
@@ -27,6 +27,9 @@ function Tabs({ items }: { items: { to: string; label: string; testId?: string }
     </nav>
   );
 }
+
+const ACTIVE_TYPES: StateType[] = ["unstarted", "started"];
+const BACKLOG_TYPES: StateType[] = ["backlog"];
 
 export function TeamIssuesPage() {
   const { teamKey, tab = "all" } = useParams();
@@ -57,6 +60,7 @@ export function TeamIssuesPage() {
       teamId={team.id}
       listLabel={`${team.name} › ${tabLabel}`}
       createDefaults={tab === "backlog" ? { stateId: defaultStateFor(team.id, "backlog")?.id } : undefined}
+      stateTypes={tab === "active" ? ACTIVE_TYPES : tab === "backlog" ? BACKLOG_TYPES : undefined}
       title={
         <span className="page-title-text">
           <TeamIcon team={team} size={18} />
@@ -89,13 +93,13 @@ export function MyIssuesPage() {
     [issues, tab, meId],
   );
   const label = tab === "created" ? "作成した課題" : tab === "subscribed" ? "購読中" : "担当";
-  useDocumentTitle("マイイシュー");
+  useDocumentTitle("自分の課題");
   return (
     <IssuesView
       key={tab}
       viewKey={`my:${tab}`}
       issues={scoped}
-      listLabel={`マイイシュー › ${label}`}
+      listLabel={`自分の課題 › ${label}`}
       screen="my-issues"
       defaults={{ completed: "week" }}
       createDefaults={tab === "assigned" ? { assigneeId: meId } : undefined}
@@ -103,7 +107,7 @@ export function MyIssuesPage() {
       title={
         <span className="page-title-text">
           <CircleDot size={16} />
-          マイイシュー
+          自分の課題
         </span>
       }
       tabs={
@@ -199,7 +203,7 @@ export function SearchPage() {
             empty={<EmptyState title="一致する課題はありません" description="別のキーワードで試してください。" />}
           />
         ) : (
-          <EmptyState icon={<SearchIcon size={26} />} title="課題を検索" description="入力するとすぐに結果が表示されます（データは手元にあるので待ち時間はありません）。" />
+          <EmptyState icon={<SearchIcon size={26} />} title="課題を検索" description="タイトル・ID・説明から、入力したそばから絞り込みます。" />
         )}
       </div>
     </div>

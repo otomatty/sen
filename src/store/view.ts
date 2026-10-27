@@ -169,7 +169,7 @@ export function groupIssues(
   issues: Issue[],
   view: ViewOptions,
   ctx: Ctx,
-  opts: { teamId?: string | null; includeEmpty?: boolean; workflowOrder?: boolean } = {},
+  opts: { teamId?: string | null; includeEmpty?: boolean; workflowOrder?: boolean; stateTypes?: StateType[] } = {},
 ): IssueGroup[] {
   const sorted = sortIssues(issues, view.ordering);
   const groups = new Map<string, IssueGroup>();
@@ -187,7 +187,9 @@ export function groupIssues(
       // 1チームならそのチームのステータス、複数チームなら「種類:名前」でまとめる
       // リストは「いま動いているもの」を上に、ボードはワークフローの順に左から並べる
       const ACTIVE_FIRST: Record<StateType, number> = { started: 0, unstarted: 1, backlog: 2, completed: 3, canceled: 4 };
-      let statesList = sortStates(Object.values(ctx.states).filter((s) => !opts.teamId || s.teamId === opts.teamId));
+      let statesList = sortStates(
+        Object.values(ctx.states).filter((s) => (!opts.teamId || s.teamId === opts.teamId) && (!opts.stateTypes || opts.stateTypes.includes(s.type))),
+      );
       if (!opts.workflowOrder) statesList = [...statesList].sort((a, b) => ACTIVE_FIRST[a.type] - ACTIVE_FIRST[b.type] || a.position - b.position);
       if (opts.teamId) {
         for (const st of statesList)

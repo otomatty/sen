@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
 import { Layers } from "lucide-react";
-import type { Issue } from "../../../shared/types";
+import type { Issue, StateType } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { filterIssues, groupIssues, useViewState, type FilterKey, type Filters, type ViewOptions } from "../../store/view";
 import { openCreateIssue } from "../../store/ui";
@@ -27,6 +27,7 @@ export function IssuesView({
   emptyTitle = "課題はありません",
   emptyDescription,
   headerExtra,
+  stateTypes,
 }: {
   viewKey: string;
   issues: Issue[];
@@ -42,6 +43,8 @@ export function IssuesView({
   emptyTitle?: string;
   emptyDescription?: ReactNode;
   headerExtra?: ReactNode;
+  /** この画面に出るステータスの種類（アクティブ・バックログのタブ）。ボードの空の列もこれで絞る */
+  stateTypes?: StateType[];
 }) {
   const { view, filters, setView, setFilters } = useViewState(viewKey, defaults);
   const states = useData((s) => s.states);
@@ -63,8 +66,9 @@ export function IssuesView({
         teamId,
         includeEmpty: view.layout === "board" && view.grouping === "status" ? true : undefined,
         workflowOrder: view.layout === "board",
+        stateTypes,
       }),
-    [filtered, view, ctx, teamId],
+    [filtered, view, ctx, teamId, stateTypes],
   );
 
   useHotkeys("mod+b", () => setView({ layout: view.layout === "list" ? "board" : "list" }), { scope: SCOPE.view });

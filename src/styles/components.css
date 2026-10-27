@@ -126,13 +126,16 @@
   background: var(--hover);
 }
 .help-video-btn {
+  color: var(--text-secondary);
+  border-color: transparent;
+  background: transparent;
+}
+.help-video-btn svg {
   color: var(--accent-text);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: var(--accent-soft);
 }
 .help-video-btn:hover {
-  color: var(--accent-text);
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+  background: var(--hover);
 }
 
 .segmented {
@@ -321,7 +324,7 @@ select:focus {
   color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
-  max-width: 180px;
+  max-width: 260px;
   flex-shrink: 0;
 }
 .chip-text {
@@ -476,9 +479,9 @@ select:focus {
   color: var(--text-secondary);
 }
 .picker-target {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
+  /* text-overflow はブロックコンテナでしか効かないので inline-block にする */
+  display: inline-block;
+  vertical-align: middle;
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;

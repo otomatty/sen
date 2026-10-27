@@ -93,7 +93,7 @@ export function ProjectsPage() {
           <div className="table projects-table" role="table">
             <div className="table-head" role="row">
               <span>名前</span>
-              <span>状態</span>
+              <span>ステータス</span>
               <span>リード</span>
               <span>目標日</span>
               <span>進捗</span>
@@ -175,7 +175,7 @@ function ProjectCreateModal({ defaultTeamId }: { defaultTeamId?: string }) {
       </div>
       <div className="form-grid">
         <label>
-          状態
+          ステータス
           <select value={status} onChange={(e) => setStatus(e.target.value as ProjectStatus)}>
             {PROJECT_STATUSES.map((s) => (
               <option key={s.value} value={s.value}>

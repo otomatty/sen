@@ -8,7 +8,7 @@ import { cx, formatDate, identifier } from "../../lib/utils";
 import { PriorityIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { Avatar } from "../../components/ui";
-import { CycleChip, DueChip, EstimateChip, LabelChips, ProjectChip, SubIssueCount } from "./chips";
+import { BlockedChip, CycleChip, DueChip, EstimateChip, LabelChips, ProjectChip, SubIssueCount } from "./chips";
 
 export function pickFrom(e: MouseEvent, kind: PickerKind, issueId: string) {
   e.stopPropagation();
@@ -88,6 +88,7 @@ export const IssueRow = memo(function IssueRow({
       <span className="row-title">
         <span className="row-title-text">{issue.title}</span>
         <SubIssueCount issue={issue} />
+        <BlockedChip issueId={issue.id} />
       </span>
       <span className="row-props">
         {props.labels && <LabelChips ids={issue.labelIds} />}

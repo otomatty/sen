@@ -43,6 +43,7 @@ import { CycleIcon, TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { useWsKey } from "../../app/hooks";
 import { logout } from "../../app/session";
+import { openRelationPicker, RELATION_ACTIONS, RELATION_ICON } from "../issues/Relations";
 
 interface Command {
   id: string;
@@ -98,6 +99,15 @@ function Palette() {
         { id: "due", label: "期日を設定…", group: g, icon: <CalendarDays size={15} />, combo: "shift+d", keywords: "due date", perform: pick("dueDate") },
         { id: "estimate", label: "見積もりを設定…", group: g, icon: <Hash size={15} />, combo: "shift+e", keywords: "estimate point", perform: pick("estimate") },
         { id: "parent", label: "親課題を設定…", group: g, icon: <CornerLeftUp size={15} />, keywords: "parent", perform: pick("parent") },
+        ...RELATION_ACTIONS.map((a) => ({
+          id: `relation-${a.kind}`,
+          label: a.label,
+          group: g,
+          icon: RELATION_ICON[a.kind],
+          combo: a.combo,
+          keywords: a.keywords,
+          perform: () => openRelationPicker(targets, a.kind),
+        })),
         { id: "team", label: "別のチームに移動…", group: g, icon: <ArrowRightLeft size={15} />, keywords: "move team", perform: pick("team") },
       );
       if (targets.length === 1) {
@@ -168,7 +178,7 @@ function Palette() {
         },
       })),
       { id: "go-inbox", label: "受信トレイへ移動", group: "移動", icon: <Inbox size={15} />, combo: "g i", keywords: "inbox", perform: () => go("/inbox") },
-      { id: "go-my", label: "マイイシューへ移動", group: "移動", icon: <CircleDot size={15} />, combo: "g m", keywords: "my issues", perform: () => go("/my-issues") },
+      { id: "go-my", label: "自分の課題へ移動", group: "移動", icon: <CircleDot size={15} />, combo: "g m", keywords: "my issues", perform: () => go("/my-issues") },
       { id: "go-projects", label: "プロジェクトへ移動", group: "移動", icon: <Box size={15} />, combo: "g p", keywords: "projects", perform: () => go("/projects") },
       ...teams.flatMap((t) => [
         {

@@ -205,7 +205,7 @@ function CreateIssueDialog() {
         )}
         <button className="prop-chip" data-popover-anchor onClick={pick("estimate")}>
           <Hash size={14} />
-          {draft.estimate !== null ? `${draft.estimate} ポイント` : "見積もり"}
+          {draft.estimate !== null ? `${draft.estimate}ポイント` : "見積もり"}
         </button>
         <button className="prop-chip" data-popover-anchor onClick={pick("dueDate")} data-testid="create-due">
           <CalendarDays size={14} />

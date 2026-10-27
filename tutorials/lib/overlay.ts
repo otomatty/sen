@@ -22,6 +22,7 @@ export function overlayScript(opts: { accent: string }) {
     .key-then { color: rgba(255,255,255,.75); font-size: 15px; display: flex; align-items: center; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
     .caption { position: absolute; left: 50%; bottom: 36px; transform: translateX(-50%) translateY(8px); max-width: 78%; padding: 14px 22px 14px 16px; border-radius: 14px; background: rgba(16,17,21,.9); color: #fff; font-size: 19px; line-height: 1.55; font-weight: 500; display: flex; gap: 12px; align-items: flex-start; opacity: 0; transition: opacity .25s, transform .25s; border: 1px solid rgba(255,255,255,.12); box-shadow: 0 10px 40px rgba(0,0,0,.45); backdrop-filter: blur(6px); letter-spacing: .01em; }
     .caption.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .caption .text, .title h1, .title p { word-break: auto-phrase; line-break: strict; text-wrap: balance; }
     .step { flex-shrink: 0; min-width: 28px; height: 28px; border-radius: 14px; background: ${accent}; color: #fff; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; padding: 0 8px; }
     .highlight { position: absolute; border-radius: 10px; box-shadow: 0 0 0 2px ${accent}, 0 0 0 6px ${accent}40, 0 0 30px ${accent}66; transition: opacity .25s; opacity: 0; }
     .highlight.show { opacity: 1; }
@@ -55,6 +56,7 @@ export function overlayScript(opts: { accent: string }) {
     style.textContent = css;
     root.appendChild(style);
     layer = document.createElement("div");
+    layer.lang = "ja";
     layer.className = "layer";
     root.appendChild(layer);
     highlight = document.createElement("div");
@@ -129,12 +131,19 @@ export function overlayScript(opts: { accent: string }) {
         caption.appendChild(s);
       }
       const t = document.createElement("span");
+      t.lang = "ja";
+      t.className = "text";
       t.textContent = text;
       caption.appendChild(t);
       caption.classList.add("show");
     },
     hideCaption() {
       caption?.classList.remove("show");
+    },
+    /** サムネイル撮影のため、重ね表示をまとめて隠す */
+    setHidden(on: boolean) {
+      mount();
+      layer.style.visibility = on ? "hidden" : "";
     },
     highlight(rect: { x: number; y: number; width: number; height: number } | null) {
       mount();

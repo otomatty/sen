@@ -96,7 +96,7 @@ function AppRoutes() {
         >
           <Route index element={<WorkspaceHome />} />
           <Route path="inbox" element={<InboxPage />} />
-          <Route path="my-issues" element={<MyIssuesPage />} />
+          <Route path="my-issues" element={<Navigate to="assigned" replace />} />
           <Route path="my-issues/:tab" element={<MyIssuesPage />} />
           <Route path="team/:teamKey" element={<TeamIssuesPage />} />
           <Route path="team/:teamKey/cycles" element={<CyclesPage />} />

@@ -42,7 +42,7 @@ export const SCREENS: Record<ScreenKey, string> = {
   create: "課題の作成",
   palette: "コマンドパレット",
   inbox: "受信トレイ",
-  "my-issues": "マイイシュー",
+  "my-issues": "自分の課題",
   projects: "プロジェクト",
   cycles: "サイクル",
   search: "検索",

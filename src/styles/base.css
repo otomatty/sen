@@ -43,11 +43,16 @@
   --active: rgba(15, 15, 30, 0.065);
   --text: #1b1c21;
   --text-secondary: #5c5f68;
-  --text-tertiary: #979aa2;
+  --text-tertiary: #787b84;
   --accent: #5865e3;
   --accent-hover: #4b58d8;
   --accent-soft: rgba(88, 101, 227, 0.12);
   --accent-text: #4b58d8;
+  /* 白地でも読めるよう、状態の色は暗めにする（コントラスト 4.5:1 前後） */
+  --urgent: #d9531f;
+  --danger: #d23c3c;
+  --warn: #a96500;
+  --success: #1e8a5b;
   --icon-on-color: #ffffff;
   --backdrop: rgba(20, 20, 30, 0.22);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -82,6 +87,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  /* 日本語は文節で折り返し、「す。」のような 1 文字だけの行を作らない */
+  word-break: auto-phrase;
+  line-break: strict;
+  overflow-wrap: break-word;
+}
+
+p,
+h1,
+h2,
+h3 {
+  text-wrap: pretty;
 }
 
 button,

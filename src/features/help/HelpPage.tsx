@@ -28,7 +28,7 @@ export function HelpPage() {
               <div>
                 <b>AI が実際に操作して収録</b>
                 <span>
-                  動画はヘッドレスブラウザで AI が本物の画面を操作し、自動で撮影しています。画面が変わったら再収録するだけで最新になります。
+                  動画は AI が実際の画面を操作して、自動で撮影しています。画面が変わったら撮り直すだけで、いつも最新の操作を確認できます。
                   {recordedAt && `（最終収録：${new Date(recordedAt).toLocaleDateString("ja-JP")}）`}
                 </span>
               </div>

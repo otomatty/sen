@@ -21,6 +21,7 @@ import { preloadEditor } from "../components/Editor";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useCurrentTeamId } from "./hooks";
 import { setLastWorkspaceKey, useSession } from "./session";
+import { openRelationPicker, RELATION_ACTIONS } from "../features/issues/Relations";
 
 export function Toasts() {
   const toasts = useUI((s) => s.toasts);
@@ -72,6 +73,21 @@ function GlobalShortcuts() {
   useHotkeys("g c", () => teamKey && go(`/team/${teamKey}/cycles`));
   useHotkeys("mod+z", () => undo());
 
+  // フォーカスした課題のコメントと履歴を先読みして、開いた瞬間に表示できるようにする
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsub = useUI.subscribe((s, prev) => {
+      if (!s.focusedIssueId || s.focusedIssueId === prev.focusedIssueId) return;
+      const id = s.focusedIssueId;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => engine.loadThread(id), 180);
+    });
+    return () => {
+      unsub();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   // フォーカス中（または選択中）の課題に対する操作
   const withTargets = (fn: (ids: string[]) => void) => () => {
     const ids = targetIssueIds().filter((id) => useData.getState().issues[id]);
@@ -87,6 +103,11 @@ function GlobalShortcuts() {
   useHotkeys("shift+c", pick("cycle"));
   useHotkeys("shift+d", pick("dueDate"));
   useHotkeys("shift+e", pick("estimate"));
+  // 課題どうしの関係（M のあとに B / X / R / M）
+  for (const a of RELATION_ACTIONS) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- RELATION_ACTIONS は固定の配列なので呼び出し順は変わらない
+    useHotkeys(a.combo, withTargets((ids) => openRelationPicker(ids, a.kind)));
+  }
   useHotkeys(
     "i",
     withTargets((ids) => {

@@ -20,7 +20,7 @@ test("招待リンクで参加したメンバーに、変更がリアルタイ�
   await dismissWelcome(p2);
   await expect(p2).toHaveURL(new RegExp(`/${ws}/`));
   await p2.goto(`/${ws}/team/ENG/all`);
-  await expect(p2.getByTestId("sync-status")).toContainText("リアルタイム", { timeout: 15_000 });
+  await expect(p2.getByTestId("sync-status")).toHaveAttribute("data-realtime", "on", { timeout: 15_000 });
 
   // 1人目が課題のタイトルを変えると、2人目の画面に反映される
   await page.goto(`/${ws}/issue/ENG-1`);
@@ -33,7 +33,7 @@ test("招待リンクで参加したメンバーに、変更がリアルタイ�
   await page.getByTestId("prop-assignee").click();
   await page.getByTestId("picker-assignee").getByRole("option", { name: /参加 太郎/ }).click();
   await p2.getByTestId("nav-inbox").click();
-  await expect(p2.getByTestId("inbox-item").first()).toContainText("あなたに割り当てました", { timeout: 10_000 });
+  await expect(p2.getByTestId("inbox-item").first()).toContainText("あなたを担当者にしました", { timeout: 10_000 });
   await ctx2.close();
 });
 

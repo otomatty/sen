@@ -19,13 +19,16 @@ export type PickerKind =
   | "estimate"
   | "dueDate"
   | "team"
-  | "parent";
+  | "parent"
+  | "relation";
 
 export interface PickerRequest {
   kind: PickerKind;
   issueIds: string[];
   /** 指定するとその要素の近くに出る。無ければ画面中央（キーボード操作時） */
   anchor?: DOMRect | null;
+  /** kind が relation のとき、追加する関係の向き */
+  relation?: "blocks" | "blockedBy" | "related" | "duplicate" | "duplicatedBy";
 }
 
 export interface CreateIssueDefaults {

@@ -192,7 +192,7 @@ export function ProjectPage() {
               </div>
               <div className="progress-stats">
                 <span>
-                  <b>{scoped.length - byType.canceled}</b> 範囲
+                  <b>{scoped.length - byType.canceled}</b> スコープ
                 </span>
                 <span>
                   <b>{byType.started}</b> 進行中
@@ -222,7 +222,7 @@ export function ProjectPage() {
         <Picker
           anchor={picker.anchor}
           onClose={() => setPicker(null)}
-          placeholder="状態を変更…"
+          placeholder="ステータスを変更…"
           options={PROJECT_STATUSES.map((s) => ({
             id: s.value,
             label: s.label,

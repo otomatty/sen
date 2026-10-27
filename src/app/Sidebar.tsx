@@ -19,7 +19,6 @@ import {
   Star,
   Sun,
   UserPlus,
-  Target,
   RefreshCw,
 } from "lucide-react";
 import { useData } from "../store/data";
@@ -93,7 +92,7 @@ export function Sidebar() {
 
       <nav className="sidebar-nav">
         {link(p("/inbox"), <Inbox size={15} />, "受信トレイ", unread ? <span className="nav-badge">{unread}</span> : null, "nav-inbox")}
-        {link(p("/my-issues"), <CircleDot size={15} />, "マイイシュー", null, "nav-my-issues")}
+        {link(p("/my-issues"), <CircleDot size={15} />, "自分の課題", null, "nav-my-issues")}
 
         <div className="nav-section">ワークスペース</div>
         {link(p("/projects"), <Box size={15} />, "プロジェクト", null, "nav-projects")}
@@ -136,7 +135,7 @@ export function Sidebar() {
                 <div className="nav-team-children">
                   {link(p(`/team/${t.key}/all`), <Layers size={14} />, "課題", null, `nav-team-${t.key}-issues`)}
                   {t.cyclesEnabled && link(p(`/team/${t.key}/cycles`), <CycleIcon size={14} progress={0.5} />, "サイクル", null, `nav-team-${t.key}-cycles`)}
-                  {link(p(`/team/${t.key}/projects`), <Target size={14} />, "プロジェクト", null, `nav-team-${t.key}-projects`)}
+                  {link(p(`/team/${t.key}/projects`), <Box size={14} />, "プロジェクト", null, `nav-team-${t.key}-projects`)}
                 </div>
               )}
             </div>
@@ -153,14 +152,14 @@ export function Sidebar() {
           <span className="nav-label">ショートカット</span>
           <Kbd combo="?" />
         </button>
-        <div className={cx("sync-status", syncStatus)} data-testid="sync-status" title={realtime ? "リアルタイム同期中" : "定期同期"}>
+        <div className={cx("sync-status", syncStatus)} data-testid="sync-status" data-realtime={realtime ? "on" : "off"} title={realtime ? "変更はリアルタイムで共有されています" : "定期的に同期しています"}>
           <span className="sync-dot" />
           {syncStatus === "offline"
             ? `オフライン（${pendingCount}件の変更を保持中）`
             : syncStatus === "syncing"
               ? "同期中…"
               : realtime
-                ? "同期済み・リアルタイム"
+                ? "同期済み"
                 : "同期済み"}
         </div>
       </div>

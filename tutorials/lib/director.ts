@@ -27,10 +27,19 @@ const KEY_LABEL: Record<string, string> = {
   Space: "Space",
 };
 
+/** キーボード操作の間にカーソルを置いておく場所（サイドバーの空き。ホバーしても何も起きない） */
+export const PARK = { x: 110, y: 540 };
+
 export class Director {
   chapters: Chapter[] = [];
+  /** t.poster() で撮ったサムネイルの保存先（run.ts が設定する） */
+  posterFile: string | null = null;
+  posterTaken = false;
   private step = 0;
   private mouse = { x: 640, y: 420 };
+  /** 今の字幕が出た時刻と、最低限表示しておく時間（読み終わるまで） */
+  private captionAt = 0;
+  private captionMin = 0;
 
   constructor(
     public page: Page,
@@ -70,8 +79,13 @@ export class Director {
     await this.wait(500);
   }
 
-  /** 字幕を出してチャプターとして記録する。読み終わるまでの時間だけ待つ */
+  /**
+   * 字幕を出してチャプターとして記録する。
+   * 字幕を出したら少しだけ待って操作を始め、操作の結果が字幕と一緒に映るようにする。
+   * 読み終わるまでの時間は「次の字幕を出す前」に確保する（結果が画面に残った状態で待つ）。
+   */
   async caption(text: string, opts: { hold?: number; chapter?: boolean } = {}) {
+    await this.settle();
     if (opts.chapter !== false) {
       this.step++;
       this.chapters.push({ t: Math.max(0, (this.recorder?.elapsed() ?? 0) - 0.2), title: text });
@@ -80,8 +94,81 @@ export class Director {
       ([t, s]) => (window as never as { __tutor: { caption: Function } }).__tutor.caption(t, s),
       [text, opts.chapter === false ? null : this.step] as const,
     );
-    const reading = 900 + [...text].length * 75;
-    await this.wait(opts.hold ?? reading);
+    const chars = [...text].length;
+    this.captionAt = Date.now();
+    this.captionMin = this.ms(opts.hold ?? 1000 + chars * 70);
+    // 読み始める時間だけ待ってから操作に移る
+    await this.wait(Math.min(1300, 550 + chars * 18));
+  }
+
+  /** 今の字幕を読み終えられるまで待つ（次の字幕の前・収録の終わりに呼ばれる） */
+  async settle() {
+    const left = this.captionAt + this.captionMin - Date.now();
+    if (left > 0) await this.page.waitForTimeout(left);
+    this.captionMin = 0;
+  }
+
+  /** 収録の締めくくり：最後の字幕を読み終えるまで待ち、余韻を残す */
+  async finish() {
+    await this.settle();
+    await this.wait(900);
+  }
+
+  /**
+   * 操作の結果を確かめる。期待どおりでなければ収録を失敗させる
+   * （壊れた動画を気づかずに公開しないため）
+   */
+  async expect(target: Target, opts: { text?: string | RegExp; hidden?: boolean; count?: number; timeout?: number } = {}) {
+    const loc = typeof target === "string" ? this.page.locator(target) : target;
+    const timeout = opts.timeout ?? 5000;
+    const label = typeof target === "string" ? target : "locator";
+    try {
+      if (opts.hidden) await loc.first().waitFor({ state: "hidden", timeout });
+      else if (opts.count !== undefined) {
+        const deadline = Date.now() + timeout;
+        while ((await loc.count()) !== opts.count) {
+          if (Date.now() > deadline) throw new Error(`件数が ${await loc.count()}（期待 ${opts.count}）`);
+          await this.page.waitForTimeout(100);
+        }
+      } else {
+        await loc.first().waitFor({ state: "visible", timeout });
+        if (opts.text !== undefined) {
+          const deadline = Date.now() + timeout;
+          for (;;) {
+            const txt = (await loc.first().textContent()) ?? "";
+            if (typeof opts.text === "string" ? txt.includes(opts.text) : opts.text.test(txt)) break;
+            if (Date.now() > deadline) throw new Error(`テキストが「${txt.slice(0, 60)}」`);
+            await this.page.waitForTimeout(100);
+          }
+        }
+      }
+    } catch (e) {
+      throw new Error(`確認に失敗（ステップ ${this.step}）：${label} ${opts.text ? `に「${String(opts.text)}」` : ""}${opts.hidden ? "が消える" : ""} — ${(e as Error).message.split("\n")[0]}`);
+    }
+  }
+
+  /** URL が期待どおりになったかを確かめる */
+  async expectUrl(re: RegExp, timeout = 5000) {
+    const deadline = Date.now() + timeout;
+    while (!re.test(new URL(this.page.url()).pathname)) {
+      if (Date.now() > deadline) throw new Error(`確認に失敗（ステップ ${this.step}）：URL ${this.page.url()} が ${re} に一致しません`);
+      await this.page.waitForTimeout(100);
+    }
+  }
+
+  /** 一覧のサムネイルをこの瞬間の画面で撮る（字幕やキー表示は隠す） */
+  async poster() {
+    if (!this.posterFile || this.posterTaken) return;
+    await this.page.evaluate(() => (window as never as { __tutor: { setHidden: Function } }).__tutor.setHidden(true));
+    await this.page.waitForTimeout(120);
+    await this.page.screenshot({ path: `${this.posterFile}.full.jpg`, type: "jpeg", quality: 90 });
+    await this.page.evaluate(() => (window as never as { __tutor: { setHidden: Function } }).__tutor.setHidden(false));
+    this.posterTaken = true;
+  }
+
+  /** カーソルを邪魔にならない場所へ移す（キーボード操作の前に） */
+  async park() {
+    await this.moveToPoint(PARK.x, PARK.y);
   }
 
   async hideCaption() {

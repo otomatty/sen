@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router";
+import { Link2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { Activity, Comment } from "../../../shared/types";
 import { priorityLabel } from "../../../shared/constants";
 import { useData } from "../../store/data";
@@ -10,6 +11,7 @@ import { sanitizeHtml } from "../../lib/sanitize";
 import { Avatar, Button, Menu } from "../../components/ui";
 import { StateIcon } from "../../components/pickers";
 import { Editor } from "../../components/Editor";
+import { useWsPath } from "../../app/hooks";
 import { LabelDot, PriorityIcon } from "../../components/icons";
 
 function Name({ id }: { id: string | null | undefined }) {
@@ -17,13 +19,27 @@ function Name({ id }: { id: string | null | undefined }) {
   return <b className="act-name">{u?.name ?? "（退出したメンバー）"}</b>;
 }
 
+/** アクティビティ内の課題への参照（クリックで開く） */
+function IssueRef({ id }: { id: string }) {
+  const issue = useData((s) => s.issues[id]);
+  const teams = useData((s) => s.teams);
+  const p = useWsPath();
+  if (!issue) return <b>（削除された課題）</b>;
+  const ident = identifier(issue, teams);
+  return (
+    <Link to={p(`/issue/${ident}`)} className="act-issue" title={issue.title}>
+      {ident}
+    </Link>
+  );
+}
+
+// 日本語の文では助詞の前後に空白を入れない（名前は太字で区別する）
 export function ActivityLine({ a }: { a: Activity }) {
   const d = a.data as Record<string, unknown>;
   const states = useData((s) => s.states);
   const projects = useData((s) => s.projects);
   const cycles = useData((s) => s.cycles);
   const labels = useData((s) => s.labels);
-  const issues = useData((s) => s.issues);
   const teams = useData((s) => s.teams);
   const actor = <Name id={a.actorId} />;
   let body: ReactNode = null;
@@ -31,13 +47,13 @@ export function ActivityLine({ a }: { a: Activity }) {
   const stName = (id: unknown) => (typeof id === "string" && states[id] ? states[id].name : "（削除されたステータス）");
   switch (a.type) {
     case "created":
-      body = <>{actor} が課題を作成しました</>;
+      body = <>{actor}が課題を作成しました</>;
       break;
     case "state":
       icon = typeof d.to === "string" && states[d.to] ? <StateIcon stateId={d.to} size={13} /> : null;
       body = (
         <>
-          {actor} がステータスを <b>{stName(d.from)}</b> から <b>{stName(d.to)}</b> に変更しました
+          {actor}がステータスを<b>{stName(d.from)}</b>から<b>{stName(d.to)}</b>に変更しました
         </>
       );
       break;
@@ -45,18 +61,18 @@ export function ActivityLine({ a }: { a: Activity }) {
       icon = <PriorityIcon priority={Number(d.to)} size={13} />;
       body = (
         <>
-          {actor} が優先度を <b>{priorityLabel(Number(d.to))}</b> に設定しました
+          {actor}が優先度を<b>{priorityLabel(Number(d.to))}</b>に設定しました
         </>
       );
       break;
     case "assignee":
       body = !d.to ? (
-        <>{actor} が担当者を外しました</>
+        <>{actor}が担当者を外しました</>
       ) : d.to === a.actorId ? (
-        <>{actor} が自分を担当者にしました</>
+        <>{actor}が自分を担当者にしました</>
       ) : (
         <>
-          {actor} が <Name id={String(d.to)} /> に割り当てました
+          {actor}が<Name id={String(d.to)} />を担当者にしました
         </>
       );
       break;
@@ -72,10 +88,10 @@ export function ActivityLine({ a }: { a: Activity }) {
         ));
       body = (
         <>
-          {actor} が
-          {added.length > 0 && <> ラベル {names(added)} を追加</>}
+          {actor}が
+          {added.length > 0 && <>ラベル{names(added)}を追加</>}
           {added.length > 0 && removed.length > 0 && "し、"}
-          {removed.length > 0 && <> ラベル {names(removed)} を削除</>}
+          {removed.length > 0 && <>ラベル{names(removed)}を削除</>}
           しました
         </>
       );
@@ -84,70 +100,105 @@ export function ActivityLine({ a }: { a: Activity }) {
     case "project":
       body = d.to ? (
         <>
-          {actor} がプロジェクトを <b>{projects[String(d.to)]?.name ?? "（削除済み）"}</b> に設定しました
+          {actor}がプロジェクトを<b>{projects[String(d.to)]?.name ?? "（削除済み）"}</b>に設定しました
         </>
       ) : (
-        <>{actor} がプロジェクトから外しました</>
+        <>{actor}がプロジェクトから外しました</>
       );
       break;
     case "cycle":
       body = d.to ? (
         <>
-          {actor} がサイクルを <b>{cycles[String(d.to)] ? cycleName(cycles[String(d.to)]) : "（削除済み）"}</b> に設定しました
+          {actor}がサイクルを<b>{cycles[String(d.to)] ? cycleName(cycles[String(d.to)]) : "（削除済み）"}</b>に設定しました
         </>
       ) : (
-        <>{actor} がサイクルから外しました</>
+        <>{actor}がサイクルから外しました</>
       );
       break;
     case "title":
       body = (
         <>
-          {actor} がタイトルを「{String(d.from)}」から「{String(d.to)}」に変更しました
+          {actor}がタイトルを「{String(d.from)}」から「{String(d.to)}」に変更しました
         </>
       );
       break;
     case "dueDate":
       body = d.to ? (
         <>
-          {actor} が期日を <b>{formatDate(String(d.to), true)}</b> に設定しました
+          {actor}が期日を<b>{formatDate(String(d.to), true)}</b>に設定しました
         </>
       ) : (
-        <>{actor} が期日を削除しました</>
+        <>{actor}が期日を削除しました</>
       );
       break;
     case "estimate":
       body = d.to === null ? (
-        <>{actor} が見積もりを削除しました</>
+        <>{actor}が見積もりを削除しました</>
       ) : (
         <>
-          {actor} が見積もりを <b>{String(d.to)} ポイント</b> に設定しました
+          {actor}が見積もりを<b>{String(d.to)}ポイント</b>に設定しました
         </>
       );
       break;
-    case "parent": {
-      const parent = d.to ? issues[String(d.to)] : null;
-      body = parent ? (
+    case "parent":
+      body = d.to ? (
         <>
-          {actor} が親課題を <b>{identifier(parent, teams)}</b> に設定しました
+          {actor}が親課題を<IssueRef id={String(d.to)} />に設定しました
         </>
       ) : (
-        <>{actor} が親課題を解除しました</>
+        <>{actor}が親課題を解除しました</>
       );
       break;
-    }
     case "team":
       body = (
         <>
-          {actor} が課題を <b>{teams[String(d.from)]?.name ?? "?"}</b> から <b>{teams[String(d.to)]?.name ?? "?"}</b> に移動しました
+          {actor}が課題を<b>{teams[String(d.from)]?.name ?? "?"}</b>から<b>{teams[String(d.to)]?.name ?? "?"}</b>に移動しました
         </>
       );
       break;
     case "archived":
-      body = <>{actor} が課題を削除しました</>;
+      body = <>{actor}が課題を削除しました</>;
       break;
     case "restored":
-      body = <>{actor} が課題を復元しました</>;
+      body = <>{actor}が課題を復元しました</>;
       break;
+    case "relation": {
+      const other = <IssueRef id={String(d.issueId)} />;
+      const removed = !!d.removed;
+      const out = d.dir === "out";
+      icon = <Link2 size={13} className="muted" />;
+      switch (d.relation) {
+        case "blocks":
+          body = out ? (
+            <>
+              {actor}が「{other}をブロックしている」{removed ? "を外しました" : "に設定しました"}
+            </>
+          ) : (
+            <>
+              {actor}が「{other}にブロックされている」{removed ? "を外しました" : "に設定しました"}
+            </>
+          );
+          break;
+        case "duplicate":
+          body = out ? (
+            <>
+              {actor}がこの課題を{other}の重複{removed ? "から外しました" : "としてマークしました"}
+            </>
+          ) : (
+            <>
+              {actor}が{other}をこの課題の重複{removed ? "から外しました" : "としてマークしました"}
+            </>
+          );
+          break;
+        default:
+          body = (
+            <>
+              {actor}が{other}との関連{removed ? "を外しました" : "を追加しました"}
+            </>
+          );
+      }
+      break;
+    }
   }
   return (
     <div className="activity-line" data-testid="activity-line">
@@ -162,8 +213,24 @@ export function ActivityLine({ a }: { a: Activity }) {
   );
 }
 
+/** 本文中の「@名前」をメンションとして強調する（タグの中は触らない） */
+function highlightMentions(html: string, names: string[]): string {
+  if (!names.length || !html.includes("@")) return html;
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@(${names.sort((a, b) => b.length - a.length).map(esc).join("|")})`, "g");
+  return html
+    .split(/(<[^>]+>)/)
+    .map((part) => (part.startsWith("<") ? part : part.replace(re, '<span class="mention">@$1</span>')))
+    .join("");
+}
+
 export function CommentCard({ c }: { c: Comment }) {
   const user = useData((s) => s.users[c.userId]);
+  const users = useData((s) => s.users);
+  const bodyHtml = useMemo(
+    () => highlightMentions(sanitizeHtml(c.body), Object.values(users).map((u) => u.name)),
+    [c.body, users],
+  );
   const meId = useData((s) => s.meId);
   const isAdmin = useData((s) => (s.meId ? s.users[s.meId]?.role === "admin" : false));
   const [menu, setMenu] = useState<DOMRect | null>(null);
@@ -199,7 +266,7 @@ export function CommentCard({ c }: { c: Comment }) {
           </div>
         </div>
       ) : (
-        <div className="comment-body prose" dangerouslySetInnerHTML={{ __html: sanitizeHtml(c.body) }} />
+        <div className="comment-body prose" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
       )}
       {menu && (
         <Menu

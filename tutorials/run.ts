@@ -10,7 +10,7 @@
  *       ヘッドレス Chromium で各シナリオを AI（スクリプト）が操作 → CDP で録画 → ffmpeg で MP4 化 →
  *       public/tutorials/ に動画・サムネイル・manifest.json を書き出す
  */
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, execSync, type ChildProcess } from "node:child_process";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -19,8 +19,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, request, type APIRequestContext } from "playwright";
 import { overlayScript } from "./lib/overlay";
 import { ScreenRecorder } from "./lib/recorder";
-import { Director } from "./lib/director";
+import { Director, PARK } from "./lib/director";
 import type { Scenario } from "./lib/types";
+import { sourceHash } from "./lib/source-hash";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = path.join(ROOT, "public", "tutorials");
@@ -95,13 +96,13 @@ async function resetData(api: APIRequestContext, ws: string, freshUser: boolean)
   });
 }
 
-async function loadScenarios(): Promise<Scenario[]> {
+async function loadScenarios(): Promise<(Scenario & { file: string })[]> {
   const dir = path.join(ROOT, "tutorials", "scenarios");
   const files = (await readdir(dir)).filter((f) => /\.tsx?$/.test(f)).sort();
-  const list: Scenario[] = [];
+  const list: (Scenario & { file: string })[] = [];
   for (const f of files) {
     const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default: Scenario };
-    list.push(mod.default);
+    list.push({ ...mod.default, file: path.join(dir, f) });
   }
   return list.sort((a, b) => a.order - b.order);
 }
@@ -117,6 +118,8 @@ interface ManifestEntry {
   poster: string;
   chapters: { t: number; title: string }[];
   recordedAt: string;
+  /** 収録したときの画面・シナリオのハッシュ（npm run tutorials:check で古い動画を見つける） */
+  sourceHash?: string;
 }
 
 async function main() {
@@ -156,6 +159,8 @@ async function main() {
         content: [
           "var __name = (f) => f;",
           "Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel', configurable: true });",
+          // 収録中はトーストを字幕より上に出して重ならないようにする
+          "document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = '.toasts{bottom:150px!important}.selection-bar{bottom:118px!important}'; document.head.appendChild(st); });",
           "try { localStorage.setItem('sen:theme', 'dark'); localStorage.setItem('sen:theme-v', JSON.stringify('dark')); localStorage.setItem('sen:recording', '1'); } catch (e) {}",
           `(${overlayScript.toString()})(${JSON.stringify({ accent: ACCENT })});`,
         ].join("\n"),
@@ -169,17 +174,19 @@ async function main() {
       const platform = await page.evaluate(() => navigator.platform);
       if (platform !== "MacIntel") log(`  ⚠ platform の上書きに失敗しました: ${platform}`);
       // カーソルは一覧の行に重ならない位置から始める（ホバーでフォーカスが動かないように）
-      await page.mouse.move(110, VIEWPORT.height - 120);
+      await page.mouse.move(PARK.x, PARK.y);
 
       const recorder = new ScreenRecorder(page, path.join(WORK_DIR, s.id));
       const t = new Director(page, ws, recorder);
-      t.setMouse(110, VIEWPORT.height - 120);
+      t.setMouse(PARK.x, PARK.y);
+      t.posterFile = path.join(OUT_DIR, `${s.id}.jpg`);
       await recorder.start();
       try {
-        await t.title(`STEP ${String(s.order).padStart(2, "0")}`, s.title, s.summary);
+        await t.title(`ステップ ${s.order}`, s.title, s.summary);
         await s.run(t);
+        await t.finish();
         await t.hideCaption();
-        await t.wait(900);
+        await t.wait(700);
       } catch (e) {
         failures.push(`${s.id}: ${(e as Error).message}`);
         console.error(e);
@@ -192,10 +199,16 @@ async function main() {
       }
       const video = `${s.id}.mp4`;
       const poster = `${s.id}.jpg`;
-      const duration = await recorder.encode(path.join(OUT_DIR, video), path.join(OUT_DIR, poster), {
+      // サムネイルはシナリオが t.poster() で撮ったもの（字幕なし）。撮っていなければ動画から切り出す
+      const duration = await recorder.encode(path.join(OUT_DIR, video), t.posterTaken ? null : path.join(OUT_DIR, poster), {
         width: VIDEO_WIDTH,
         posterAt: Math.min(5.5, t.chapters[0]?.t ? t.chapters[0].t + 2 : 4),
       });
+      if (t.posterTaken) {
+        const full = `${path.join(OUT_DIR, poster)}.full.jpg`;
+        spawnSync("ffmpeg", ["-y", "-loglevel", "error", "-i", full, "-vf", "scale=960:-2", "-q:v", "4", path.join(OUT_DIR, poster)]);
+        await rm(full, { force: true });
+      }
       if (!keepFrames) await recorder.cleanup();
       if (errors.length) log(`  ⚠ ページでエラー: ${errors.slice(0, 3).join(" / ")}`);
       const entry: ManifestEntry = {
@@ -209,6 +222,7 @@ async function main() {
         poster: `/tutorials/${poster}`,
         chapters: t.chapters.map((c) => ({ t: Math.round(c.t * 10) / 10, title: c.title })),
         recordedAt: new Date().toISOString(),
+        sourceHash: await sourceHash(ROOT, s.file),
       };
       manifest.tutorials = [...manifest.tutorials.filter((x) => x.id !== s.id), entry].sort((a, b) => a.order - b.order);
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");

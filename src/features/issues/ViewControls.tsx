@@ -171,8 +171,8 @@ export function FilterButton({
 function useValueLabel(field: FilterKey, values: (string | number)[], teamId?: string | null): string {
   const options = useFilterOptions(field, teamId, values);
   const labels = options.filter((o) => o.selected).map((o) => o.label);
-  if (labels.length <= 2) return labels.join("、");
-  return `${labels.slice(0, 2).join("、")} ほか${labels.length - 2}件`;
+  if (labels.length <= 2) return labels.join("・");
+  return `${labels.slice(0, 2).join("・")} ほか${labels.length - 2}件`;
 }
 
 function FilterChip({
@@ -195,7 +195,6 @@ function FilterChip({
         {FIELD_META[field].icon}
         {FIELD_META[field].label}
       </span>
-      <span className="filter-chip-op">{values.length > 1 ? "がいずれか" : "が"}</span>
       <button className="filter-chip-value" data-popover-anchor onClick={(e) => setAnchor(anchor ? null : e.currentTarget.getBoundingClientRect())}>
         {label}
       </button>

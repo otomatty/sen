@@ -32,6 +32,7 @@ let fragment = html
   .replace(/<\/?body>/gi, "")
   .replace(/<meta charset[^>]*>/i, "")
   .replace(/<meta name="viewport"[^>]*>/i, "")
+  .replace(/<link rel="manifest"[^>]*>/i, "")
   .replace(titleTag, "");
 fragment = `${titleTag.replace(/<title>[\s\S]*?<\/title>/, "<title>Sen 課題管理</title>")}\n${fragment.trim()}\n`;
 writeFileSync(path.join(dist, "artifact.html"), fragment);

@@ -174,6 +174,12 @@
   min-height: 0;
   transition: background 0.12s;
 }
+[data-theme="light"] .board-column {
+  background: var(--panel-3);
+}
+[data-theme="light"] .board-card {
+  background: var(--panel);
+}
 .board-column.over {
   background: var(--accent-soft);
 }
@@ -509,7 +515,73 @@
   margin-bottom: 10px;
 }
 .add-sub {
-  margin: 0 0 24px -6px;
+  margin: 0 0 0 -6px;
+}
+.detail-adders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 24px;
+}
+
+/* 関係（ブロック・関連・重複） */
+.relations {
+  margin: 8px 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 6px 6px;
+}
+.relations .section-title {
+  padding: 0 8px;
+  margin-bottom: 4px;
+}
+.relation-group + .relation-group {
+  margin-top: 4px;
+}
+.relation-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.relation-label.rel-blockedBy {
+  color: var(--danger);
+}
+.relation-label.rel-blocks {
+  color: var(--warn);
+}
+.relation-row .relation-remove {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+}
+.relation-row:hover .relation-remove,
+.relation-row .relation-remove:focus-visible {
+  opacity: 1;
+}
+.blocked-chip {
+  height: 20px;
+  padding: 0 5px;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.section-title .blocked-chip {
+  font-weight: 500;
+}
+.act-issue {
+  color: var(--text);
+  font-weight: 500;
+  margin: 0 2px;
+  text-decoration: none;
+}
+.act-issue:hover {
+  text-decoration: underline;
 }
 .sub-issues {
   margin: 8px 0 28px;
@@ -834,7 +906,7 @@
   background: var(--hover);
 }
 .prop-chip.subtle {
-  border-style: dashed;
+  color: var(--text-tertiary);
 }
 .prop-chip.static:hover {
   background: none;
@@ -1006,8 +1078,12 @@
     width: auto;
     border-left: 0;
     border-top: 1px solid var(--border);
-    order: -1;
     overflow: visible;
+  }
+  .mobile-props {
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 12px;
   }
   .detail-content {
     padding: 20px 18px 100px;
@@ -1062,4 +1138,12 @@
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow);
   cursor: grabbing;
+}
+
+.comment-body .mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 500;
 }

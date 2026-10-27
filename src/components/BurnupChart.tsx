@@ -90,7 +90,7 @@ export function ChartLegend() {
     <div className="chart-legend">
       <span>
         <i className="lg-scope" />
-        範囲
+        スコープ
       </span>
       <span>
         <i className="lg-started" />

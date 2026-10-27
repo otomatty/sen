@@ -4,6 +4,7 @@ import {
   Bell,
   BellOff,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
   Copy,
   Link2,
@@ -20,7 +21,7 @@ import { priorityLabel } from "../../../shared/constants";
 import { useData } from "../../store/data";
 import { engine } from "../../store/engine";
 import { archiveIssues, createIssue, restoreIssues, toggleSubscription, updateIssues } from "../../store/actions";
-import { cycleName, useSubIssues, useThread } from "../../store/selectors";
+import { cycleName, useIssueRelations, useSubIssues, useThread } from "../../store/selectors";
 import { openCreateIssue, openPicker, toast, useUI, type PickerKind } from "../../store/ui";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { appUrl, copyText, cx, dueStatus, formatDate, formatDateTime, identifier, timeAgo } from "../../lib/utils";
@@ -32,6 +33,7 @@ import { HelpVideoButton } from "../../components/PageHeader";
 import { useWsPath } from "../../app/hooks";
 import { ActivityLine, CommentCard } from "./Activity";
 import { CommentComposer } from "./CommentComposer";
+import { AddRelationButton, RelationMenu, Relations } from "./Relations";
 
 function PropRow({ label, children, kind, issueId, testId }: { label: string; children: ReactNode; kind: PickerKind; issueId: string; testId?: string }) {
   return (
@@ -106,7 +108,7 @@ function Properties({ issue }: { issue: Issue }) {
         </PropRow>
       )}
       <PropRow label="見積もり" kind="estimate" issueId={issue.id} testId="prop-estimate">
-        <span className={cx(issue.estimate === null && "muted")}>{issue.estimate === null ? "見積もりなし" : `${issue.estimate} ポイント`}</span>
+        <span className={cx(issue.estimate === null && "muted")}>{issue.estimate === null ? "見積もりなし" : `${issue.estimate}ポイント`}</span>
       </PropRow>
       <PropRow label="期日" kind="dueDate" issueId={issue.id} testId="prop-due">
         <span className={cx(!issue.dueDate && "muted", due === "overdue" && "text-danger", due === "soon" && "text-warn")}>
@@ -132,14 +134,55 @@ function Properties({ issue }: { issue: Issue }) {
   );
 }
 
-function SubIssues({ issue }: { issue: Issue }) {
+/** 読み込みがすぐ終わるときはスピナーを出さない（一瞬のちらつきを避ける） */
+function DelayedLoading() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShow(true), 350);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <div className="activity-loading" aria-busy>
+      {show && (
+        <>
+          <Spinner size={14} /> 読み込み中…
+        </>
+      )}
+    </div>
+  );
+}
+
+/** スマートフォンでは右側のプロパティ欄が下に回るので、主要なものだけタイトルの下に出す */
+function MobileProps({ issue }: { issue: Issue }) {
+  const st = useData((s) => s.states[issue.stateId]);
+  const assignee = useData((s) => (issue.assigneeId ? s.users[issue.assigneeId] : null));
+  const open = (kind: PickerKind) => (e: MouseEvent) =>
+    openPicker({ kind, issueIds: [issue.id], anchor: (e.currentTarget as HTMLElement).getBoundingClientRect() });
+  return (
+    <div className="mobile-props mobile-only">
+      <button className="prop-chip" data-popover-anchor onClick={open("status")}>
+        <StateIcon stateId={issue.stateId} />
+        {st?.name}
+      </button>
+      <button className="prop-chip" data-popover-anchor onClick={open("priority")}>
+        <PriorityIcon priority={issue.priority} />
+        {priorityLabel(issue.priority)}
+      </button>
+      <button className="prop-chip" data-popover-anchor onClick={open("assignee")}>
+        <Avatar user={assignee} size={16} />
+        {assignee?.name ?? "未割り当て"}
+      </button>
+    </div>
+  );
+}
+
+function SubIssues({ issue, adding, setAdding }: { issue: Issue; adding: boolean; setAdding: (v: boolean) => void }) {
   const subs = useSubIssues(issue.id);
   const teams = useData((s) => s.teams);
   const states = useData((s) => s.states);
   const users = useData((s) => s.users);
   const navigate = useNavigate();
   const p = useWsPath();
-  const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const done = subs.filter((s) => states[s.stateId]?.type === "completed").length;
   const add = () => {
@@ -148,13 +191,7 @@ function SubIssues({ issue }: { issue: Issue }) {
     createIssue({ teamId: issue.teamId, title: t, parentId: issue.id, projectId: issue.projectId, cycleId: issue.cycleId });
     setTitle("");
   };
-  if (!subs.length && !adding) {
-    return (
-      <button className="link-btn add-sub" onClick={() => setAdding(true)} data-testid="add-sub-issue">
-        <Plus size={14} /> サブ課題を追加
-      </button>
-    );
-  }
+  if (!subs.length && !adding) return null;
   return (
     <section className="sub-issues" data-testid="sub-issues">
       <div className="section-title">
@@ -234,12 +271,17 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
   const p = useWsPath();
   const [title, setTitle] = useState(issue?.title ?? "");
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  const [relMenu, setRelMenu] = useState<DOMRect | null>(null);
+  const [addingSub, setAddingSub] = useState(false);
+  const hasSubs = useData((s) => Object.values(s.issues).some((i) => i.parentId === issueId && !i.archivedAt));
+  const hasRelations = useIssueRelations(issueId).length > 0;
   const descTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDesc = useRef<string | null>(null);
   const titleFocused = useRef(false);
 
   useEffect(() => {
     engine.loadThread(issueId);
+    setAddingSub(false);
   }, [issueId]);
 
   // ショートカット（S / P / A / L など）の対象をこの課題にする
@@ -297,6 +339,15 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
   return (
     <div className={cx("issue-detail", embedded && "embedded")} data-testid="issue-detail" data-identifier={id}>
       <div className="detail-topbar">
+        {!embedded && (
+          <button
+            className="icon-btn mobile-only"
+            aria-label="一覧に戻る"
+            onClick={() => (onClose ? onClose() : listPath ? navigate(listPath) : navigate(-1))}
+          >
+            <ChevronLeft size={16} />
+          </button>
+        )}
         {team && (
           <Link to={p(`/team/${team.key}/all`)} className="crumb">
             <TeamIcon team={team} size={16} />
@@ -388,6 +439,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
                 else setTitle(issue.title);
               }}
             />
+            <MobileProps issue={issue} />
             <Editor
               key={issue.id}
               value={issue.description}
@@ -401,7 +453,18 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
               }}
               onBlur={flushDesc}
             />
-            <SubIssues issue={issue} />
+            <Relations issue={issue} />
+            <SubIssues issue={issue} adding={addingSub} setAdding={setAddingSub} />
+            {((!hasSubs && !addingSub) || !hasRelations) && (
+              <div className="detail-adders">
+                {!hasSubs && !addingSub && (
+                  <button className="link-btn add-sub" onClick={() => setAddingSub(true)} data-testid="add-sub-issue">
+                    <Plus size={14} /> サブ課題を追加
+                  </button>
+                )}
+                {!hasRelations && <AddRelationButton issueId={issue.id} />}
+              </div>
+            )}
 
             <section className="activity" data-testid="activity">
               <div className="section-title">
@@ -409,13 +472,11 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
                 {comments > 0 && <span className="muted">コメント {comments}件</span>}
                 <span className="spacer" />
                 <button className="link-btn" onClick={() => toggleSubscription(issue.id)}>
-                  {subscribed ? "購読を解除" : "購読する"}
+                  {subscribed ? "通知をオフにする" : "通知を受け取る"}
                 </button>
               </div>
               {threadState !== "loaded" && !thread.length ? (
-                <div className="activity-loading">
-                  <Spinner size={14} /> 読み込み中…
-                </div>
+                <DelayedLoading />
               ) : (
                 thread.map((t) =>
                   t.kind === "comment" ? <CommentCard key={t.item.id} c={t.item} /> : <ActivityLine key={t.item.id} a={t.item} />,
@@ -437,6 +498,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
             { label: "ID をコピー", icon: <Copy size={14} />, combo: "mod+.", onSelect: () => copyText(id).then(() => toast(`${id} をコピーしました`)) },
             { label: "リンクをコピー", icon: <Link2 size={14} />, onSelect: () => copyText(url).then(() => toast("リンクをコピーしました")) },
             { label: "別のチームに移動", icon: <ArrowRightLeft size={14} />, onSelect: () => openPicker({ kind: "team", issueIds: [issue.id], anchor: menu }) },
+            { label: "関係を追加…", icon: <Link2 size={14} />, onSelect: () => setRelMenu(menu) },
             "divider",
             issue.archivedAt
               ? { label: "復元", icon: <RotateCcw size={14} />, onSelect: () => restoreIssues([issue.id]) }
@@ -454,6 +516,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
           ]}
         />
       )}
+      {relMenu && <RelationMenu issueIds={[issue.id]} anchor={relMenu} onClose={() => setRelMenu(null)} />}
     </div>
   );
 }

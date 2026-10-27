@@ -24,7 +24,7 @@ import { useLabels, useMembers, useStates, useTeams } from "../../store/selector
 import { setTheme, toast, useUI, type Theme } from "../../store/ui";
 import { appUrl, copyText, cx, identifier, timeAgo } from "../../lib/utils";
 import { Avatar, Button, Popover, Switch } from "../../components/ui";
-import { LabelDot, TeamIcon } from "../../components/icons";
+import { TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { PageHeader } from "../../components/PageHeader";
 import { useDocumentTitle, useIsAdmin, useWsPath } from "../../app/hooks";
@@ -316,7 +316,7 @@ function LabelsSettings() {
   return (
     <Section title="ラベル" description="課題の分類に使うラベルです。ワークスペース全体で共通です。">
       <div className="label-add">
-        <LabelDot color={color} size={10} />
+        <ColorButton value={color} onChange={setColor} />
         <input
           className="input"
           placeholder="新しいラベル名"
@@ -325,7 +325,6 @@ function LabelsSettings() {
           onKeyDown={(e) => !e.nativeEvent.isComposing && e.key === "Enter" && add()}
           data-testid="new-label-name"
         />
-        <ColorPicker value={color} onChange={setColor} />
         <Button variant="primary" icon={<Plus size={14} />} onClick={add} disabled={!name.trim()} data-testid="new-label-submit">
           追加
         </Button>
@@ -340,10 +339,10 @@ function LabelsSettings() {
               defaultValue={l.name}
               onBlur={(e) => e.target.value.trim() && e.target.value !== l.name && updateLabel(l.id, { name: e.target.value.trim() })}
             />
-            <span className="muted small">{count}件の課題</span>
             <span className="spacer" />
+            <span className="muted small label-count">{count}件の課題</span>
             <button
-              className="icon-btn"
+              className="icon-btn row-hover-action"
               aria-label="ラベルを削除"
               onClick={async () =>
                 (await confirmDialog({

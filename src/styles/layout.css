@@ -244,6 +244,8 @@
   border-radius: 5px;
   padding: 2px 4px;
   margin: 0 -4px;
+  white-space: nowrap;
+  min-width: 0;
 }
 a.crumb:hover {
   color: var(--text);
@@ -332,6 +334,20 @@ a.crumb:hover {
   }
   .toolbar-btn span {
     display: none;
+  }
+  /* スマートフォンでは「タイトル＋操作」の 1 行と、横スクロールするタブの 2 行にまとめる */
+  .page-header .page-actions {
+    order: 1;
+  }
+  .page-header .tabs {
+    order: 2;
+    flex-basis: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .page-actions .toolbar-btn {
+    border-color: transparent;
+    padding: 0 7px;
   }
 }
 .error-actions {

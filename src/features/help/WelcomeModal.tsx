@@ -33,7 +33,7 @@ export function WelcomeModal() {
             <div>
               <b>キーボードで完結</b>
               <span>
-                <Kbd combo="mod+k" /> でコマンドパレット、<Kbd combo="c" /> で課題作成、<Kbd combo="?" /> で一覧。
+                <Kbd combo="mod+k" /> でコマンドパレット、<Kbd combo="c" /> で課題作成、<Kbd combo="?" /> でショートカット一覧。
               </span>
             </div>
           </div>

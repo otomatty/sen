@@ -9,28 +9,42 @@ export default defineScenario({
   start: "/my-issues",
   freshUser: true,
   async run(t) {
-    await t.caption("はじめてログインすると、Sen の考え方が表示されます", { hold: 2600 });
+    await t.caption("はじめてログインすると、Sen の考え方が表示されます");
+    // この字幕は「いま見えている画面」の説明なので、読み終わるまで待ってから閉じる
+    await t.settle();
+    await t.wait(600);
     await t.click("[data-testid=welcome-start]");
+    await t.expect("[data-testid=welcome-modal]", { hidden: true });
     await t.caption("左のサイドバーが、すべての画面への入り口です");
     await t.highlight("[data-testid=sidebar] .sidebar-nav", 1500);
+    await t.poster();
+    await t.caption("受信トレイには、あなた宛ての通知が届きます");
     await t.click("[data-testid=nav-inbox]");
-    await t.caption("受信トレイ：割り当て・コメント・メンションなど、あなた宛ての通知が届きます");
+    await t.expect("[data-testid=inbox-page]");
+    await t.caption("「自分の課題」には、担当している課題がまとまります");
     await t.click("[data-testid=nav-my-issues]");
-    await t.caption("マイイシュー：自分が担当している課題がまとまります");
+    await t.expectUrl(/\/my-issues/);
+    await t.caption("チームごとの課題一覧は、チーム名の下にあります");
     await t.click("[data-testid=nav-team-ENG-issues]");
-    await t.caption("チームの課題：チームごとの一覧です。サイクルやプロジェクトもチームの下にあります");
-    await t.moveToPoint(120, 700);
-    await t.caption("キーボードでも移動できます。G のあとに I で受信トレイへ");
-    await t.press("g i", { pause: 900 });
-    await t.caption("G のあとに M でマイイシューへ戻ります", { hold: 1600 });
-    await t.press("g m", { pause: 900 });
-    await t.caption("? を押すと、すべてのショートカットを確認できます");
-    await t.press("?", { label: ["?"], pause: 1800 });
-    await t.press("Escape", { show: false });
-    await t.caption("⌘K（Windows は Ctrl+K）のコマンドパレットからは、ほぼすべての操作ができます");
-    await t.press("Meta+k", { pause: 1600 });
-    await t.press("Escape", { show: false });
-    await t.caption("使い方動画は、サイドバー下と各画面の「使い方」ボタンからいつでも見られます");
-    await t.highlight("[data-testid=nav-help]", 1800);
+    await t.expectUrl(/\/team\/ENG/);
+    await t.park();
+    await t.caption("キーボードでも移動できます。G → I で受信トレイへ");
+    await t.press("g i", { pause: 700 });
+    await t.expect("[data-testid=inbox-page]");
+    await t.caption("G → M で「自分の課題」へ戻ります");
+    await t.press("g m", { pause: 700 });
+    await t.expectUrl(/\/my-issues/);
+    await t.caption("? を押すと、ショートカットの一覧が開きます");
+    await t.press("?", { label: ["?"], pause: 300 });
+    await t.expect("[data-testid=shortcuts-help]");
+    await t.wait(1300);
+    await t.press("Escape", { show: false, pause: 300 });
+    await t.caption("⌘K（Ctrl+K）のパレットから、ほぼすべての操作ができます");
+    await t.press("Meta+k", { pause: 300 });
+    await t.expect("[data-testid=command-palette]");
+    await t.wait(1200);
+    await t.press("Escape", { show: false, pause: 300 });
+    await t.caption("使い方動画は、サイドバーの下からいつでも見られます");
+    await t.highlight("[data-testid=nav-help]", 1600);
   },
 });
