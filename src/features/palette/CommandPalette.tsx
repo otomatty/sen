@@ -10,6 +10,7 @@ import {
   Columns3,
   Copy,
   CornerLeftUp,
+  Download,
   Hash,
   Inbox,
   Keyboard,
@@ -21,6 +22,7 @@ import {
   PenSquare,
   PlayCircle,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Sun,
@@ -43,6 +45,7 @@ import { CycleIcon, TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { useWsKey } from "../../app/hooks";
 import { logout } from "../../app/session";
+import { applyUpdate, installApp, usePWA } from "../../app/pwa";
 import { openRelationPicker, RELATION_ACTIONS, RELATION_ICON } from "../issues/Relations";
 
 interface Command {
@@ -68,6 +71,8 @@ function Palette() {
   const issues = useData((s) => s.issues);
   const teamsMap = useData((s) => s.teams);
   const meId = useData((s) => s.meId);
+  const canInstall = usePWA((s) => !!s.installPrompt);
+  const updateReady = usePWA((s) => s.updateReady);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -223,10 +228,16 @@ function Palette() {
       { id: "theme-light", label: "テーマ：ライト", group: "表示", icon: <Sun size={15} />, keywords: "theme light", perform: () => setTheme("light") },
       { id: "theme-system", label: "テーマ：システムに合わせる", group: "表示", icon: <Monitor size={15} />, keywords: "theme system", perform: () => setTheme("system") },
       { id: "undo", label: "元に戻す", group: "その他", icon: <Undo2 size={15} />, combo: "mod+z", keywords: "undo", perform: () => undo() },
-      { id: "logout", label: "ログアウト", group: "その他", icon: <LogOut size={15} />, keywords: "logout sign out", perform: () => logout() },
     );
+    if (canInstall) {
+      list.push({ id: "install-app", label: "アプリをインストール", group: "その他", icon: <Download size={15} />, keywords: "install app pwa", perform: () => installApp() });
+    }
+    if (updateReady) {
+      list.push({ id: "update-app", label: "新しいバージョンに更新", group: "その他", icon: <RefreshCw size={15} />, keywords: "update reload version", perform: applyUpdate });
+    }
+    list.push({ id: "logout", label: "ログアウト", group: "その他", icon: <LogOut size={15} />, keywords: "logout sign out", perform: () => logout() });
     return list;
-  }, [targets, issues, teamsMap, teams, meId, ws]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [targets, issues, teamsMap, teams, meId, ws, canInstall, updateReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => {
     const cmds = commands.filter((c) => fuzzyMatch(`${c.label} ${c.keywords ?? ""} ${c.group}`, q));

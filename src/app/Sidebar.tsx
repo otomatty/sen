@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
+  Download,
   Inbox,
   Keyboard,
   Layers,
@@ -29,6 +30,7 @@ import { Kbd, Menu, Tooltip } from "../components/ui";
 import { CycleIcon, ProjectIcon, TeamIcon } from "../components/icons";
 import { useCurrentTeamId, useWsPath } from "./hooks";
 import { logout } from "./session";
+import { applyUpdate, installApp, usePWA } from "./pwa";
 import type { Me } from "../../shared/types";
 
 export function Sidebar() {
@@ -44,6 +46,8 @@ export function Sidebar() {
   const pendingCount = useData((s) => s.pendingCount);
   const realtime = useData((s) => s.realtime);
   const theme = useUI((s) => s.theme);
+  const canInstall = usePWA((s) => !!s.installPrompt);
+  const updateReady = usePWA((s) => s.updateReady);
   const currentTeamId = useCurrentTeamId();
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -182,6 +186,8 @@ export function Sidebar() {
               icon: theme === "dark" ? <Moon size={14} /> : theme === "light" ? <Sun size={14} /> : <Monitor size={14} />,
               onSelect: () => setTheme(theme === "system" ? "dark" : theme === "dark" ? "light" : "system"),
             },
+            ...(canInstall ? [{ label: "アプリをインストール", icon: <Download size={14} />, onSelect: () => installApp() }] : []),
+            ...(updateReady ? [{ label: "新しいバージョンに更新", icon: <RefreshCw size={14} />, onSelect: applyUpdate }] : []),
             { label: `ログアウト（${me?.name ?? ""}）`, icon: <LogOut size={14} />, onSelect: () => logout() },
           ]}
         />

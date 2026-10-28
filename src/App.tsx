@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
+import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AppShell, Toasts } from "./app/AppShell";
 import { lastWorkspaceKey, loadSession, useSession } from "./app/session";
 import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPages";
@@ -14,13 +14,27 @@ import { Spinner } from "./components/ui";
 import { Logo } from "./components/icons";
 import { ConfirmHost } from "./components/ConfirmDialog";
 
+/** インストールしたアプリのショートカット（manifest.webmanifest の shortcuts）の行き先。/?open=inbox のように開く */
+const SHORTCUTS: Record<string, string> = {
+  "new-issue": "/my-issues/assigned",
+  inbox: "/inbox",
+  "my-issues": "/my-issues",
+  search: "/search",
+};
+
 function Root() {
   const session = useSession();
+  const [params] = useSearchParams();
+  const open = params.get("open");
+  const shortcut = open && SHORTCUTS[open] ? open : null;
   if (session.status === "unknown") return <Splash />;
-  if (session.status === "anon") return <Navigate to="/login" replace />;
+  if (session.status === "anon") {
+    return <Navigate to={shortcut ? `/login?next=${encodeURIComponent(`/?open=${shortcut}`)}` : "/login"} replace />;
+  }
   const last = lastWorkspaceKey();
   const key = session.workspaces.find((w) => w.urlKey === last)?.urlKey ?? session.workspaces[0]?.urlKey;
   if (!key) return <Navigate to="/new-workspace" replace />;
+  if (shortcut) return <Navigate to={`/${key}${SHORTCUTS[shortcut]}`} state={shortcut === "new-issue" ? { createIssue: true } : null} replace />;
   return <Navigate to={`/${key}/my-issues`} replace />;
 }
 

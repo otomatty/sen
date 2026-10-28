@@ -1,14 +1,49 @@
 {
+  "id": "/",
   "name": "Sen — 課題管理",
   "short_name": "Sen",
   "description": "Linear の思想を受け継いだ、速くて静かな日本語の課題管理アプリ",
   "lang": "ja",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0b0c0e",
   "theme_color": "#0b0c0e",
+  "categories": ["productivity", "business"],
   "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    {
+      "name": "新しい課題を作成",
+      "short_name": "課題を作成",
+      "url": "/?open=new-issue",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "受信トレイ",
+      "url": "/?open=inbox",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "自分の課題",
+      "url": "/?open=my-issues",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "検索",
+      "url": "/?open=search",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "screenshots": [
+    { "src": "/tutorials/overview.jpg", "sizes": "960x600", "type": "image/jpeg", "form_factor": "wide", "label": "自分の課題" },
+    { "src": "/tutorials/board.jpg", "sizes": "960x600", "type": "image/jpeg", "form_factor": "wide", "label": "ボード表示" },
+    { "src": "/tutorials/issue-detail.jpg", "sizes": "960x600", "type": "image/jpeg", "form_factor": "wide", "label": "課題の詳細" }
   ]
 }
