@@ -113,26 +113,39 @@ export async function applyUpdate() {
     if (!ok) return;
   }
   updating = true;
-  try {
-    // 入力中の欄を確定させ、入力が止まってから保存する欄（説明文は 700 ミリ秒後）の送信が始まるのを待つ
-    (document.activeElement as HTMLElement | null)?.blur?.();
-    await new Promise((r) => setTimeout(r, 800));
-    // 未送信の変更は読み込み直すと失われるので、送信が終わってから切り替える
-    if (useData.getState().pendingCount > 0) toast("変更を送信してから更新します…");
-    if (!(await waitForSync(15_000))) {
-      toast("送信できていない変更があります。オンラインで同期が終わってから、もう一度お試しください", { kind: "error" });
-      return;
-    }
-    // 別のタブですでに切り替わっていれば、読み込み直すだけでよい
-    if (worker.state === "activating" || worker.state === "activated") {
-      window.location.reload();
-      return;
-    }
-    reloadOnChange = true;
-    worker.postMessage({ type: "skip-waiting" });
-  } finally {
+  // ここから読み込み直すまでは画面を操作できないようにする（待っている間に入力した内容が消えないように）
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  lockScreen(true);
+  const progress = toast("更新しています…", { duration: Infinity });
+  const fail = (message: string) => {
     updating = false;
+    reloadOnChange = false;
+    lockScreen(false);
+    dismissToast(progress);
+    toast(message, { kind: "error" });
+  };
+  // 入力が止まってから保存する欄（説明文は 700 ミリ秒後）の送信が始まるのを待ち、
+  // 未送信の変更は読み込み直すと失われるので、送信が終わってから切り替える
+  await new Promise((r) => setTimeout(r, 800));
+  if (!(await waitForSync(15_000))) {
+    fail("送信できていない変更があります。オンラインで同期が終わってから、もう一度お試しください");
+    return;
   }
+  // 別のタブですでに切り替わっていれば、読み込み直すだけでよい
+  if (worker.state === "activating" || worker.state === "activated") {
+    window.location.reload();
+    return;
+  }
+  reloadOnChange = true;
+  worker.postMessage({ type: "skip-waiting" });
+  // 切り替わらなかったときは、操作できる状態に戻す
+  setTimeout(() => fail("更新できませんでした。もう一度お試しください"), 10_000);
+}
+
+/** 画面全体の操作を止める・戻す */
+function lockScreen(locked: boolean) {
+  const root = document.getElementById("root");
+  if (root) root.inert = locked;
 }
 
 function showToast(message: string, action: { label: string; run: () => void }) {

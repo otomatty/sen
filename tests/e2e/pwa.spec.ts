@@ -302,6 +302,35 @@ test("以前のサービスワーカー（sen-shell-v1）の保存内容は、�
   await expect.poll(() => cacheNames(page)).toEqual([names[1], "sen-b"]);
 });
 
+test("送れない変更があるときは更新せず、操作できる状態に戻す", async ({ page, context }) => {
+  const ws = await openInstalledApp(page);
+  await page.goto(`/${ws}/issue/ENG-2`);
+  await expect(page.getByTestId("issue-detail")).toBeVisible();
+  await waitForSynced(page);
+  await publishNextVersion(page, { version: "next", drop: "js" });
+  await expect(page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" })).toBeVisible();
+
+  // オフラインで変更し、送れないまま更新しようとする
+  await context.setOffline(true);
+  const title = page.getByTestId("issue-title");
+  await title.fill("オフラインで編集");
+  await title.press("Enter");
+  await expect(page.getByTestId("sync-status")).toContainText("オフライン", { timeout: 10_000 });
+  await page.getByTestId("workspace-menu").click();
+  await page.locator(".menu-item", { hasText: "新しいバージョンに更新" }).click();
+  // 更新している間は画面を操作できない
+  await expect.poll(() => page.evaluate(() => document.getElementById("root")!.inert)).toBe(true);
+  await expect(page.getByTestId("toast").filter({ hasText: "送信できていない変更があります" })).toBeVisible();
+  // 更新はせず、操作できる状態に戻る
+  expect(await page.evaluate(() => document.getElementById("root")!.inert)).toBe(false);
+  await expect(page.getByTestId("toast").filter({ hasText: "更新しています" })).toHaveCount(0);
+  expect(await hasWaiting(page)).toBe(true);
+  await expect(title).toHaveValue("オフラインで編集");
+
+  await context.setOffline(false);
+  await expect(page.getByTestId("sync-status")).toContainText("同期済み", { timeout: 40_000 });
+});
+
 test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {
   const ws = await openInstalledApp(page);
   await page.goto(`/${ws}/projects`);
