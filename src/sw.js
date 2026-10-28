@@ -12,6 +12,8 @@ const PRECACHED = new Set(PRECACHE);
 const NAVIGATE_TIMEOUT = 3000;
 // 版が最後に有効になった時刻の印。インストールに失敗した版や、使われる前に置き換わった版には付かない
 const ACTIVATED = "/__sen-activated";
+// 以前のサービスワーカー（印を付けない）のキャッシュ。最初の切り替えでは、直前まで使われていた版として残す
+const LEGACY = "sen-shell-v1";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -33,7 +35,7 @@ self.addEventListener("activate", (event) => {
       let keep = null;
       let latest = 0;
       for (const k of old) {
-        const at = Number(await (await (await caches.open(k)).match(ACTIVATED))?.text()) || 0;
+        const at = Number(await (await (await caches.open(k)).match(ACTIVATED))?.text()) || (k === LEGACY ? 1 : 0);
         if (at > latest) [keep, latest] = [k, at];
       }
       await Promise.all(old.filter((k) => k !== keep).map((k) => caches.delete(k)));

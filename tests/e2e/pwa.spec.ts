@@ -276,6 +276,32 @@ test("以前の版に戻したあとも、直前まで使っていた版を残�
   await expect.poll(() => cacheNames(page)).toEqual([original, "sen-c"]);
 });
 
+test("以前のサービスワーカー（sen-shell-v1）の保存内容は、最初の切り替えでは残す", async ({ page }) => {
+  // アプリによる登録を止めておき、以前のサービスワーカーが使われていた状態を作ってから登録する
+  await page.addInitScript(() => {
+    const register = ServiceWorkerContainer.prototype.register;
+    ServiceWorkerContainer.prototype.register = function (this: ServiceWorkerContainer, ...args: Parameters<typeof register>) {
+      return (window as unknown as { __allowSW?: boolean }).__allowSW ? register.apply(this, args) : new Promise<never>(() => {});
+    };
+  });
+  await page.goto("/login");
+  await page.evaluate(async () => {
+    await (await caches.open("sen-shell-v1")).put("/", new Response("以前の版"));
+    (window as unknown as { __allowSW?: boolean }).__allowSW = true;
+    await navigator.serviceWorker.register("/sw.js");
+  });
+  await expect.poll(() => settled(page)).toBe(true);
+  const names = await cacheNames(page);
+  expect(names).toHaveLength(2);
+  expect(names[0]).toBe("sen-shell-v1");
+
+  // 次の版に切り替わったら、以前のサービスワーカーの保存内容は消す（アプリの登録を止めているので、切り替えは手で行う）
+  await publishNextVersion(page, { version: "b" });
+  await expect.poll(() => hasWaiting(page)).toBe(true);
+  await page.evaluate(async () => (await navigator.serviceWorker.getRegistration())!.waiting!.postMessage({ type: "skip-waiting" }));
+  await expect.poll(() => cacheNames(page)).toEqual([names[1], "sen-b"]);
+});
+
 test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {
   const ws = await openInstalledApp(page);
   await page.goto(`/${ws}/projects`);
