@@ -445,11 +445,18 @@
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+/* 幅が足りないときはチーム名だけを省略し、ID と操作ボタンは縮めない */
+.detail-topbar .crumb.current,
+.detail-topbar .crumb-sep {
+  flex-shrink: 0;
+}
 .detail-nav {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-right: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .detail-layout {
   flex: 1;
@@ -1067,6 +1074,19 @@
 }
 
 @media (max-width: 900px) {
+  /* スマートフォンではチームはアイコンだけ、「何件目か」は隠して 1 行に収める */
+  .detail-topbar {
+    gap: 4px;
+    padding-left: 8px;
+    padding-right: 6px;
+  }
+  .detail-team-name,
+  .detail-nav > .muted {
+    display: none;
+  }
+  .detail-nav {
+    margin-right: 2px;
+  }
   .detail-layout {
     flex-direction: column;
     overflow-y: auto;

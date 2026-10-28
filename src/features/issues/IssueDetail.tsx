@@ -349,9 +349,9 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
           </button>
         )}
         {team && (
-          <Link to={p(`/team/${team.key}/all`)} className="crumb">
+          <Link to={p(`/team/${team.key}/all`)} className="crumb" aria-label={team.name}>
             <TeamIcon team={team} size={16} />
-            {team.name}
+            <span className="truncate detail-team-name">{team.name}</span>
           </Link>
         )}
         <span className="crumb-sep">›</span>
