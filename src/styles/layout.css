@@ -246,8 +246,6 @@
   margin: 0 -4px;
   white-space: nowrap;
   min-width: 0;
-  /* 縮んだときに文字が隣にはみ出して重ならないよう、収まらない分は隠す */
-  overflow: hidden;
 }
 a.crumb:hover {
   color: var(--text);

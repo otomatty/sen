@@ -446,6 +446,10 @@
   flex-shrink: 0;
 }
 /* 幅が足りないときはチーム名と「削除済み」を省略し、ID と操作ボタンは縮めない */
+.detail-topbar .crumb {
+  /* 縮んだときに文字が隣にはみ出して重ならないよう、収まらない分は隠す */
+  overflow: hidden;
+}
 .detail-topbar .crumb.current,
 .detail-topbar .crumb-sep {
   flex-shrink: 0;
