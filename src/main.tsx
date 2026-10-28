@@ -8,6 +8,7 @@ import "./styles/issues.css";
 import "./styles/pages.css";
 import { App } from "./App";
 import { applyTheme, useUI } from "./store/ui";
+import { initPWA } from "./app/pwa";
 
 applyTheme(useUI.getState().theme);
 
@@ -25,11 +26,5 @@ async function boot() {
 }
 boot();
 
-// オフラインでも起動できるよう、本番ビルドではサービスワーカーを登録する
-if (import.meta.env.PROD && !(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      // 登録できなくても通常どおり動く
-    });
-  });
-}
+// サービスワーカー（オフライン起動・更新の案内）とインストールの提案
+initPWA();

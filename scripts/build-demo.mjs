@@ -21,6 +21,8 @@ html = html.replace(
   /<link rel="icon"[^>]*>/,
   `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(favicon)}" type="image/svg+xml" />`,
 );
+// デモ版は public/ を含めないので、PNG のアイコンは参照しない
+html = html.replace(/<link rel="apple-touch-icon"[^>]*>/, "");
 writeFileSync(path.join(dist, "index.html"), html);
 
 // Claude のアーティファクトとして公開する版：外側の <html>/<head>/<body> は公開時に付くので取り除く

@@ -7,7 +7,7 @@ import { useData } from "../../store/data";
 import { cycleName, useTeams } from "../../store/selectors";
 import { toast, useUI, type PickerKind } from "../../store/ui";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
-import { cx, formatDate, identifier, MOD } from "../../lib/utils";
+import { cx, formatDate, identifier, isHtmlEmpty, MOD } from "../../lib/utils";
 import { Avatar, Button, Modal, Switch, Tooltip } from "../../components/ui";
 import { CycleIcon, LabelDot, PriorityIcon, ProjectIcon, TeamIcon } from "../../components/icons";
 import { PropertyPicker, StateIcon } from "../../components/pickers";
@@ -31,6 +31,11 @@ interface Draft {
 
 // 閉じても下書きは残る（Linear と同じ）
 let savedDraft: Partial<Draft> | null = null;
+
+/** タイトルか説明を書きかけの課題があるか（読み込み直すと消えるので、新しいバージョンへ更新する前に確かめる） */
+export function hasIssueDraft() {
+  return Boolean(savedDraft?.title?.trim() || (savedDraft?.description && !isHtmlEmpty(savedDraft.description)));
+}
 
 export function CreateIssueModal() {
   const open = useUI((s) => s.createOpen);

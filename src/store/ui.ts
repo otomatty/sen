@@ -90,7 +90,9 @@ let toastId = 1;
 export function toast(message: string, opts: Omit<Toast, "id" | "message"> = {}) {
   const id = toastId++;
   useUI.setState((s) => ({ toasts: [...s.toasts.slice(-3), { id, message, ...opts }] }));
-  setTimeout(() => dismissToast(id), opts.duration ?? (opts.action ? 6000 : 3500));
+  const duration = opts.duration ?? (opts.action ? 6000 : 3500);
+  // Infinity は閉じるまで出し続ける
+  if (Number.isFinite(duration)) setTimeout(() => dismissToast(id), duration);
   return id;
 }
 export function dismissToast(id: number) {
@@ -135,6 +137,9 @@ export function setTheme(theme: Theme) {
 export function applyTheme(theme: Theme) {
   const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
+  // インストールしたアプリのタイトルバーやスマートフォンのステータスバーを、画面の背景色にそろえる
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  if (bg) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg);
 }
 
 if (typeof window !== "undefined") {

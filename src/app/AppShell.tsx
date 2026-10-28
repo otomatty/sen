@@ -197,6 +197,13 @@ export function AppShell() {
     else setTimeout(run, 1200);
   }, [status]);
 
+  // アプリのショートカット「新しい課題を作成」から開いたときは、作成画面を出す
+  useEffect(() => {
+    if (status !== "ready" || !(location.state as { createIssue?: boolean } | null)?.createIssue) return;
+    navigate(location.pathname, { replace: true, state: null });
+    openCreateIssue();
+  }, [status, location.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 画面遷移したら選択とポップアップを閉じる
   useEffect(() => {
     useUI.setState({ selectedIssueIds: [], contextMenu: null, picker: null, sidebarOpen: false });

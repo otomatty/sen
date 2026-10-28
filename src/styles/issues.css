@@ -376,7 +376,7 @@
 .selection-bar {
   position: fixed;
   left: calc(50% + 118px);
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 600;
   display: flex;

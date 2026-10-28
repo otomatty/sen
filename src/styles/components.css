@@ -654,13 +654,14 @@ select:focus {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 11vh 16px 16px;
+  padding: calc(11vh + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: var(--backdrop);
   animation: fade-in 0.12s;
 }
 .modal-root.modal-center {
   align-items: center;
-  padding-top: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top));
 }
 .modal {
   max-width: 100%;
@@ -688,8 +689,8 @@ select:focus {
 /* トースト */
 .toasts {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: calc(16px + env(safe-area-inset-right));
+  bottom: calc(16px + env(safe-area-inset-bottom));
   z-index: 2500;
   display: flex;
   flex-direction: column;

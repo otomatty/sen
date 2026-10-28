@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, useParams } from "react-router";
-import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, Download, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { StateType } from "../../../shared/types";
 import { AVATAR_COLORS, PALETTE, STATE_TYPES } from "../../../shared/constants";
 import { useData } from "../../store/data";
@@ -30,6 +30,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { useDocumentTitle, useIsAdmin, useWsPath } from "../../app/hooks";
 import { api } from "../../lib/api";
 import { confirmDialog } from "../../components/ConfirmDialog";
+import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
 import type { Me } from "../../../shared/types";
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
@@ -131,7 +132,44 @@ function ProfileSettings() {
           </div>
         </Field>
       </Section>
+      <AppSection />
     </>
+  );
+}
+
+/** PWA としてのインストールと更新 */
+function AppSection() {
+  const installPrompt = usePWA((s) => s.installPrompt);
+  const standalone = usePWA((s) => s.standalone);
+  const updateReady = usePWA((s) => s.updateReady);
+  if (typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) return null;
+  return (
+    <Section title="アプリ" description="インストールすると、デスクトップやホーム画面から専用のウィンドウで開けます。一度開いた後は、オフラインでも起動します。">
+      <Field label="インストール">
+        {standalone ? (
+          <span className="muted" data-testid="pwa-status">
+            インストールしたアプリで開いています
+          </span>
+        ) : installPrompt ? (
+          <Button icon={<Download size={14} />} onClick={installApp} data-testid="pwa-install">
+            アプリをインストール
+          </Button>
+        ) : (
+          <span className="muted" data-testid="pwa-status">
+            {isIOS()
+              ? "Safari の共有ボタンから「ホーム画面に追加」を選ぶと、インストールできます"
+              : "ブラウザのアドレスバーやメニューにある「インストール」から追加できます"}
+          </span>
+        )}
+      </Field>
+      {updateReady && (
+        <Field label="バージョン" hint="新しいバージョンがあります">
+          <Button variant="primary" icon={<RefreshCw size={14} />} onClick={applyUpdate} data-testid="pwa-update">
+            更新して再読み込み
+          </Button>
+        </Field>
+      )}
+    </Section>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/react";
 import { ArrowUp } from "lucide-react";
 import { addComment } from "../../store/actions";
@@ -7,12 +7,26 @@ import { cx, fuzzyMatch, isHtmlEmpty, MOD } from "../../lib/utils";
 import { Editor } from "../../components/Editor";
 import { Avatar } from "../../components/ui";
 
+// 書きかけのコメントがある課題（読み込み直すと消えるので、新しいバージョンへ更新する前に確かめる）
+const writing = new Set<string>();
+export function hasCommentDraft() {
+  return writing.size > 0;
+}
+
 export function CommentComposer({ issueId }: { issueId: string }) {
   const [html, setHtml] = useState("");
   const [key, setKey] = useState(0);
   const editorRef = useRef<TiptapEditor | null>(null);
   const members = useMembers();
   const [mention, setMention] = useState<{ q: string; from: number; to: number; active: number } | null>(null);
+
+  useEffect(() => {
+    if (isHtmlEmpty(html)) return;
+    writing.add(issueId);
+    return () => {
+      writing.delete(issueId);
+    };
+  }, [html, issueId]);
 
   const candidates = mention ? members.filter((m) => fuzzyMatch(`${m.name} ${m.email}`, mention.q)).slice(0, 6) : [];
 
