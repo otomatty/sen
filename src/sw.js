@@ -24,8 +24,9 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k.startsWith("sen-") && k !== CACHE).map((k) => caches.delete(k)));
+      // 1つ前の版は残す：別のタブで古い画面が開いたままでも、その版の遅れて読み込むファイルを使えるように
+      const old = (await caches.keys()).filter((k) => k.startsWith("sen-") && k !== CACHE);
+      await Promise.all(old.slice(0, -1).map((k) => caches.delete(k)));
       await self.clients.claim();
     })(),
   );
@@ -33,8 +34,8 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "skip-waiting") self.skipWaiting();
-  // 画面で動いているコードがこの版に含まれるか（含まれるなら、再読み込みせずに切り替えてよい）
-  if (event.data?.type === "has") event.ports[0]?.postMessage(PRECACHED.has(event.data.path));
+  // 画面で使っている JS と CSS がすべてこの版に含まれるか（含まれるなら、再読み込みせずに切り替えてよい）
+  if (event.data?.type === "has") event.ports[0]?.postMessage(event.data.paths.every((p) => PRECACHED.has(p)));
 });
 
 self.addEventListener("fetch", (event) => {
@@ -70,7 +71,8 @@ async function navigate(req) {
 /** ビルド済みのファイル（名前にハッシュ入り）とアイコンなど：保存済みならそれを使う */
 async function cacheFirst(req, url) {
   const cache = await caches.open(CACHE);
-  const hit = await cache.match(req);
+  // 今の版になければ、残してある 1つ前の版も探す
+  const hit = (await cache.match(req)) ?? (await caches.match(req));
   if (hit) return hit;
   const res = await fetch(req);
   // 中身が変わらないファイルは、あとからオフラインで使えるよう保存しておく

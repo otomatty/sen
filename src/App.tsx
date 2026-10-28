@@ -26,7 +26,7 @@ function Root() {
   const session = useSession();
   const [params] = useSearchParams();
   const open = params.get("open");
-  const shortcut = open && SHORTCUTS[open] ? open : null;
+  const shortcut = open && Object.hasOwn(SHORTCUTS, open) ? open : null;
   if (session.status === "unknown") return <Splash />;
   if (session.status === "anon") {
     return <Navigate to={shortcut ? `/login?next=${encodeURIComponent(`/?open=${shortcut}`)}` : "/login"} replace />;

@@ -92,10 +92,12 @@ test("アプリのショートカットから、受信トレイや課題の作�
   await expect(page.getByTestId("create-title")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/${ws}/my-issues/assigned$`));
 
-  // 知らない行き先は、いつもの画面へ
-  await page.goto("/?open=unknown");
-  await expect(page).toHaveURL(new RegExp(`/${ws}/my-issues/assigned$`));
-  await expect(page.getByTestId("create-title")).toBeHidden();
+  // 知らない行き先（Object のプロパティ名を含む）は、いつもの画面へ
+  for (const open of ["unknown", "constructor", "__proto__"]) {
+    await page.goto(`/?open=${open}`);
+    await expect(page).toHaveURL(new RegExp(`/${ws}/my-issues/assigned$`));
+    await expect(page.getByTestId("create-title")).toBeHidden();
+  }
 });
 
 test("ブラウザがインストールを提案できるときは、メニューと設定からインストールできる", async ({ page }) => {
@@ -137,14 +139,17 @@ test.afterEach(() => {
   originalSw = null;
 });
 
-async function publishNextVersion(page: Page, opts: { version: string; dropCurrentCode: boolean }) {
-  originalSw = readFileSync(SW_FILE, "utf8");
-  let source = originalSw.replace(/const VERSION = "\w+";/, `const VERSION = "${opts.version}";`);
-  if (opts.dropCurrentCode) {
-    // 画面で動いている JS を含まない版 = 画面のコードが古くなった
-    const entry = await page.evaluate(() => new URL(document.querySelector<HTMLScriptElement>("script[type=module][src]")!.src).pathname);
-    expect(source).toContain(`"${entry}",`);
-    source = source.replace(`"${entry}",`, "");
+/** 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする */
+async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css" }) {
+  originalSw ??= readFileSync(SW_FILE, "utf8");
+  let source = readFileSync(SW_FILE, "utf8").replace(/const VERSION = "[\w-]+";/, `const VERSION = "${opts.version}";`);
+  if (opts.drop) {
+    const file = await page.evaluate((drop) => {
+      const el = document.querySelector<HTMLScriptElement & HTMLLinkElement>(drop === "js" ? "script[type=module][src]" : 'link[rel="stylesheet"]')!;
+      return new URL(el.src || el.href).pathname;
+    }, opts.drop);
+    expect(source).toContain(`"${file}",`);
+    source = source.replace(`"${file}",`, "");
   }
   writeFileSync(SW_FILE, source);
   // vite preview は起動時の中身で ETag を返すので、ブラウザの HTTP キャッシュを消して書き換えた sw.js を取りに行かせる
@@ -157,30 +162,46 @@ async function publishNextVersion(page: Page, opts: { version: string; dropCurre
 }
 
 const cacheNames = (page: Page) => page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith("sen-")));
+const hasWaiting = (page: Page) => page.evaluate(async () => !!(await navigator.serviceWorker.getRegistration())?.waiting);
+/** インストール中・待機中の版がなく、切り替えが終わっている */
+const settled = (page: Page) =>
+  page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return !reg?.installing && !reg?.waiting && reg?.active?.state === "activated";
+  });
 
-test("新しいバージョンが公開されると更新を案内し、押すと新しい版で読み込み直す", async ({ page, context }) => {
+/** サービスワーカーが有効になった状態で、課題の一覧を開いておく */
+async function openInstalledApp(page: Page) {
   const { ws } = await signupViaUi(page);
   await page.goto(`/${ws}/my-issues`);
   await precached(page);
   await page.reload();
   await waitForSynced(page);
+  return ws;
+}
+
+test("新しいバージョンが公開されると更新を案内し、押すと新しい版で読み込み直す", async ({ page, context }) => {
+  const ws = await openInstalledApp(page);
   // 同じアプリを別のタブでも開いておく
   const other = await context.newPage();
   await other.goto(`/${ws}/inbox`);
   await expect(other.getByTestId("app")).toBeVisible();
 
-  await publishNextVersion(page, { version: "next", dropCurrentCode: true });
+  await publishNextVersion(page, { version: "next", drop: "js" });
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
   // 押すまでは古い版のまま（勝手に読み込み直さない）
   await page.waitForTimeout(1000);
-  expect(await cacheNames(page)).toHaveLength(2);
+  expect(await hasWaiting(page)).toBe(true);
 
   const reloaded = page.waitForEvent("load");
   await notice.getByRole("button", { name: "更新" }).click();
   await reloaded;
   await expect(page.getByTestId("app")).toBeVisible();
-  await expect.poll(() => cacheNames(page)).toEqual(["sen-next"]);
+  expect(await hasWaiting(page)).toBe(false);
+  // 古いタブのために、1つ前の版も残しておく
+  expect(await cacheNames(page)).toHaveLength(2);
+  expect(await cacheNames(page)).toContain("sen-next");
 
   // 別のタブは古いコードのままなので、読み込み直しを案内する
   const switched = other.getByTestId("toast").filter({ hasText: "新しいバージョンに更新されました" });
@@ -192,14 +213,56 @@ test("新しいバージョンが公開されると更新を案内し、押す�
   await expect(other.getByTestId("app")).toBeVisible();
 });
 
-test("画面がすでに新しい版なら、案内を出さずに保存内容だけ入れ替える", async ({ page }) => {
-  const { ws } = await signupViaUi(page);
-  await page.goto(`/${ws}/my-issues`);
-  await precached(page);
-  await page.reload();
-  await waitForSynced(page);
+test("CSS だけが変わった版でも、更新を案内する", async ({ page }) => {
+  await openInstalledApp(page);
+  await publishNextVersion(page, { version: "css-only", drop: "css" });
+  await expect(page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" })).toBeVisible();
+});
 
-  await publishNextVersion(page, { version: "same-code", dropCurrentCode: false });
-  await expect.poll(() => cacheNames(page)).toEqual(["sen-same-code"]);
+test("画面がすでに新しい版なら、案内を出さずに保存内容だけ入れ替える", async ({ page }) => {
+  await openInstalledApp(page);
+  const [original] = await cacheNames(page);
+
+  await publishNextVersion(page, { version: "same-code" });
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-same-code"]);
+  await expect.poll(() => settled(page)).toBe(true);
+  // さらに次の版が来たら、いちばん古い版は消す
+  await publishNextVersion(page, { version: "same-code-2" });
+  await expect.poll(() => cacheNames(page)).toEqual(["sen-same-code", "sen-same-code-2"]);
   await expect(page.getByTestId("toast").filter({ hasText: "新しいバージョン" })).toHaveCount(0);
+});
+
+test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {
+  const ws = await openInstalledApp(page);
+  await page.goto(`/${ws}/projects`);
+  await page.getByTestId("project-row").first().click();
+  await expect(page.getByTestId("project-page")).toBeVisible();
+  await publishNextVersion(page, { version: "next", drop: "js" });
+  const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
+  await expect(notice).toBeVisible();
+
+  // 作成中の課題は読み込み直すと消えるので、確かめる。やめれば何も起きない
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("書きかけの課題");
+  await notice.getByRole("button", { name: "更新" }).click();
+  await expect(page.getByTestId("confirm-ok")).toBeVisible();
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("create-title")).toHaveValue("書きかけの課題");
+  expect(await hasWaiting(page)).toBe(true);
+  await page.getByTestId("create-title").fill("");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("create-title")).toBeHidden();
+
+  // プロジェクトの説明文は入力が止まってから保存される。保存の前に更新しても、保存してから切り替わる
+  const description = page.locator(".project-page .detail-description .ProseMirror");
+  await description.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("オフラインでも使える");
+  await page.getByTestId("workspace-menu").click();
+  const reloaded = page.waitForEvent("load");
+  await page.locator(".menu-item", { hasText: "新しいバージョンに更新" }).click();
+  await reloaded;
+  await expect(page.getByTestId("project-page")).toBeVisible();
+  await expect(description).toContainText("オフラインでも使える");
+  expect(await hasWaiting(page)).toBe(false);
 });

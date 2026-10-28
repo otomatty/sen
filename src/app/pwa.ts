@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { useData } from "../store/data";
 import { dismissToast, toast } from "../store/ui";
+import { confirmDialog } from "../components/ConfirmDialog";
+import { hasIssueDraft } from "../features/issues/CreateIssueModal";
+import { hasCommentDraft } from "../features/issues/CommentComposer";
 
 // PWA（インストールできるアプリ）としての振る舞い
 //  - サービスワーカーを登録し、新しい版が届いたら「更新」を案内する
@@ -54,37 +57,82 @@ export async function installApp() {
   usePWA.setState({ installPrompt: null });
 }
 
-// このファイルを含む JS のパス（/assets/index-xxxx.js）。新しい版にも同じファイルがあれば、画面のコードは最新
+// このファイルを含む JS のパス（/assets/index-xxxx.js）
 const ENTRY = new URL(import.meta.url).pathname;
 let waiting: ServiceWorker | null = null;
 let reloadOnChange = false;
+let updating = false;
 let updateToast: number | null = null;
+
+/** いま画面で使っている JS と CSS。新しい版にもすべてあれば、画面は最新 */
+function currentFiles() {
+  const css = [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')].map((l) => new URL(l.href).pathname);
+  return [ENTRY, ...css].filter((p) => p.startsWith("/assets/"));
+}
 
 /** サービスワーカーに、いま動いている画面のコードがその版に含まれるかを尋ねる */
 function hasCurrentCode(worker: ServiceWorker): Promise<boolean> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     channel.port1.onmessage = (e) => resolve(Boolean(e.data));
-    worker.postMessage({ type: "has", path: ENTRY }, [channel.port2]);
+    worker.postMessage({ type: "has", paths: currentFiles() }, [channel.port2]);
     setTimeout(() => resolve(false), 3000);
   });
 }
 
+/** 未送信の変更がなくなるまで待つ。オフラインのときや時間内に送れなかったときは false */
+function waitForSync(timeout: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const check = (s: ReturnType<typeof useData.getState>) => {
+      if (s.pendingCount === 0) return finish(true);
+      if (s.syncStatus === "offline") return finish(false);
+    };
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      off();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeout);
+    const off = useData.subscribe(check);
+    check(useData.getState());
+  });
+}
+
 /** 新しい版に切り替えて、画面を読み込み直す */
-export function applyUpdate() {
-  if (!waiting) return;
-  // 未送信の変更は読み込み直すと失われるので、送信が終わるのを待ってもらう
-  if (useData.getState().pendingCount > 0) {
-    toast("送信中の変更があります。同期が終わってから、もう一度お試しください", { kind: "error" });
-    return;
+export async function applyUpdate() {
+  const worker = waiting;
+  if (!worker || updating) return;
+  // 読み込み直すと消える書きかけの内容は、確かめてから捨てる
+  if (hasIssueDraft() || hasCommentDraft()) {
+    const ok = await confirmDialog({
+      title: "書きかけの内容があります",
+      message: "作成中の課題や書きかけのコメントは、更新すると失われます。更新しますか？",
+      confirmLabel: "更新する",
+      danger: true,
+    });
+    if (!ok) return;
   }
-  // 別のタブですでに切り替わっていれば、読み込み直すだけでよい
-  if (waiting.state === "activating" || waiting.state === "activated") {
-    window.location.reload();
-    return;
+  updating = true;
+  try {
+    // 入力中の欄を確定させ、入力が止まってから保存する欄（説明文は 700 ミリ秒後）の送信が始まるのを待つ
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    await new Promise((r) => setTimeout(r, 800));
+    // 未送信の変更は読み込み直すと失われるので、送信が終わってから切り替える
+    if (useData.getState().pendingCount > 0) toast("変更を送信してから更新します…");
+    if (!(await waitForSync(15_000))) {
+      toast("送信できていない変更があります。オンラインで同期が終わってから、もう一度お試しください", { kind: "error" });
+      return;
+    }
+    // 別のタブですでに切り替わっていれば、読み込み直すだけでよい
+    if (worker.state === "activating" || worker.state === "activated") {
+      window.location.reload();
+      return;
+    }
+    reloadOnChange = true;
+    worker.postMessage({ type: "skip-waiting" });
+  } finally {
+    updating = false;
   }
-  reloadOnChange = true;
-  waiting.postMessage({ type: "skip-waiting" });
 }
 
 function showToast(message: string, action: { label: string; run: () => void }) {

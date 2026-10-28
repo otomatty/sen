@@ -37,8 +37,10 @@ function serviceWorker(): Plugin {
       const statics = publicDir ? publicFiles(publicDir) : [];
       const assets = Object.keys(bundle).filter((f) => f.startsWith("assets/") && !f.endsWith(".map"));
       const urls = ["/", ...[...statics, ...assets].sort().map((f) => `/${f}`)];
-      // 版は中身から決める：ファイル名（ハッシュ入り）と public/ の中身が同じなら、版も変わらない
+      // 版は中身から決める：ファイル名（ハッシュ入り）・index.html・public/ の中身が同じなら、版も変わらない
       const hash = createHash("sha256").update(source).update(urls.join("\n"));
+      const html = bundle["index.html"];
+      if (html?.type === "asset") hash.update(html.source);
       for (const f of statics) hash.update(readFileSync(path.join(publicDir, f)));
       const version = hash.digest("hex").slice(0, 12);
       this.emitFile({
