@@ -445,11 +445,26 @@
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+/* 幅が足りないときはチーム名と「削除済み」を省略し、ID と操作ボタンは縮めない */
+.detail-topbar .crumb {
+  /* 縮んだときに文字が隣にはみ出して重ならないよう、収まらない分は隠す */
+  overflow: hidden;
+}
+.detail-topbar .crumb.current,
+.detail-topbar .crumb-sep {
+  flex-shrink: 0;
+}
+.detail-topbar .chip {
+  flex-shrink: 1;
+  min-width: 0;
+}
 .detail-nav {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-right: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .detail-layout {
   flex: 1;
@@ -1067,6 +1082,27 @@
 }
 
 @media (max-width: 900px) {
+  /* スマートフォンではチームはアイコンだけ、「何件目か」は隠して 1 行に収める */
+  .detail-topbar {
+    gap: 4px;
+    padding-left: 8px;
+    padding-right: 6px;
+  }
+  /* 「リンクをコピー」は「その他の操作」にもあるのでボタンを省く */
+  .detail-team-name,
+  .detail-nav > .muted,
+  .detail-copy-link {
+    display: none;
+  }
+  .detail-topbar .crumb {
+    flex-shrink: 0;
+  }
+  .detail-nav {
+    margin-right: 0;
+  }
+  .detail-topbar .help-video-btn {
+    padding: 0 6px;
+  }
   .detail-layout {
     flex-direction: column;
     overflow-y: auto;
@@ -1100,6 +1136,13 @@
   }
   .form-grid {
     grid-template-columns: 1fr;
+  }
+}
+/* 幅 320px 級の端末では、チームのアイコンも省いて操作ボタンと「削除済み」を残す */
+@media (max-width: 359px) {
+  .detail-topbar a.crumb,
+  .detail-topbar .crumb-sep {
+    display: none;
   }
 }
 .palette-hint {
