@@ -358,7 +358,11 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
         <span className="crumb current" data-testid="issue-identifier">
           {id}
         </span>
-        {issue.archivedAt && <span className="chip danger-chip">削除済み</span>}
+        {issue.archivedAt && (
+          <span className="chip danger-chip">
+            <span className="chip-text">削除済み</span>
+          </span>
+        )}
         <span className="spacer" />
         {!embedded && pos >= 0 && (
           <span className="detail-nav">
@@ -385,7 +389,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
         </Tooltip>
         <Tooltip label="リンクをコピー">
           <button
-            className="icon-btn"
+            className="icon-btn detail-copy-link"
             aria-label="リンクをコピー"
             onClick={() => copyText(url).then(() => toast(`${id} のリンクをコピーしました`))}
           >
