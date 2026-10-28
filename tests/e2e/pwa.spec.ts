@@ -262,6 +262,20 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => cacheNames(page)).toEqual(["sen-c", "sen-d"]);
 });
 
+test("以前の版に戻したあとも、直前まで使っていた版を残す", async ({ page }) => {
+  await openInstalledApp(page);
+  const [original] = await cacheNames(page);
+
+  // 元の版（a）→ b → a に戻す → c の順に切り替わる。c にしたとき残すのは、直前まで使っていた a
+  await publishNextVersion(page, { version: "b" });
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b"]);
+  await expect.poll(() => settled(page)).toBe(true);
+  await publishNextVersion(page, { version: original.replace(/^sen-/, "") });
+  await expect.poll(() => settled(page)).toBe(true);
+  await publishNextVersion(page, { version: "c" });
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-c"]);
+});
+
 test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {
   const ws = await openInstalledApp(page);
   await page.goto(`/${ws}/projects`);

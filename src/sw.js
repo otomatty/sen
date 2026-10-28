@@ -10,7 +10,7 @@ const CACHE = `sen-${VERSION}`;
 const PRECACHED = new Set(PRECACHE);
 // 画面を開くとき、通信がこれより遅ければ保存しておいた版で先に起動する
 const NAVIGATE_TIMEOUT = 3000;
-// 一度でも使われた（有効になった）版の印。インストールに失敗した版や、使われる前に置き換わった版には付かない
+// 版が最後に有効になった時刻の印。インストールに失敗した版や、使われる前に置き換わった版には付かない
 const ACTIVATED = "/__sen-activated";
 
 self.addEventListener("install", (event) => {
@@ -26,12 +26,16 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      await (await caches.open(CACHE)).put(ACTIVATED, new Response(""));
-      // 1つ前に使われていた版は残す：別のタブで古い画面が開いたままでも、その版の遅れて読み込むファイルを使えるように
+      await (await caches.open(CACHE)).put(ACTIVATED, new Response(String(Date.now())));
+      // 直前まで使われていた版は残す：別のタブで古い画面が開いたままでも、その版の遅れて読み込むファイルを使えるように
+      // （以前の版に戻したときも正しく選べるよう、作った順ではなく最後に有効になった時刻で選ぶ）
       const old = (await caches.keys()).filter((k) => k.startsWith("sen-") && k !== CACHE);
-      const used = [];
-      for (const k of old) if (await (await caches.open(k)).match(ACTIVATED)) used.push(k);
-      const keep = used.at(-1);
+      let keep = null;
+      let latest = 0;
+      for (const k of old) {
+        const at = Number(await (await (await caches.open(k)).match(ACTIVATED))?.text()) || 0;
+        if (at > latest) [keep, latest] = [k, at];
+      }
       await Promise.all(old.filter((k) => k !== keep).map((k) => caches.delete(k)));
       await self.clients.claim();
     })(),
