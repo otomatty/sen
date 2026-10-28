@@ -139,10 +139,14 @@ test.afterEach(() => {
   originalSw = null;
 });
 
-/** 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする */
-async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css" }) {
+/**
+ * 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする。
+ * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする
+ */
+async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean }) {
   originalSw ??= readFileSync(SW_FILE, "utf8");
-  let source = readFileSync(SW_FILE, "utf8").replace(/const VERSION = "[\w-]+";/, `const VERSION = "${opts.version}";`);
+  let source = originalSw.replace(/const VERSION = "\w+";/, `const VERSION = "${opts.version}";`);
+  if (opts.broken) source = source.replace("const PRECACHE = [", 'const PRECACHE = [\n  "/api/__missing",');
   if (opts.drop) {
     const file = await page.evaluate((drop) => {
       const el = document.querySelector<HTMLScriptElement & HTMLLinkElement>(drop === "js" ? "script[type=module][src]" : 'link[rel="stylesheet"]')!;
@@ -157,7 +161,9 @@ async function publishNextVersion(page: Page, opts: { version: string; drop?: "j
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Network.clearBrowserCache");
   await page.evaluate(async () => {
-    await (await navigator.serviceWorker.getRegistration())!.update();
+    await (await navigator.serviceWorker.getRegistration())!.update().catch(() => {
+      // インストールに失敗する版では、ここで失敗することがある
+    });
   });
 }
 
@@ -230,6 +236,30 @@ test("画面がすでに新しい版なら、案内を出さずに保存内容�
   await publishNextVersion(page, { version: "same-code-2" });
   await expect.poll(() => cacheNames(page)).toEqual(["sen-same-code", "sen-same-code-2"]);
   await expect(page.getByTestId("toast").filter({ hasText: "新しいバージョン" })).toHaveCount(0);
+});
+
+test("インストールに失敗した版や使われずに置き換わった版ではなく、1つ前に使っていた版を残す", async ({ page }) => {
+  await openInstalledApp(page);
+  const [original] = await cacheNames(page);
+
+  // 待機中の版（b）が、使われる前にさらに新しい版（c）に置き換わり、c に更新する
+  await publishNextVersion(page, { version: "b", drop: "js" });
+  await expect.poll(() => hasWaiting(page)).toBe(true);
+  await publishNextVersion(page, { version: "c", drop: "js" });
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
+  const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
+  await expect(notice).toBeVisible();
+  const reloaded = page.waitForEvent("load");
+  await notice.getByRole("button", { name: "更新" }).click();
+  await reloaded;
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-c"]);
+
+  // インストールに失敗した版（broken）を挟んでから、次の版（d）に切り替わる
+  await publishNextVersion(page, { version: "broken", broken: true });
+  await expect.poll(() => cacheNames(page)).toContain("sen-broken");
+  await expect.poll(() => settled(page)).toBe(true);
+  await publishNextVersion(page, { version: "d" });
+  await expect.poll(() => cacheNames(page)).toEqual(["sen-c", "sen-d"]);
 });
 
 test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {

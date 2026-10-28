@@ -10,6 +10,8 @@ const CACHE = `sen-${VERSION}`;
 const PRECACHED = new Set(PRECACHE);
 // 画面を開くとき、通信がこれより遅ければ保存しておいた版で先に起動する
 const NAVIGATE_TIMEOUT = 3000;
+// 一度でも使われた（有効になった）版の印。インストールに失敗した版や、使われる前に置き換わった版には付かない
+const ACTIVATED = "/__sen-activated";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -24,9 +26,13 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      // 1つ前の版は残す：別のタブで古い画面が開いたままでも、その版の遅れて読み込むファイルを使えるように
+      await (await caches.open(CACHE)).put(ACTIVATED, new Response(""));
+      // 1つ前に使われていた版は残す：別のタブで古い画面が開いたままでも、その版の遅れて読み込むファイルを使えるように
       const old = (await caches.keys()).filter((k) => k.startsWith("sen-") && k !== CACHE);
-      await Promise.all(old.slice(0, -1).map((k) => caches.delete(k)));
+      const used = [];
+      for (const k of old) if (await (await caches.open(k)).match(ACTIVATED)) used.push(k);
+      const keep = used.at(-1);
+      await Promise.all(old.filter((k) => k !== keep).map((k) => caches.delete(k)));
       await self.clients.claim();
     })(),
   );
