@@ -333,7 +333,7 @@ export function AiSettings() {
               </div>
             </Field>
             <Field label="有効期限">
-              <select data-testid="ai-expiry" value={expiry} onChange={(e) => setExpiry(e.target.value as ExpiryChoice)}>
+              <select data-testid="ai-expiry" aria-label="有効期限" value={expiry} onChange={(e) => setExpiry(e.target.value as ExpiryChoice)}>
                 <option value="30">30日</option>
                 <option value="90">90日</option>
                 <option value="365">1年</option>
@@ -344,6 +344,7 @@ export function AiSettings() {
               <input
                 className="input"
                 data-testid="ai-token-name"
+                aria-label="名前"
                 maxLength={40}
                 placeholder="例：仕事用の MacBook"
                 value={name}

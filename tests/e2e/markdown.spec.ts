@@ -59,6 +59,13 @@ test("HTML から Markdown へおおむね戻る", () => {
   expect(back).toContain("[Sen](https://example.com)");
 });
 
+test("相対リンクとページ内リンクは往復してもリンクのまま残る", () => {
+  const docs = markdownToHtml(htmlToMarkdown('<a href="/docs">/docs</a>'));
+  expect(docs).toContain('<a href="/docs">/docs</a>');
+  const goal = markdownToHtml(htmlToMarkdown('<a href="#goal">目的</a>'));
+  expect(goal).toContain('<a href="#goal">目的</a>');
+});
+
 test("Tiptap の HTML を Markdown にでき、壊れた HTML でも例外にならない", () => {
   const tiptap =
     '<p>a<br>b</p><ul data-type="taskList"><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"><span></span></label><div><p>済み</p></div></li></ul>';

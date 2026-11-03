@@ -3,7 +3,7 @@
 import { PRIORITY_ORDER } from "../../shared/constants";
 import { fuzzyMatch } from "../../shared/text";
 import type { ApiTokenScope, IssuePatch, Mutation } from "../../shared/types";
-import { applyMutation, htmlToText, type MutationCtx } from "../mutations";
+import { applyMutation, htmlToText, MutationError, type MutationCtx } from "../mutations";
 import { htmlToMarkdown, markdownToHtml } from "../markdown";
 import {
   cycleLabel,
@@ -117,6 +117,12 @@ function markdownHtml(v: unknown, label: string): string {
 async function mutate(ctx: ToolContext, m: Mutation): Promise<void> {
   ctx.mutation.now = Date.now();
   await applyMutation(ctx.mutation, m);
+}
+
+function failureCause(e: unknown): string {
+  if (e instanceof ToolError || e instanceof MutationError) return e.message;
+  console.error(e);
+  return "サーバーでエラーが発生しました";
 }
 
 function labelChange(resolver: Resolver, added: string[], removed: string[]): string {
@@ -617,6 +623,14 @@ function flattenPlans(plans: Plan[]): Plan[] {
   return out;
 }
 
+async function createdIdents(ctx: ToolContext, plans: Plan[]): Promise<string[]> {
+  const numbers = await ctx.resolver.issueNumbers(plans.map((p) => p.uuid));
+  return plans.map((plan) => {
+    const number = numbers.get(plan.uuid);
+    return number == null ? `${plan.teamKey}-?` : ctx.resolver.ident({ team_id: plan.teamId, number });
+  });
+}
+
 function countCreate(issues: unknown[]): number {
   let n = 0;
   for (const item of issues) {
@@ -662,8 +676,19 @@ async function createIssues(ctx: ToolContext, args: unknown): Promise<unknown> {
       plan.args.sortOrder = start + i;
     });
   }
-  for (const plan of flat) {
-    await mutate(ctx, { type: "issue.create", args: plan.args });
+  const saved: Plan[] = [];
+  try {
+    for (const plan of flat) {
+      await mutate(ctx, { type: "issue.create", args: plan.args });
+      saved.push(plan);
+    }
+  } catch (e) {
+    if (!saved.length) throw e;
+    const cause = failureCause(e);
+    const idents = await createdIdents(ctx, saved);
+    throw new ToolError(
+      `${idents.length}件を作成したあとで失敗しました（作成済み：${idents.join("、")}）。同じ内容で再試行すると重複します。原因：${cause}`,
+    );
   }
   const numbers = await ctx.resolver.issueNumbers(flat.map((p) => p.uuid));
   const created = plans.map((plan) => createdNode(ctx.resolver, plan, numbers));
@@ -710,6 +735,7 @@ const UPDATE_KEYS = [
 interface UpdatePlan {
   row: IssueRow;
   ident: string;
+  index: number;
   patch: IssuePatch;
   changes: string[];
 }
@@ -946,12 +972,75 @@ async function planUpdate(resolver: Resolver, raw: unknown, index: number, error
 
   if (failed) return null;
   if (!Object.keys(patch).length) return "unchanged";
-  return { row, ident, patch, changes };
+  return { row, ident, index, patch, changes };
 }
 
 function cycleName(resolver: Resolver, id: string): string {
   const cycle = resolver.snap.cycleById.get(id);
   return cycle ? cycleLabel(cycle) : "なし";
+}
+
+function cycleError(plan: UpdatePlan, chain: string[]): string {
+  return `${plan.index + 1}件目の課題「${plan.ident}」の親課題：この更新では親子関係が循環します（${chain.join(" → ")}）`;
+}
+
+/**
+ * 1件ずつの検証は今の DB だけを見るので、互いを親にする更新は両方通る。
+ * 書き込む前に、このバッチを全部適用したあとの親子で循環を探す。
+ */
+async function collectParentCycles(resolver: Resolver, plans: UpdatePlan[], errors: string[]): Promise<void> {
+  const nextParent = new Map<string, string | null>();
+  const identById = new Map<string, string>();
+  const knownParent = new Map<string, string | null>();
+  for (const plan of plans) {
+    identById.set(plan.row.id, plan.ident);
+    knownParent.set(plan.row.id, plan.row.parent_id);
+    if (plan.patch.parentId !== undefined) nextParent.set(plan.row.id, plan.patch.parentId);
+  }
+  const loaded = new Map<string, string | null>();
+
+  const identOf = async (id: string): Promise<string> => {
+    const known = identById.get(id);
+    if (known) return known;
+    const row = await resolver.issueById(id);
+    const ident = row ? resolver.ident(row) : id;
+    identById.set(id, ident);
+    if (!loaded.has(id)) loaded.set(id, row?.parent_id ?? null);
+    return ident;
+  };
+
+  const parentOf = async (id: string): Promise<string | null> => {
+    if (nextParent.has(id)) return nextParent.get(id) ?? null;
+    if (knownParent.has(id)) return knownParent.get(id) ?? null;
+    if (loaded.has(id)) return loaded.get(id) ?? null;
+    await identOf(id);
+    return loaded.get(id) ?? null;
+  };
+
+  for (const plan of plans) {
+    if (typeof plan.patch.parentId !== "string") continue;
+    const chain = [plan.ident];
+    let cur: string | null = plan.patch.parentId;
+    for (let i = 0; cur && i < 50; i++) {
+      chain.push(await identOf(cur));
+      const up = await parentOf(cur);
+      if (cur === plan.row.id || up === plan.row.id) {
+        if (up === plan.row.id && cur !== plan.row.id) chain.push(plan.ident);
+        errors.push(cycleError(plan, chain));
+        break;
+      }
+      cur = up;
+    }
+  }
+}
+
+async function updatedIdents(ctx: ToolContext, plans: UpdatePlan[]): Promise<string[]> {
+  const idents: string[] = [];
+  for (const plan of plans) {
+    const after = await ctx.resolver.issueById(plan.row.id);
+    idents.push(after ? ctx.resolver.ident(after) : plan.ident);
+  }
+  return idents;
 }
 
 async function updateIssues(ctx: ToolContext, args: unknown): Promise<unknown> {
@@ -978,11 +1067,24 @@ async function updateIssues(ctx: ToolContext, args: unknown): Promise<unknown> {
       }
     } else if (plan) plans.push(plan);
   }
+  await collectParentCycles(ctx.resolver, plans, errors);
   if (errors.length) throw new ToolError(errors.join("\n"));
+
+  const saved: UpdatePlan[] = [];
+  try {
+    for (const plan of plans) {
+      await mutate(ctx, { type: "issue.update", args: { id: plan.row.id, patch: plan.patch } });
+      saved.push(plan);
+    }
+  } catch (e) {
+    if (!saved.length) throw e;
+    const cause = failureCause(e);
+    const idents = await updatedIdents(ctx, saved);
+    throw new ToolError(`${idents.length}件を更新したあとで失敗しました（更新済み：${idents.join("、")}）。原因：${cause}`);
+  }
 
   const updated = [];
   for (const plan of plans) {
-    await mutate(ctx, { type: "issue.update", args: { id: plan.row.id, patch: plan.patch } });
     const after = await ctx.resolver.issueById(plan.row.id);
     const ident = after ? ctx.resolver.ident(after) : plan.ident;
     const item: Record<string, unknown> = {

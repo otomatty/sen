@@ -245,6 +245,42 @@ test("名前を間違えると、候補つきのエラーになり何も作ら�
   }
 });
 
+test("互いを親にする更新は循環として拒否され、何も変わらない", async ({ page }) => {
+  const baseURL = test.info().project.use.baseURL!;
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+  const { secret } = await issueToken(page, ws, { client: "claude-code", scope: "write", expiresInDays: 30 });
+  const client = await connectMcp(baseURL, secret);
+  try {
+    const created = await callJson<{ created: { id: string }[] }>(client, "create_issues", {
+      issues: [
+        { team: "ENG", title: "循環の確認 A" },
+        { team: "ENG", title: "循環の確認 B" },
+      ],
+    });
+    const [a, b] = created.created;
+    const error = await callError(client, "update_issues", {
+      updates: [
+        { issue: a.id, parent: b.id },
+        { issue: b.id, parent: a.id },
+      ],
+    });
+    expect(error).toContain("循環");
+    const detailA = await callJson<{ parent?: string }>(client, "get_issue", { issue: a.id });
+    const detailB = await callJson<{ parent?: string }>(client, "get_issue", { issue: b.id });
+    expect(detailA.parent).toBeUndefined();
+    expect(detailB.parent).toBeUndefined();
+
+    await callJson(client, "update_issues", { updates: [{ issue: a.id, parent: b.id }] });
+    const linked = await callJson<{ parent?: string }>(client, "get_issue", { issue: a.id });
+    expect(linked.parent).toBe(b.id);
+    const other = await callJson<{ parent?: string }>(client, "get_issue", { issue: b.id });
+    expect(other.parent).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});
+
 test("閲覧のみのトークンでは書き込めない", async ({ page }) => {
   const baseURL = test.info().project.use.baseURL!;
   const { ws } = await signupViaUi(page);

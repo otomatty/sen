@@ -12,10 +12,10 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** リンクにしてよいスキームだけを通す（javascript: などはテキストにする） */
+/** リンクにしてよい href だけを通す（javascript: などはテキストにする）。画面の sanitize と同じく / と # も許可する */
 function isSafeHref(href: string): boolean {
   if (!href || /[\u0000-\u0020]/.test(href)) return false;
-  return /^(https?:|mailto:)/i.test(href);
+  return /^(https?:|mailto:|\/|#)/i.test(href);
 }
 
 /** タスク項目の中身を、Tiptap と同じくブロック（最低でも p）にする */
@@ -524,7 +524,8 @@ function renderElement(el: El): string {
       const text = renderInline(el.children).trim();
       const plain = rawText(el).replace(/\s+/g, " ").trim();
       if (!href) return text;
-      if (plain === href || text === href) return `<${href}>`;
+      // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
+      if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return `<${href}>`;
       return `[${text}](${href})`;
     }
     case "hr":

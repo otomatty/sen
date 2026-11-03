@@ -116,9 +116,10 @@ export async function createToken(
   const name = cleanTokenName(req?.name, client);
   const count = await first<{ c: number }>(
     db,
-    "SELECT COUNT(*) AS c FROM api_tokens WHERE workspace_id = ? AND user_id = ?",
+    "SELECT COUNT(*) AS c FROM api_tokens WHERE workspace_id = ? AND user_id = ? AND (expires_at IS NULL OR expires_at > ?)",
     workspaceId,
     userId,
+    now,
   );
   if ((count?.c ?? 0) >= MAX_TOKENS_PER_USER) {
     throw new MutationError("トークンは20個まで発行できます。使っていないトークンを無効にしてください");

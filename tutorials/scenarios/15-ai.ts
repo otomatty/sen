@@ -49,7 +49,7 @@ export default defineScenario({
         return false;
       }
     }, { timeout: 20_000 });
-    const issueId = await t.page.evaluate(async () => {
+    const createdIssue = await t.page.evaluate(async () => {
       const command = document.querySelector("[data-testid=ai-issued] code")?.textContent ?? "";
       const token = command.match(/sen_[A-Za-z0-9_-]{43}/)?.[0] ?? "";
       if (token.length !== 47) throw new Error("表示されたコマンドからトークンを読み取れませんでした");
@@ -93,9 +93,10 @@ export default defineScenario({
       const created = (JSON.parse(text) as { created?: { id?: string }[] }).created?.[0]?.id;
       if (!created) throw new Error("課題の ID を受け取れませんでした");
       window.dispatchEvent(new Event("focus"));
-      return created;
+      return { issueId: created, token };
     });
     await synced;
+    const { issueId, token } = createdIssue;
 
     await t.caption("使わなくなったトークンは、ここから無効にできます");
     await t.click("[data-testid=ai-issued-done]", { pause: 700 });
@@ -104,6 +105,32 @@ export default defineScenario({
     await t.expect("[data-testid=ai-token-row]", { text: "Claude Code" });
     await t.page.locator("[data-testid=ai-token-row]").first().scrollIntoViewIfNeeded();
     await t.highlight("[data-testid=ai-token-row]", 1600);
+    const hint = `sen_…${token.slice(-4)}`;
+    await t.click(t.page.locator("[data-testid=ai-token-row]", { hasText: hint }).getByTestId("ai-token-revoke"));
+    await t.click("[data-testid=confirm-ok]");
+    await t.expect(t.page.locator("[data-testid=ai-token-row]", { hasText: hint }), { count: 0 });
+    await t.expect("[data-testid=toast]", { text: "トークンを無効にしました" });
+    await t.page.evaluate(async (secret: string) => {
+      const res = await fetch("/api/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: "Bearer " + secret,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "tutorial", version: "1.0.0" },
+          },
+        }),
+      });
+      if (res.status !== 401) throw new Error(`無効にしたトークンが拒否されませんでした（${res.status}）`);
+    }, token);
 
     await t.goto(`/issue/${issueId}`);
     await t.expect(`[data-testid=issue-detail][data-identifier="${issueId}"]`, { timeout: 15_000 });
