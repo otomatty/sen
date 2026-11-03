@@ -66,6 +66,29 @@ test("相対リンクとページ内リンクは往復してもリンクのま�
   expect(goal).toContain('<a href="#goal">目的</a>');
 });
 
+test("詰まったリストのインラインは 1 行のまま往復する", () => {
+  const md = "- Run `bun test` before deploying\n- **重要** な [リンク](https://e.com) です";
+  expect(htmlToMarkdown(markdownToHtml(md))).toBe(md);
+  expect(htmlToMarkdown(markdownToHtml("- **a** *b*"))).toBe("- **a** *b*");
+  expect(htmlToMarkdown("<p>a <strong>b</strong> c</p>")).toBe("a **b** c");
+});
+
+test("リンク先の文字参照は一度だけエスケープする", () => {
+  expect(markdownToHtml("[検索](/search?a=1&amp;b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">検索</a></p>');
+  expect(markdownToHtml("[検索](/search?a=1&b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">検索</a></p>');
+  expect(markdownToHtml("![図](/search?a=1&amp;b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">図</a></p>');
+});
+
+test("括弧を含むリンク先は往復しても切れない", () => {
+  expect(htmlToMarkdown('<a href="/docs/a)">資料</a>')).toBe("[資料](</docs/a)>)");
+  expect(markdownToHtml(htmlToMarkdown('<a href="/docs/a)">資料</a>'))).toBe('<p><a href="/docs/a)">資料</a></p>');
+  expect(htmlToMarkdown('<a href="https://example.com/wiki/Foo_(bar)">Foo</a>')).toBe("[Foo](<https://example.com/wiki/Foo_(bar)>)");
+  expect(markdownToHtml(htmlToMarkdown('<a href="https://example.com/wiki/Foo_(bar)">Foo</a>'))).toBe(
+    '<p><a href="https://example.com/wiki/Foo_(bar)">Foo</a></p>',
+  );
+  expect(htmlToMarkdown('<a href="/docs/a<b>">x</a>')).toBe("[x](</docs/a%3Cb%3E>)");
+});
+
 test("Tiptap の HTML を Markdown にでき、壊れた HTML でも例外にならない", () => {
   const tiptap =
     '<p>a<br>b</p><ul data-type="taskList"><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"><span></span></label><div><p>済み</p></div></li></ul>';

@@ -958,7 +958,8 @@ async function planUpdate(resolver: Resolver, raw: unknown, index: number, error
       } else {
         const parent = await resolver.resolveIssue(raw.parent);
         if (parent.archived_at != null) throw new ToolError(`${resolver.ident(parent)} は削除されています`);
-        await resolver.assertCanParent(parent.id, row.id);
+        // 循環は見ない。今の DB で見ると、付け替えの途中状態を循環と誤る。バッチ適用後は collectParentCycles が見る。
+        if (parent.id === row.id) throw new ToolError("自分自身を親課題にはできません");
         if (parent.id !== row.parent_id) {
           patch.parentId = parent.id;
           const oldName = row.parent_id ? (await resolver.parentIdent(row.parent_id)) ?? "なし" : "なし";
@@ -985,7 +986,7 @@ function cycleError(plan: UpdatePlan, chain: string[]): string {
 }
 
 /**
- * 1件ずつの検証は今の DB だけを見るので、互いを親にする更新は両方通る。
+ * 1件ずつの検証は循環を見ないので、互いを親にする更新も両方計画に残る。
  * 書き込む前に、このバッチを全部適用したあとの親子で循環を探す。
  */
 async function collectParentCycles(resolver: Resolver, plans: UpdatePlan[], errors: string[]): Promise<void> {
@@ -1034,6 +1035,56 @@ async function collectParentCycles(resolver: Resolver, plans: UpdatePlan[], erro
   }
 }
 
+/**
+ * assertParent は書き込み時点の DB を見る。親を外してから付け替える更新は、
+ * その順で書かないと途中で循環になる。親を変えない更新はどの順でもよい。
+ * 親を変える更新は、ここまでの書き込みを反映した親子で、新しい親の祖先に自分がいないものから適用する。
+ */
+async function orderUpdates(resolver: Resolver, plans: UpdatePlan[]): Promise<UpdatePlan[]> {
+  const parentOfId = new Map<string, string | null>();
+  for (const plan of plans) parentOfId.set(plan.row.id, plan.row.parent_id);
+  const loaded = new Map<string, string | null>();
+
+  const parentOf = async (id: string): Promise<string | null> => {
+    if (parentOfId.has(id)) return parentOfId.get(id) ?? null;
+    if (loaded.has(id)) return loaded.get(id) ?? null;
+    const row = await resolver.issueById(id);
+    const parent = row?.parent_id ?? null;
+    loaded.set(id, parent);
+    return parent;
+  };
+
+  const reparentBlocked = async (plan: UpdatePlan): Promise<boolean> => {
+    const next = plan.patch.parentId;
+    if (typeof next !== "string") return false;
+    let cur: string | null = next;
+    for (let i = 0; cur && i < 50; i++) {
+      const up = await parentOf(cur);
+      if (up === plan.row.id) return true;
+      cur = up;
+    }
+    return false;
+  };
+
+  const remaining = [...plans];
+  const ordered: UpdatePlan[] = [];
+  while (remaining.length) {
+    let nextPlan: UpdatePlan | undefined;
+    for (let i = 0; i < remaining.length; i++) {
+      const plan = remaining[i];
+      if (plan.patch.parentId === undefined || !(await reparentBlocked(plan))) {
+        nextPlan = plan;
+        remaining.splice(i, 1);
+        break;
+      }
+    }
+    if (!nextPlan) throw new ToolError("親子関係を変更する順番を決められませんでした。数回に分けて更新してください");
+    ordered.push(nextPlan);
+    if (nextPlan.patch.parentId !== undefined) parentOfId.set(nextPlan.row.id, nextPlan.patch.parentId);
+  }
+  return ordered;
+}
+
 async function updatedIdents(ctx: ToolContext, plans: UpdatePlan[]): Promise<string[]> {
   const idents: string[] = [];
   for (const plan of plans) {
@@ -1070,9 +1121,10 @@ async function updateIssues(ctx: ToolContext, args: unknown): Promise<unknown> {
   await collectParentCycles(ctx.resolver, plans, errors);
   if (errors.length) throw new ToolError(errors.join("\n"));
 
+  const applyOrder = await orderUpdates(ctx.resolver, plans);
   const saved: UpdatePlan[] = [];
   try {
-    for (const plan of plans) {
+    for (const plan of applyOrder) {
       await mutate(ctx, { type: "issue.update", args: { id: plan.row.id, patch: plan.patch } });
       saved.push(plan);
     }

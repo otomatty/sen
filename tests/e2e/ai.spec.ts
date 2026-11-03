@@ -281,6 +281,51 @@ test("互いを親にする更新は循環として拒否され、何も変わ�
   }
 });
 
+test("親子を入れ替える更新は、順番にかかわらず成功する", async ({ page }) => {
+  const baseURL = test.info().project.use.baseURL!;
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+  const { secret } = await issueToken(page, ws, { client: "claude-code", scope: "write", expiresInDays: 30 });
+  const client = await connectMcp(baseURL, secret);
+  try {
+    const created = await callJson<{ created: { id: string }[] }>(client, "create_issues", {
+      issues: [
+        { team: "ENG", title: "入れ替え A" },
+        { team: "ENG", title: "入れ替え B" },
+        { team: "ENG", title: "逆順 A" },
+        { team: "ENG", title: "逆順 B" },
+      ],
+    });
+    const [a, b, revA, revB] = created.created;
+
+    await callJson(client, "update_issues", { updates: [{ issue: a.id, parent: b.id }] });
+    await callJson(client, "update_issues", {
+      updates: [
+        { issue: a.id, parent: null },
+        { issue: b.id, parent: a.id },
+      ],
+    });
+    const detailA = await callJson<{ parent?: string }>(client, "get_issue", { issue: a.id });
+    const detailB = await callJson<{ parent?: string }>(client, "get_issue", { issue: b.id });
+    expect(detailB.parent).toBe(a.id);
+    expect(detailA.parent).toBeUndefined();
+
+    await callJson(client, "update_issues", { updates: [{ issue: revA.id, parent: revB.id }] });
+    await callJson(client, "update_issues", {
+      updates: [
+        { issue: revB.id, parent: revA.id },
+        { issue: revA.id, parent: null },
+      ],
+    });
+    const detailRevA = await callJson<{ parent?: string }>(client, "get_issue", { issue: revA.id });
+    const detailRevB = await callJson<{ parent?: string }>(client, "get_issue", { issue: revB.id });
+    expect(detailRevB.parent).toBe(revA.id);
+    expect(detailRevA.parent).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});
+
 test("閲覧のみのトークンでは書き込めない", async ({ page }) => {
   const baseURL = test.info().project.use.baseURL!;
   const { ws } = await signupViaUi(page);

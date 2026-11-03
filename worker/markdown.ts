@@ -58,13 +58,16 @@ const marked = new Marked({
     },
     link(token) {
       const text = token.autolink ? escapeHtml(token.text) : this.parser.parseInline(token.tokens);
-      if (!isSafeHref(token.href)) return text;
-      return `<a href="${escapeHtml(token.href)}">${text}</a>`;
+      // marked は href に &amp; などの文字参照を残す。戻してから安全性を見て、属性値では一度だけエスケープする
+      const href = decodeEntities(token.href);
+      if (!isSafeHref(href)) return text;
+      return `<a href="${escapeHtml(href)}">${text}</a>`;
     },
     image(token) {
-      const label = token.text.trim() ? token.text.trim() : token.href;
-      if (!isSafeHref(token.href)) return escapeHtml(label);
-      return `<a href="${escapeHtml(token.href)}">${escapeHtml(label)}</a>`;
+      const href = decodeEntities(token.href);
+      const label = token.text.trim() ? token.text.trim() : href;
+      if (!isSafeHref(href)) return escapeHtml(label);
+      return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
     },
     table(token) {
       return `<pre><code>${escapeHtml(token.raw.replace(/\n$/, ""))}</code></pre>\n`;
@@ -382,18 +385,34 @@ function hasBlock(nodes: Node[]): boolean {
   return nodes.some((n) => n.type === "el" && (BLOCK_TAGS.has(n.tag) || hasBlock(n.children)));
 }
 
+/**
+ * 隣り合うテキストとインライン要素は 1 つの段落にする。
+ * marked は詰まったリスト項目を p で包まないので、分けて描くと往復で割れる。
+ * 空白だけのテキストは、まとまりの前後では捨て、語の間では残す。
+ */
 function collect(nodes: Node[]): Block[] {
   const parts: Block[] = [];
+  let inline: Node[] = [];
+
+  const flushInline = () => {
+    if (!inline.length) return;
+    const text = protectLines(renderInline(inline).trim());
+    inline = [];
+    if (!text) return;
+    parts.push({ text, kind: "other" });
+  };
+
   for (const n of nodes) {
-    if (n.type === "text") {
-      if (!n.text.trim()) continue;
-      parts.push({ text: protectLines(escapeInline(n.text.trim())), kind: "other" });
+    if (n.type === "text" || !BLOCK_TAGS.has(n.tag)) {
+      inline.push(n);
       continue;
     }
+    flushInline();
     const text = renderElement(n).replace(/\n+$/, "");
     if (!text.trim() && n.tag !== "hr") continue;
     parts.push({ text, kind: n.tag === "ul" || n.tag === "ol" ? "list" : "other" });
   }
+  flushInline();
   return parts;
 }
 
@@ -422,11 +441,7 @@ function taskChecked(li: El): boolean {
 }
 
 function listItemNodes(li: El): Node[] {
-  const nodes = li.children.filter((n) => {
-    if (n.type === "text" && !n.text.trim()) return false;
-    if (n.type === "el" && n.tag === "input") return false;
-    return true;
-  });
+  const nodes = li.children.filter((n) => !(n.type === "el" && n.tag === "input"));
   if (nodes.length === 1 && nodes[0].type === "el" && nodes[0].tag === "div") return nodes[0].children;
   return nodes;
 }
@@ -465,6 +480,12 @@ function renderList(el: El): string {
     lines.push(applyMarker(renderBlocks(listItemNodes(child)).trim(), marker));
   }
   return lines.join("\n");
+}
+
+/** `( )` 空白 `<` `>` を含むリンク先は `<href>` で囲む。中の `<` `>` は先にパーセントにする */
+function linkDestination(href: string): string {
+  if (!/[()\s<>]/.test(href)) return href;
+  return `<${href.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
 }
 
 function renderElement(el: El): string {
@@ -526,7 +547,7 @@ function renderElement(el: El): string {
       if (!href) return text;
       // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
       if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return `<${href}>`;
-      return `[${text}](${href})`;
+      return `[${text}](${linkDestination(href)})`;
     }
     case "hr":
       return "---";
