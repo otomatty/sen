@@ -133,6 +133,7 @@ export const toComment = (r: Row): Comment => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   editedAt: r.edited_at,
+  via: r.via ?? null,
 });
 
 export const toActivity = (r: Row): Activity => ({
@@ -142,6 +143,7 @@ export const toActivity = (r: Row): Activity => ({
   type: r.type,
   data: json<Record<string, unknown>>(r.data, {}),
   createdAt: r.created_at,
+  via: r.via ?? null,
 });
 
 export const toNotification = (r: Row): AppNotification => ({
@@ -154,4 +156,5 @@ export const toNotification = (r: Row): AppNotification => ({
   readAt: r.read_at,
   archivedAt: r.archived_at,
   snoozedUntil: r.snoozed_until,
+  via: r.via ?? null,
 });

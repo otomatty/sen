@@ -32,28 +32,8 @@ import { api } from "../../lib/api";
 import { confirmDialog } from "../../components/ConfirmDialog";
 import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
 import type { Me } from "../../../shared/types";
-
-function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
-  return (
-    <section className="settings-section">
-      <h2>{title}</h2>
-      {description && <p className="muted">{description}</p>}
-      <div className="settings-card">{children}</div>
-    </section>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="field">
-      <div className="field-label">
-        <span>{label}</span>
-        {hint && <span className="muted small">{hint}</span>}
-      </div>
-      <div className="field-control">{children}</div>
-    </div>
-  );
-}
+import { AiSettings } from "./AiSettings";
+import { Field, Section } from "./parts";
 
 function ColorPicker({ value, onChange, colors = PALETTE }: { value: string; onChange: (c: string) => void; colors?: string[] }) {
   return (
@@ -577,8 +557,12 @@ export function SettingsPage() {
   const p = useWsPath();
   const teams = useTeams();
   useDocumentTitle("設定");
+  const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
+  const accountItems = isDemo
+    ? ([["profile", "プロフィールと表示"]] as const)
+    : ([["profile", "プロフィールと表示"], ["ai", "AI 連携"]] as const);
   const nav = [
-    ["account", "アカウント", [["profile", "プロフィールと表示"]]],
+    ["account", "アカウント", accountItems],
     [
       "workspace",
       "ワークスペース",
@@ -618,6 +602,7 @@ export function SettingsPage() {
         </nav>
         <div className="settings-content">
           {section === "profile" && <ProfileSettings />}
+          {section === "ai" && !isDemo && <AiSettings />}
           {section === "workspace" && <WorkspaceSettings />}
           {section === "members" && <MembersSettings />}
           {section === "labels" && <LabelsSettings />}

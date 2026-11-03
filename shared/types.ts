@@ -143,6 +143,8 @@ export interface Comment {
   createdAt: number;
   updatedAt: number;
   editedAt: number | null;
+  /** AI ツールから行った操作のとき、そのツールの名前（例: "Claude Code"） */
+  via?: string | null;
 }
 
 export type ActivityType =
@@ -169,6 +171,8 @@ export interface Activity {
   type: ActivityType;
   data: Record<string, unknown>;
   createdAt: number;
+  /** AI ツールから行った操作のとき、そのツールの名前（例: "Claude Code"） */
+  via?: string | null;
 }
 
 export type NotificationType = "assigned" | "comment" | "mention" | "state" | "created";
@@ -183,6 +187,8 @@ export interface AppNotification {
   readAt: number | null;
   archivedAt: number | null;
   snoozedUntil: number | null;
+  /** AI ツールから行った操作のとき、そのツールの名前（例: "Claude Code"） */
+  via?: string | null;
 }
 
 export type EntityName =
@@ -332,4 +338,42 @@ export interface MutateRequest {
 export interface MutateResponse {
   results: { clientId: string; ok: boolean; error?: string }[];
   lastSyncId: number;
+}
+
+// ---- AI ツール（MCP）の個人用トークン ----
+export type ApiTokenClient = "claude-code" | "cursor" | "vscode" | "other";
+export type ApiTokenScope = "read" | "write";
+
+/** 画面に出すトークンの情報（トークンそのものは含まない） */
+export interface ApiTokenSummary {
+  id: string;
+  name: string;
+  client: ApiTokenClient;
+  scope: ApiTokenScope;
+  /** トークンの末尾 4 文字（見分ける用） */
+  hint: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  expiresAt: number | null;
+}
+
+export interface ApiTokenListResponse {
+  tokens: ApiTokenSummary[];
+  /** MCP サーバーの URL（例: https://sen.example.com/api/mcp） */
+  mcpUrl: string;
+}
+
+export interface ApiTokenCreateRequest {
+  client: ApiTokenClient;
+  name?: string;
+  scope: ApiTokenScope;
+  /** null は無期限 */
+  expiresInDays: 30 | 90 | 365 | null;
+}
+
+export interface ApiTokenCreateResponse {
+  token: ApiTokenSummary;
+  /** 発行したトークン（この応答でしか返さない） */
+  secret: string;
+  mcpUrl: string;
 }

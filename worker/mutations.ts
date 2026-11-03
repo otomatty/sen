@@ -21,6 +21,8 @@ export interface MutationCtx {
   role: Role;
   now: number;
   changes: Change[];
+  /** AI ツール（MCP）からの操作のとき、そのツールの名前。履歴・コメント・通知に記録する */
+  via?: string | null;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -190,9 +192,10 @@ function assertAdmin(ctx: MutationCtx) {
 // ---- 記録系ヘルパー ----
 async function addActivity(ctx: MutationCtx, issueId: string, type: ActivityType, data: Record<string, unknown> = {}) {
   const id = crypto.randomUUID();
+  const via = ctx.via ?? null;
   await run(
     ctx.db,
-    "INSERT INTO activities (id, workspace_id, issue_id, actor_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO activities (id, workspace_id, issue_id, actor_id, type, data, created_at, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     id,
     ctx.ws.id,
     issueId,
@@ -200,12 +203,13 @@ async function addActivity(ctx: MutationCtx, issueId: string, type: ActivityType
     type,
     JSON.stringify(data),
     ctx.now,
+    via,
   );
   ctx.changes.push({
     entity: "activity",
     entityId: id,
     op: "upsert",
-    data: { id, issueId, actorId: ctx.user.id, type, data, createdAt: ctx.now },
+    data: { id, issueId, actorId: ctx.user.id, type, data, createdAt: ctx.now, via },
   });
 }
 
@@ -221,8 +225,8 @@ async function addNotifications(
     const id = crypto.randomUUID();
     await run(
       ctx.db,
-      `INSERT INTO notifications (id, workspace_id, user_id, issue_id, actor_id, type, data, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO notifications (id, workspace_id, user_id, issue_id, actor_id, type, data, created_at, via)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       ctx.ws.id,
       userId,
@@ -231,6 +235,7 @@ async function addNotifications(
       type,
       JSON.stringify(data),
       ctx.now,
+      ctx.via ?? null,
     );
     ctx.changes.push({ entity: "notification", entityId: id, op: "upsert", userId });
   }
@@ -585,7 +590,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       if (!text) fail("コメントを入力してください");
       await run(
         db,
-        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         a.id,
         ws.id,
         issue.id,
@@ -593,6 +598,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         body,
         now,
         now,
+        ctx.via ?? null,
       );
       touch(ctx, "comment", a.id);
       const members = await all<Row>(
@@ -1049,6 +1055,8 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const uid = await assertMember(ctx, a.userId);
       if (uid === user.id) fail("自分自身は削除できません");
       await run(db, "DELETE FROM members WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
+      // このワークスペースで発行した AI 連携トークンも無効にする
+      await run(db, "DELETE FROM api_tokens WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
       const assigned = await all<Row>(
         db,
         "SELECT id FROM issues WHERE workspace_id = ? AND assignee_id = ?",
