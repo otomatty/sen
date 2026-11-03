@@ -8,7 +8,7 @@ import { cycleName } from "../../store/selectors";
 import { deleteComment, updateComment } from "../../store/actions";
 import { formatDate, formatDateTime, identifier, isHtmlEmpty, timeAgo } from "../../lib/utils";
 import { sanitizeHtml } from "../../lib/sanitize";
-import { Avatar, Button, Menu } from "../../components/ui";
+import { Avatar, Button, Menu, ViaBadge } from "../../components/ui";
 import { StateIcon } from "../../components/pickers";
 import { Editor } from "../../components/Editor";
 import { useWsPath } from "../../app/hooks";
@@ -204,7 +204,7 @@ export function ActivityLine({ a }: { a: Activity }) {
     <div className="activity-line" data-testid="activity-line">
       <span className="activity-dot">{icon ?? <span className="dot" />}</span>
       <span className="activity-text">
-        {body}
+        {body}{a.via && <ViaBadge via={a.via} />}
         <span className="activity-time" title={formatDateTime(a.createdAt)}>
           ・{timeAgo(a.createdAt)}
         </span>
@@ -241,7 +241,7 @@ export function CommentCard({ c }: { c: Comment }) {
     <div className="comment" data-testid="comment">
       <div className="comment-head">
         <Avatar user={user} size={20} />
-        <b>{user?.name ?? "（退出したメンバー）"}</b>
+        <b>{user?.name ?? "（退出したメンバー）"}</b>{c.via && <ViaBadge via={c.via} />}
         <span className="muted" title={formatDateTime(c.createdAt)}>
           {timeAgo(c.createdAt)}
           {c.editedAt ? "（編集済み）" : ""}

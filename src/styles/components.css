@@ -363,6 +363,22 @@ select:focus {
   background: var(--accent-soft);
   color: var(--accent-text);
 }
+.via-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  margin: 0 4px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  line-height: 18px;
+  vertical-align: middle;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .inline-chip {
   display: inline-flex;
   align-items: center;

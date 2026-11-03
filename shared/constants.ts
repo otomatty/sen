@@ -1,4 +1,4 @@
-import type { ProjectStatus, StateType } from "./types";
+import type { ApiTokenClient, ProjectStatus, StateType } from "./types";
 
 export const PRIORITIES = [
   { value: 0, label: "優先度なし", short: "なし" },
@@ -91,3 +91,14 @@ export const NOTIFICATION_LABELS: Record<string, string> = {
   state: "がステータスを変更しました",
   created: "が課題を作成しました",
 };
+
+export const API_TOKEN_CLIENTS: { value: ApiTokenClient; label: string }[] = [
+  { value: "claude-code", label: "Claude Code" },
+  { value: "cursor", label: "Cursor" },
+  { value: "vscode", label: "VS Code" },
+  { value: "other", label: "その他" },
+];
+
+export function apiTokenClientLabel(c: ApiTokenClient): string {
+  return API_TOKEN_CLIENTS.find((x) => x.value === c)?.label ?? "その他";
+}

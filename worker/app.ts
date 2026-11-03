@@ -1,6 +1,15 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
-import type { BootstrapPayload, MutateRequest, MutateResponse, Mutation, Role } from "../shared/types";
+import type {
+  ApiTokenCreateRequest,
+  ApiTokenCreateResponse,
+  ApiTokenListResponse,
+  BootstrapPayload,
+  MutateRequest,
+  MutateResponse,
+  Mutation,
+  Role,
+} from "../shared/types";
 import { getAuth, getSessionUser, isGoogleConfigured } from "./auth";
 import { all, ensureMigrated, first, run } from "./db";
 import type { AppEnv, WorkspaceRow } from "./env";
@@ -20,6 +29,8 @@ import {
   toWorkspace,
 } from "./serialize";
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
+import { handleMcp } from "./mcp/server";
+import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
 
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
@@ -42,10 +53,11 @@ export function createApp() {
     return err(c, "サーバーでエラーが発生しました", 500);
   });
 
-  // DB の準備 + CSRF 対策（状態を変えるリクエストには独自ヘッダーを必須にする）
+  // DB の準備 + CSRF 対策（状態を変えるリクエストには独自ヘッダーを必須にする）。
+  // /api/mcp は Cookie を使わず API トークンだけで認証するので対象外。MCP クライアントは x-sen-client を送らない。
   app.use("*", async (c, next) => {
     await ensureMigrated(c.env.DB);
-    if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
+    if (c.req.path !== "/api/mcp" && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
       return err(c, "不正なリクエストです", 403);
     }
     c.header("Cache-Control", "no-store");
@@ -235,6 +247,33 @@ export function createApp() {
     if (ctx.changes.length) c.executionCtx?.waitUntil?.(notifyRealtime(c.env, ctx.ws.id, lastSyncId));
     return c.json({ results, lastSyncId } satisfies MutateResponse);
   });
+
+  // ---------------- API トークン（AI ツール連携。Cookie のログインでのみ発行・削除できる） ----------------
+  app.get("/tokens", requireUser, requireWorkspace, async (c) => {
+    const tokens = await listTokens(c.env.DB, c.get("workspace").id, c.get("user").id);
+    const body: ApiTokenListResponse = { tokens, mcpUrl: `${publicOrigin(c)}/api/mcp` };
+    return c.json(body);
+  });
+
+  app.post("/tokens", requireUser, requireWorkspace, async (c) => {
+    const req = await readJson<ApiTokenCreateRequest>(c);
+    const { summary, secret } = await createToken(c.env.DB, {
+      workspaceId: c.get("workspace").id,
+      userId: c.get("user").id,
+      req,
+      now: Date.now(),
+    });
+    const body: ApiTokenCreateResponse = { token: summary, secret, mcpUrl: `${publicOrigin(c)}/api/mcp` };
+    return c.json(body);
+  });
+
+  app.delete("/tokens/:id", requireUser, requireWorkspace, async (c) => {
+    await deleteToken(c.env.DB, c.get("workspace").id, c.get("user").id, c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  // AI ツール（MCP）。Cookie のログインは見ず、API トークンだけで認証する。
+  app.all("/mcp", handleMcp);
 
   // ---------------- リアルタイム（Durable Object へ転送） ----------------
   app.get("/realtime", requireUser, requireWorkspace, async (c) => {

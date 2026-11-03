@@ -7,7 +7,7 @@ import { useInbox } from "../../store/selectors";
 import { archiveNotification, markAllNotificationsRead, setNotificationRead } from "../../store/actions";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { cx, identifier, shortTimeAgo } from "../../lib/utils";
-import { Avatar, Button, EmptyState, Kbd, Tooltip } from "../../components/ui";
+import { Avatar, Button, EmptyState, Kbd, Tooltip, ViaBadge } from "../../components/ui";
 import { PageHeader } from "../../components/PageHeader";
 import { StateIcon } from "../../components/pickers";
 import { IssueDetail } from "../issues/IssueDetail";
@@ -242,7 +242,7 @@ export function InboxPage() {
                   <div className="inbox-line2">
                     <StateIcon stateId={issue.stateId} size={12} />
                     <span>
-                      {actor?.name ?? "誰か"}
+                      {actor?.name ?? "誰か"}{n.via && <ViaBadge via={n.via} />}
                       {describe(n, states)}
                       {typeof n.data.snippet === "string" && n.data.snippet ? `：${n.data.snippet}` : ""}
                     </span>

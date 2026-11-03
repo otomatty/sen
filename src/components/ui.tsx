@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { Sparkles } from "lucide-react";
 import type { User } from "../../shared/types";
 import { comboLabel, SCOPE, useHotkeys, useOverlayLock } from "../lib/hotkeys";
 import { cx, initials } from "../lib/utils";
@@ -351,6 +352,11 @@ export const AutoTextarea = forwardRef<
 
 export function Spinner({ size = 16 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} />;
+}
+
+/** AI ツールから行った操作であることを示す印 */
+export function ViaBadge({ via }: { via: string }) {
+  return <span className="via-badge" title={`${via} から AI が行った操作です`} data-testid="via-badge"><Sparkles size={11} />{via} 経由</span>;
 }
 
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
