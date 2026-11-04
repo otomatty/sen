@@ -118,7 +118,7 @@ export function createApp() {
     const body = await readJson<{ name?: string }>(c);
     const name = (body.name ?? "").trim();
     if (!name || name.length > 60) return err(c, "ワークスペース名を60文字以内で入力してください");
-    const ws = await createWorkspace(c.env.DB, { name, ownerId: c.get("user").id });
+    const ws = await createWorkspace(c.env.DB, { name, ownerId: c.get("user").id, ownerName: c.get("user").name });
     return c.json({ ok: true, workspaceKey: ws.urlKey });
   });
 
