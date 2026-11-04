@@ -31,10 +31,27 @@ const p = (...xs: string[]) => xs.map((x) => `<p>${x}</p>`).join("");
 const ul = (...xs: string[]) => `<ul>${xs.map((x) => `<li><p>${x}</p></li>`).join("")}</ul>`;
 const h = (x: string) => `<h3>${x}</h3>`;
 
+const TEAM_NAME_LIMIT = 60;
+const TEAM_NAME_SUFFIX = "のチーム";
+
+/** 作成者の表示名から初期チーム名を作る。空なら「マイチーム」。60文字を超えるときは名前側をコードポイント単位で切り詰める。 */
+function defaultTeamName(ownerName: string): string {
+  const name = ownerName.trim();
+  if (!name) return "マイチーム";
+  // cleanText は UTF-16 の length で 60 文字を見る。サロゲートペアの途中では切らない。
+  const budget = TEAM_NAME_LIMIT - TEAM_NAME_SUFFIX.length;
+  let kept = "";
+  for (const ch of Array.from(name)) {
+    if (kept.length + ch.length > budget) break;
+    kept += ch;
+  }
+  return kept + TEAM_NAME_SUFFIX;
+}
+
 /** 新しいワークスペースを作り、初回体験用のサンプル（使い方を学べる課題）を入れる */
 export async function createWorkspace(
   db: Db,
-  opts: { name: string; ownerId: string; urlKey?: string },
+  opts: { name: string; ownerId: string; ownerName: string; urlKey?: string },
 ): Promise<{ id: string; urlKey: string }> {
   const now = Date.now();
   const wsId = crypto.randomUUID();
@@ -54,7 +71,7 @@ export async function createWorkspace(
   ]);
 
   const teamId = crypto.randomUUID();
-  const { stateIds } = await insertTeam(db, wsId, { id: teamId, name: "エンジニアリング", key: "ENG", color: "#6470e8" }, now);
+  const { stateIds } = await insertTeam(db, wsId, { id: teamId, name: defaultTeamName(opts.ownerName), key: "ENG", color: "#6470e8" }, now);
 
   const labels = {
     bug: crypto.randomUUID(),
