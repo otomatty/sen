@@ -788,6 +788,41 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     expect(row[7]).toBe("バックログ");
   });
 
+  test("進行中にしてから保留に戻しても、着手日は最初に進行中にした日のまま", async () => {
+    const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+    if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+    const data = (await bootRes.json()) as BootstrapPayload;
+    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    if (!team) throw new Error("チームがありません");
+    const project = data.projects.find((item) => item.name === "シート連携テスト");
+    if (!project) throw new Error("プロジェクトがありません");
+    const title = "進行中にしてから保留に戻した作業";
+    const id = randomUUID();
+    await mutate(page, ws, [
+      {
+        type: "issue.create",
+        args: {
+          id,
+          teamId: team.id,
+          projectId: project.id,
+          title,
+          stateId: stateId(data, team.id, "unstarted", "未着手"),
+        },
+      },
+      {
+        type: "issue.update",
+        args: { id, patch: { stateId: stateId(data, team.id, "started", "進行中") } },
+      },
+      {
+        type: "issue.update",
+        args: { id, patch: { stateId: stateId(data, team.id, "backlog", "バックログ") } },
+      },
+    ]);
+    const row = await syncWbsRow(page, ws, title);
+    expect(row[5]).toBe(todayYmd(540).replaceAll("-", "/"));
+    expect(row[7]).toBe("バックログ");
+  });
+
   test("進行中にしたあとそのステータスを削除しても、着手日は消えない", async () => {
     const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
     if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);

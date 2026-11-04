@@ -61,9 +61,10 @@ export function SheetsSection() {
   useEffect(() => {
     if (pollMs == null) return;
     const timer = window.setInterval(() => {
-      const g = gen.current;
       const key = wsKeyRef.current;
       if (!key) return;
+      // 取り直しが重なったとき、あとから返った古い応答で表示を戻さない
+      const g = ++gen.current;
       void api<SheetSyncStatus>(`/api/sheets/status?ws=${key}`)
         .then((next) => {
           if (mounted.current && gen.current === g) setStatus(next);

@@ -47,10 +47,11 @@ interface IssueRow {
  * - issues.started_at
  * - 進行中・完了へ移した state 履歴の created_at。遷移先の種類は data.toType、無ければ今のステータス
  * - 作成時が進行中・完了だった created 履歴の created_at（data.stateType）
+ * - state 履歴の data.startedAt（数値のとき）。状態を戻して消えた着手時刻
  * バックログや未着手に戻すと started_at は消えるので、履歴も見る。
  */
 export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: string | null, now: number): Promise<ReportInput> {
-  const [projects, issues, states, teams, users, labels, starts] = await Promise.all([
+  const [projects, issues, states, teams, users, labels, starts, recordedStarts] = await Promise.all([
     all<{ id: string; name: string }>(
       db,
       "SELECT id, name FROM projects WHERE workspace_id = ? AND archived_at IS NULL ORDER BY sort_order, created_at",
@@ -84,6 +85,16 @@ export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: 
        GROUP BY a.issue_id`,
       ws.id,
     ),
+    all<{ issue_id: string; at: number }>(
+      db,
+      `SELECT a.issue_id AS issue_id, MIN(json_extract(a.data, '$.startedAt')) AS at
+       FROM issues i
+       JOIN activities a ON a.issue_id = i.id AND a.type = 'state'
+       WHERE i.workspace_id = ? AND i.archived_at IS NULL AND i.project_id IS NOT NULL
+         AND json_type(a.data, '$.startedAt') IN ('integer', 'real')
+       GROUP BY a.issue_id`,
+      ws.id,
+    ),
   ]);
 
   const stateById = new Map(states.map((state) => [state.id, state]));
@@ -91,6 +102,7 @@ export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: 
   const userName = new Map(users.map((user) => [user.id, user.name]));
   const labelName = new Map(labels.map((label) => [label.id, label.name]));
   const startedAt = new Map(starts.map((row) => [row.issue_id, row.at]));
+  const recordedStartedAt = new Map(recordedStarts.map((row) => [row.issue_id, row.at]));
 
   return {
     workspaceName: ws.name,
@@ -102,7 +114,10 @@ export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: 
     issues: issues.map((issue) => {
       const state = stateById.get(issue.state_id);
       const key = teamKey.get(issue.team_id);
-      const startedMs = earlier(finite(issue.started_at), finite(startedAt.get(issue.id)));
+      const startedMs = earlier(
+        earlier(finite(issue.started_at), finite(startedAt.get(issue.id))),
+        finite(recordedStartedAt.get(issue.id)),
+      );
       const completedMs = finite(issue.completed_at);
       return {
         id: issue.id,
