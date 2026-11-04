@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { todayYmd } from "../../shared/dates";
 import type { BootstrapPayload, Mutation, SheetSyncStatus, StateType } from "../../shared/types";
 import { forbiddenMessage } from "../../worker/sheets/google";
 import {
@@ -221,6 +222,34 @@ async function mutate(page: Page, ws: string, mutations: Mutation[]) {
   const body = JSON.parse(text) as { results: { ok: boolean; error?: string }[] };
   const failed = body.results.filter((result) => !result.ok);
   if (failed.length) throw new Error(`mutate が拒否されました: ${failed.map((result) => result.error).join(", ")}`);
+}
+
+/** 反映し、WBS にその課題が出るまで待って、その行を返す */
+async function syncWbsRow(page: Page, ws: string, title: string): Promise<string[]> {
+  const before = google.batches.length;
+  const res = await page.request.post(`/api/sheets/sync?ws=${encodeURIComponent(ws)}`, {
+    headers: { "x-sen-client": "1" },
+  });
+  const text = await res.text();
+  if (!res.ok()) throw new Error(`反映の呼び出しが失敗しました (${res.status()}): ${text}`);
+  const body = JSON.parse(text) as SheetSyncStatus;
+  if (body.lastError) throw new Error(`反映が失敗しました: ${body.lastError}`);
+  let row: string[] | undefined;
+  await expect
+    .poll(
+      () => {
+        row = google.batches
+          .slice(before)
+          .reverse()
+          .flatMap((batch) => sheetRows(batch, WBS_SHEET))
+          .find((cells) => cells[2]?.includes(title));
+        return row?.[2] ?? "";
+      },
+      { timeout: 15_000 },
+    )
+    .toContain(title);
+  if (!row) throw new Error(`WBS に「${title}」がありません`);
+  return row;
 }
 
 function stateId(data: BootstrapPayload, teamId: string, type: StateType, name: string): string {
@@ -726,6 +755,69 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const activity = sheetRows(latest, ACTIVITY_SHEET).find((row) => row.some((cell) => cell.includes("シート連携テスト")));
     expect(activity?.[2]).toBe("50%（2/4）");
     expect(activity?.[3]).toBe("保留あり");
+  });
+
+  test("進行中で作った課題を保留に戻しても、着手日は作った日のまま", async () => {
+    const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+    if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+    const data = (await bootRes.json()) as BootstrapPayload;
+    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    if (!team) throw new Error("チームがありません");
+    const project = data.projects.find((item) => item.name === "シート連携テスト");
+    if (!project) throw new Error("プロジェクトがありません");
+    const title = "進行中で作って保留に戻した作業";
+    const id = randomUUID();
+    await mutate(page, ws, [
+      {
+        type: "issue.create",
+        args: {
+          id,
+          teamId: team.id,
+          projectId: project.id,
+          title,
+          stateId: stateId(data, team.id, "started", "進行中"),
+        },
+      },
+      {
+        type: "issue.update",
+        args: { id, patch: { stateId: stateId(data, team.id, "backlog", "バックログ") } },
+      },
+    ]);
+    const row = await syncWbsRow(page, ws, title);
+    expect(row[5]).toBe(todayYmd(540).replaceAll("-", "/"));
+    expect(row[7]).toBe("バックログ");
+  });
+
+  test("進行中にしたあとそのステータスを削除しても、着手日は消えない", async () => {
+    const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+    if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+    const data = (await bootRes.json()) as BootstrapPayload;
+    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    if (!team) throw new Error("チームがありません");
+    const project = data.projects.find((item) => item.name === "シート連携テスト");
+    if (!project) throw new Error("プロジェクトがありません");
+    const startedId = stateId(data, team.id, "started", "進行中");
+    const unstartedId = stateId(data, team.id, "unstarted", "未着手");
+    const tempStateId = randomUUID();
+    const issueId = randomUUID();
+    const title = "ステータスを消しても着手日が残る作業";
+    await mutate(page, ws, [
+      {
+        type: "state.create",
+        args: { id: tempStateId, teamId: team.id, name: "一時の進行中", type: "started", color: "#f2c94c" },
+      },
+      {
+        type: "issue.create",
+        args: { id: issueId, teamId: team.id, projectId: project.id, title, stateId: unstartedId },
+      },
+      { type: "issue.update", args: { id: issueId, patch: { stateId: tempStateId } } },
+      { type: "issue.update", args: { id: issueId, patch: { stateId: unstartedId } } },
+      { type: "state.delete", args: { id: tempStateId, moveToStateId: startedId } },
+    ]);
+    const row = await syncWbsRow(page, ws, title);
+    expect(row[5]).not.toBe("");
+    expect(row[5]).toBe(todayYmd(540).replaceAll("-", "/"));
+    expect(row[7]).toBe("未着手");
   });
 
   test("今すぐ反映が失敗しても、保存後の反映の予約は残る", async () => {

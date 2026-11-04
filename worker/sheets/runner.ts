@@ -43,8 +43,11 @@ interface IssueRow {
 
 /**
  * 対象ワークスペースのプロジェクトと課題を、報告用の形に揃える。
- * 着手日は started_at と、進行中・完了へ移した履歴のいちばん古い時刻の、早い方。
- * （バックログに戻すと started_at は消えるので、履歴も見る）
+ * 着手日は、次のうちいちばん早い時刻を日本時間の日付にしたもの（どれも無ければ null）。
+ * - issues.started_at
+ * - 進行中・完了へ移した state 履歴の created_at。遷移先の種類は data.toType、無ければ今のステータス
+ * - 作成時が進行中・完了だった created 履歴の created_at（data.stateType）
+ * バックログや未着手に戻すと started_at は消えるので、履歴も見る。
  */
 export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: string | null, now: number): Promise<ReportInput> {
   const [projects, issues, states, teams, users, labels, starts] = await Promise.all([
@@ -71,10 +74,13 @@ export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: 
       db,
       `SELECT a.issue_id AS issue_id, MIN(a.created_at) AS at
        FROM issues i
-       JOIN activities a ON a.issue_id = i.id AND a.type = 'state'
-       JOIN workflow_states s ON s.workspace_id = i.workspace_id AND s.id = json_extract(a.data, '$.to')
+       JOIN activities a ON a.issue_id = i.id AND a.type IN ('state', 'created')
+       LEFT JOIN workflow_states s ON s.workspace_id = i.workspace_id AND s.id = json_extract(a.data, '$.to')
        WHERE i.workspace_id = ? AND i.archived_at IS NULL AND i.project_id IS NOT NULL
-         AND s.type IN ('started', 'completed')
+         AND (
+           (a.type = 'state' AND COALESCE(json_extract(a.data, '$.toType'), s.type) IN ('started', 'completed'))
+           OR (a.type = 'created' AND json_extract(a.data, '$.stateType') IN ('started', 'completed'))
+         )
        GROUP BY a.issue_id`,
       ws.id,
     ),

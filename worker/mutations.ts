@@ -400,7 +400,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         (ts as Row).canceled_at ?? null,
       );
       touch(ctx, "issue", a.id);
-      await addActivity(ctx, a.id, "created");
+      await addActivity(ctx, a.id, "created", { stateType: state.type });
       if (assigneeId) await addNotifications(ctx, [assigneeId], a.id, "assigned");
       return;
     }
@@ -438,7 +438,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         if (st.id !== row.state_id) {
           set.state_id = st.id;
           Object.assign(set, stateTimestamps(st.type, row, now));
-          acts.push(["state", { from: row.state_id, to: st.id }]);
+          acts.push(["state", { from: row.state_id, to: st.id, toType: st.type }]);
           notify.push([subscribers, "state", { from: row.state_id, to: st.id }]);
         }
       }
