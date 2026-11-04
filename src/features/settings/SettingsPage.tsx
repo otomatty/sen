@@ -33,6 +33,7 @@ import { confirmDialog } from "../../components/ConfirmDialog";
 import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
 import type { Me } from "../../../shared/types";
 import { AiSettings } from "./AiSettings";
+import { SheetsSection } from "./SheetsSettings";
 import { Field, Section } from "./parts";
 
 function ColorPicker({ value, onChange, colors = PALETTE }: { value: string; onChange: (c: string) => void; colors?: string[] }) {
@@ -240,6 +241,7 @@ function WorkspaceSettings() {
         </Field>
       </Section>
       <InviteSection invite={invite} admin={admin} />
+      <SheetsSection />
       <DevTools />
     </>
   );
