@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { NavLink, useParams } from "react-router";
-import { Copy, Download, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Link, NavLink, useParams } from "react-router";
+import { ChevronLeft, ChevronRight, Copy, Download, LayoutGrid, Plus, RefreshCw, SlidersHorizontal, Sparkles, Tag, Trash2, User, Users } from "lucide-react";
 import type { StateType } from "../../../shared/types";
 import { AVATAR_COLORS, PALETTE, STATE_TYPES } from "../../../shared/constants";
 import { useData } from "../../store/data";
@@ -524,13 +524,16 @@ function TeamsSettings() {
             <b>{t.name}</b>
             <span className="muted small">{t.key}</span>
           </div>
+          <span className="spacer" />
+          <ChevronRight size={16} className="settings-row-chevron" aria-hidden />
         </NavLink>
       ))}
-      <div className="label-add">
-        <input className="input" placeholder="チーム名（例：デザイン）" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="label-add team-add">
+        <input className="input" placeholder="チーム名（例：デザイン）" aria-label="チーム名" value={name} onChange={(e) => setName(e.target.value)} />
         <input
           className="input narrow"
           placeholder="識別子（例：DES）"
+          aria-label="識別子"
           value={key}
           maxLength={7}
           onChange={(e) => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
@@ -552,8 +555,20 @@ function TeamsSettings() {
   );
 }
 
+const SETTINGS_NAV_ICONS = {
+  profile: User,
+  ai: Sparkles,
+  workspace: SlidersHorizontal,
+  members: Users,
+  labels: Tag,
+  teams: LayoutGrid,
+  trash: Trash2,
+} as const;
+
 export function SettingsPage() {
-  const { section = "workspace", id } = useParams();
+  const { section: sectionParam, id } = useParams();
+  const section = sectionParam ?? "workspace";
+  const hasSection = sectionParam !== undefined;
   const p = useWsPath();
   const teams = useTeams();
   useDocumentTitle("設定");
@@ -577,28 +592,65 @@ export function SettingsPage() {
   ] as const;
   return (
     <div className="page settings-page" data-testid="settings-page">
-      <PageHeader title={<span className="page-title-text">設定</span>} screen="settings" />
-      <div className="settings-layout">
+      <PageHeader
+        title={
+          <>
+            {hasSection && (
+              <Link to={p("/settings")} className="settings-back" data-testid="settings-back">
+                <ChevronLeft size={18} aria-hidden />
+                設定
+              </Link>
+            )}
+            <span className={cx("page-title-text", hasSection && "settings-title")}>設定</span>
+          </>
+        }
+        screen="settings"
+      />
+      <div className={cx("settings-layout", hasSection && "has-section")}>
         <nav className="settings-nav">
           {nav.map(([k, title, items]) => (
             <div key={k}>
               <div className="nav-section">{title}</div>
-              {items.map(([s, l]) => (
-                <NavLink key={s} to={p(`/settings/${s}`)} className={({ isActive }) => cx("nav-item", isActive && "active")} data-testid={`settings-nav-${s}`}>
-                  <span className="nav-label">{l}</span>
-                </NavLink>
-              ))}
+              <div className="settings-nav-group">
+                {items.map(([s, l]) => {
+                  const Icon = SETTINGS_NAV_ICONS[s];
+                  return (
+                    <NavLink
+                      key={s}
+                      to={p(`/settings/${s}`)}
+                      className={({ isActive }) => cx("nav-item", (isActive || (s === "workspace" && !hasSection)) && "active")}
+                      data-testid={`settings-nav-${s}`}
+                    >
+                      <span className="nav-icon settings-nav-icon">
+                        <Icon size={16} />
+                      </span>
+                      <span className="nav-label">{l}</span>
+                      {s === "teams" && <span className="settings-nav-meta">{teams.length}</span>}
+                      <ChevronRight size={16} className="settings-nav-chevron" aria-hidden />
+                    </NavLink>
+                  );
+                })}
+              </div>
             </div>
           ))}
           <div className="nav-section">チームの設定</div>
-          {teams.map((t) => (
-            <NavLink key={t.id} to={p(`/settings/team/${t.id}`)} className={({ isActive }) => cx("nav-item", isActive && "active")}>
-              <span className="nav-icon">
-                <TeamIcon team={t} size={16} />
-              </span>
-              <span className="nav-label">{t.name}</span>
-            </NavLink>
-          ))}
+          <div className="settings-nav-group">
+            {teams.map((t) => (
+              <NavLink
+                key={t.id}
+                to={p(`/settings/team/${t.id}`)}
+                className={({ isActive }) => cx("nav-item", isActive && "active")}
+                data-testid={`settings-nav-team-${t.key}`}
+              >
+                <span className="nav-icon">
+                  <TeamIcon team={t} size={16} />
+                </span>
+                <span className="nav-label">{t.name}</span>
+                <span className="settings-nav-meta">{t.key}</span>
+                <ChevronRight size={16} className="settings-nav-chevron" aria-hidden />
+              </NavLink>
+            ))}
+          </div>
         </nav>
         <div className="settings-content">
           {section === "profile" && <ProfileSettings />}

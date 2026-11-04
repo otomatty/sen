@@ -173,7 +173,7 @@ export function Sidebar() {
           anchor={menu}
           onClose={() => setMenu(null)}
           items={[
-            { label: "設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings/workspace")) },
+            { label: "設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings")) },
             { label: "メンバーを招待", icon: <UserPlus size={14} />, onSelect: () => navigate(p("/settings/members")) },
             "divider",
             ...workspaces
