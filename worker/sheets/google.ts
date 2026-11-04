@@ -2,6 +2,7 @@
 // fetch と crypto.subtle だけを使う。鍵・JWT・アクセストークンはログにもエラーにも出さない。
 
 const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const FETCH_TIMEOUT_MS = 30_000;
 const KEY_ERROR = "サービスアカウントの鍵を読み取れません（GOOGLE_SERVICE_ACCOUNT_KEY を確認してください）";
 const AUTH_ERROR = "サービスアカウントの認証に失敗しました（鍵を確認してください）";
 const API_DISABLED_ERROR =
@@ -138,6 +139,7 @@ async function requestToken(tokenUrl: string, assertion: string): Promise<{ acce
         assertion,
       }),
       cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch {
     throw new SheetsError(AUTH_ERROR);
@@ -186,7 +188,7 @@ function isSheetsApiDisabled(body: unknown): boolean {
 async function sheetsFetch(url: string, token: string, clientEmail: string, init: RequestInit): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(url, { ...init, cache: "no-store" });
+    res = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   } catch {
     throw new SheetsError("Google に接続できませんでした");
   }

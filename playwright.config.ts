@@ -14,7 +14,10 @@ const sheetsPublicPath = path.join(os.tmpdir(), "sen-e2e-sheets-public.pem");
 const GOOGLE_DUMMY = "GOOGLE_CLIENT_ID=e2e-google-client-id\\nGOOGLE_CLIENT_SECRET=e2e-google-client-secret\\n";
 
 // ワーカーは設定を読み直すだけなので、鍵の生成はメインプロセス（TEST_WORKER_INDEX が無いとき）だけが行う。
-if (!process.env.TEST_WORKER_INDEX) {
+// 手元では reuseExistingServer で前回のサーバーを使い回すことがある。そのとき鍵を作り直してファイルを上書きすると、
+// サーバーは古い秘密鍵で署名し、テストは新しい公開鍵で確かめるので、署名の検証が失敗する。
+// 両方のファイルがあるときは鍵を作らず書き換えない。どちらかが無いときだけ作って両方を書く。
+if (!process.env.TEST_WORKER_INDEX && !(fs.existsSync(sheetsVarsPath) && fs.existsSync(sheetsPublicPath))) {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },

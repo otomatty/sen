@@ -257,6 +257,23 @@ test.describe("集計ルール", () => {
       ),
     );
     expect(almost.activities[0]?.completionRate).toBe("99%（199/200）");
+
+    for (const done of [29, 57, 58]) {
+      const report = buildReport(
+        input(
+          [{ id: "p", name: "P" }],
+          Array.from({ length: 100 }, (_, index) =>
+            issue({
+              id: `id-${index}`,
+              identifier: `ENG-${index + 1}`,
+              projectId: "p",
+              stateType: index < done ? "completed" : "unstarted",
+            }),
+          ),
+        ),
+      );
+      expect(report.activities[0]?.completionRate).toBe(`${done}%（${done}/100）`);
+    }
   });
 
   test("未完了で保留でない課題の期日が今日より前なら期限超過", () => {

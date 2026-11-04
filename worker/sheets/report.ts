@@ -247,7 +247,7 @@ function partition(tasks: ReportIssueInput[]) {
 function completionRate(tasks: ReportIssueInput[]): string {
   if (tasks.length === 0) return "タスクなし";
   const { done } = partition(tasks);
-  const pct = Math.floor((done / tasks.length) * 100);
+  const pct = Math.floor((done * 100) / tasks.length);
   return `${pct}%（${done}/${tasks.length}）`;
 }
 
