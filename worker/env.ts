@@ -19,6 +19,19 @@ export interface Env {
   /** Google Cloud の OAuth クライアント（ログインに使う） */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  /** スプレッドシート連携の対象ワークスペース（url_key。例: "ses"） */
+  SHEETS_WORKSPACE?: string;
+  /** 書き込み先のスプレッドシート ID */
+  SHEETS_SPREADSHEET_ID?: string;
+  /** サービスアカウントの鍵（Google が発行する JSON をそのまま。client_email と private_key を使う） */
+  GOOGLE_SERVICE_ACCOUNT_KEY?: string;
+  /** 保存から反映までの待ち時間（ミリ秒）。省略時は 30000 */
+  SHEETS_SYNC_DELAY_MS?: string;
+  /**
+   * DEV_TOOLS が "1" のときだけ有効。
+   * 設定されていれば Google の代わりにこのオリジンへ送る（E2E の模擬サーバー用）。本番では無視する。
+   */
+  GOOGLE_API_ORIGIN_FOR_TESTS?: string;
 }
 
 export interface WorkspaceRow {
