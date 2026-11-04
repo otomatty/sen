@@ -1,7 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { createApp } from "./app";
-import { all, ensureMigrated, run } from "./db";
-import type { Env } from "./env";
+import { all, ensureMigrated, first, run } from "./db";
+import type { Env, WorkspaceRow } from "./env";
+import { requestSheetSyncNow, sheetsConfig } from "./sheets/config";
+import { SheetSyncRunner } from "./sheets/runner";
 
 const app = createApp();
 
@@ -38,8 +40,29 @@ export default {
     const now = new Date().toISOString();
     await run(env.DB, "DELETE FROM auth_sessions WHERE expires_at < ?", now);
     await run(env.DB, "DELETE FROM auth_verifications WHERE expires_at < ?", now);
+    // スプレッドシートへ反映する（期限の超過など日付で変わる値の更新と、失敗した分のやり直し）。
+    // ここで失敗しても、上の掃除はすでに終わっている。
+    try {
+      await syncSheets(env);
+    } catch (e) {
+      console.error("sheets cron failed", e);
+    }
   },
 } satisfies ExportedHandler<Env>;
+
+/** 連携が有効なときだけ、対象ワークスペースの Durable Object に今すぐ反映を頼む */
+async function syncSheets(env: Env): Promise<void> {
+  const cfg = sheetsConfig(env);
+  if (!cfg) return;
+  const ws = await first<WorkspaceRow>(env.DB, "SELECT * FROM workspaces WHERE url_key = ?", cfg.workspaceKey);
+  if (!ws) {
+    console.error("SHEETS_WORKSPACE のワークスペースが見つかりません");
+    return;
+  }
+  // 公開 URL が設定されていればそれを渡す。無ければ Durable Object が保存している origin を使う。
+  const origin = env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ?? "";
+  await requestSheetSyncNow(env, ws.id, origin);
+}
 
 /**
  * ワークスペースごとのリアルタイム通知。
@@ -48,12 +71,17 @@ export default {
  * Hibernation API を使うので、接続が待機中の間は課金されない。
  */
 export class WorkspaceRealtime extends DurableObject<Env> {
+  private sheets: SheetSyncRunner;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.sheets = new SheetSyncRunner(ctx.storage, env);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
   async fetch(request: Request): Promise<Response> {
+    const r = await this.sheets.handle(request);
+    if (r) return r;
     const url = new URL(request.url);
     if (url.pathname === "/notify" && request.method === "POST") {
       const { lastSyncId } = (await request.json()) as { lastSyncId: number };
@@ -74,6 +102,10 @@ export class WorkspaceRealtime extends DurableObject<Env> {
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     return new Response("Not found", { status: 404 });
+  }
+
+  async alarm() {
+    await this.sheets.alarm();
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {

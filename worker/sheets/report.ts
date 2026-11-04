@@ -125,7 +125,7 @@ export function buildReport(input: ReportInput): Report {
 /**
  * spreadsheets.batchUpdate の requests。
  * 活動一覧・WBS 以外のタブは変更しない。無ければ addSheet（index 0 と 1）する。
- * 空セルは {} ではなく値も書式も null にして、前回の内容を消す。
+ * 空セルは {}。fields に userEnteredValue,userEnteredFormat を指定しているので、値と書式が消える。
  */
 export function buildSheetRequests(report: Report, existing: ExistingSheet[]): object[] {
   const used = new Set(existing.map((sheet) => sheet.sheetId));
@@ -287,8 +287,8 @@ interface CellFormat {
 }
 
 interface CellData {
-  userEnteredValue: { stringValue: string } | { formulaValue: string } | null;
-  userEnteredFormat: CellFormat | null;
+  userEnteredValue?: { stringValue: string } | { formulaValue: string };
+  userEnteredFormat?: CellFormat;
 }
 
 function rgb(hex: string): Rgb {
@@ -310,7 +310,7 @@ const HOLD_FORMAT: CellFormat = {
 };
 
 function blankCell(): CellData {
-  return { userEnteredValue: null, userEnteredFormat: null };
+  return {};
 }
 
 function textCell(value: string, format: CellFormat): CellData {
