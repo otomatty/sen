@@ -8,7 +8,8 @@ import { ApiError, api } from "../../lib/api";
 import { Button } from "../../components/ui";
 import { Field, Section } from "./parts";
 
-const POLL_MS = 5000;
+const POLL_PENDING_MS = 5000;
+const POLL_IDLE_MS = 30000;
 
 /** 設定 → ワークスペースの「スプレッドシート連携」。未設定・デモ・読み込み中は出さない */
 export function SheetsSection() {
@@ -50,10 +51,15 @@ export function SheetsSection() {
     };
   }, [isDemo, wsKey]);
 
-  const polling = !isDemo && !!wsKey && !syncing && status?.enabled === true && status.pending === true;
+  // 連携が有効で、今すぐ反映の実行中でないあいだ取り直す。
+  // 反映待ちは短く、無いときも後から予約された成功・失敗に気づけるよう長く取る。
+  let pollMs: number | null = null;
+  if (!isDemo && wsKey && !syncing && status?.enabled === true) {
+    pollMs = status.pending === true ? POLL_PENDING_MS : POLL_IDLE_MS;
+  }
 
   useEffect(() => {
-    if (!polling) return;
+    if (pollMs == null) return;
     const timer = window.setInterval(() => {
       const g = gen.current;
       const key = wsKeyRef.current;
@@ -65,13 +71,13 @@ export function SheetsSection() {
         .catch(() => {
           // 取り直しに失敗しても、今の表示は残す
         });
-    }, POLL_MS);
+    }, pollMs);
     pollTimer.current = timer;
     return () => {
       window.clearInterval(timer);
       if (pollTimer.current === timer) pollTimer.current = null;
     };
-  }, [polling]);
+  }, [pollMs]);
 
   const syncNow = async () => {
     const key = wsKey;
@@ -108,7 +114,12 @@ export function SheetsSection() {
     >
       <Field label="最終反映">
         <div>
-          <span data-testid="sheets-last-sync">{lastSync}</span>
+          <span
+            data-testid="sheets-last-sync"
+            {...(status.lastSuccessAt != null ? { "data-last-success-at": status.lastSuccessAt } : {})}
+          >
+            {lastSync}
+          </span>
           {status.pending && (
             <>
               {" "}

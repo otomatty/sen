@@ -916,6 +916,37 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     expect(assigned?.[4]).toBe(newName);
   });
 
+  test("開いたまま課題を保存すると、最終反映か反映待ちが更新される", async () => {
+    // 画面の取り直しは反映待ちでなければ 30 秒ごと。その間隔を超えて待つ。
+    test.setTimeout(60_000);
+
+    await page.goto(`/${ws}/settings/workspace`);
+    const lastSync = page.getByTestId("sheets-last-sync");
+    const pending = page.getByTestId("sheets-pending");
+    await expect(lastSync).toBeVisible();
+    await expect(pending).toHaveCount(0);
+    const before = Number((await lastSync.getAttribute("data-last-success-at")) ?? "");
+
+    await mutate(page, ws, [
+      {
+        type: "issue.update",
+        args: { id: overdueId, patch: { description: `<p>開いたままの反映 ${Date.now()}</p>` } },
+      },
+    ]);
+
+    await expect
+      .poll(
+        async () => {
+          if (await pending.isVisible()) return "pending";
+          const current = Number((await lastSync.getAttribute("data-last-success-at")) ?? "");
+          if (Number.isFinite(current) && current > before) return "updated";
+          return "";
+        },
+        { timeout: 45_000, intervals: [500, 1000, 1000] },
+      )
+      .not.toBe("");
+  });
+
   test("連携の対象でないワークスペースでは区画が出ない", async () => {
     const { ws: other } = await signupViaUi(page, { workspace: "別のワークスペース" });
     expect(other).not.toBe("sheets-e2e");
