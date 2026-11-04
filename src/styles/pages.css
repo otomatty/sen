@@ -473,6 +473,14 @@
   padding: 6px 8px;
   overflow-y: auto;
 }
+/* スマホ幅の一覧と戻るリンク用。PC の左メニューには出さない */
+.settings-back,
+.settings-nav-icon,
+.settings-nav-meta,
+.settings-nav-chevron,
+.settings-row-chevron {
+  display: none;
+}
 .settings-content {
   overflow-y: auto;
   padding: 28px 48px 100px;
@@ -1202,8 +1210,89 @@
   .settings-layout {
     grid-template-columns: 1fr;
   }
-  .settings-nav {
+  /* 項目を選ぶ前は一覧だけ、選んだあとは内容だけを出す */
+  .settings-layout:not(.has-section) .settings-nav {
+    border-right: 0;
+    padding: 4px 16px 80px;
+  }
+  .settings-layout:not(.has-section) .settings-content {
     display: none;
+  }
+  .settings-layout.has-section .settings-nav {
+    display: none;
+  }
+  .settings-nav .nav-section {
+    padding: 16px 4px 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .settings-nav-group {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-2);
+    overflow: hidden;
+  }
+  .settings-nav-group .nav-item {
+    height: auto;
+    min-height: 48px;
+    padding: 0 14px;
+    gap: 12px;
+    border-radius: 0;
+    font-size: 14px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-nav-group .nav-item:last-child {
+    border-bottom: 0;
+  }
+  /* 一覧は行き先のメニューなので、選択中の背景は出さない */
+  .settings-nav-group .nav-item.active {
+    background: transparent;
+  }
+  .settings-nav-icon {
+    display: inline-flex;
+    color: var(--text-secondary);
+  }
+  .settings-nav-meta {
+    display: inline;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .settings-nav-chevron,
+  .settings-row-chevron {
+    display: block;
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+  }
+  .settings-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 36px;
+    padding: 0 8px 0 2px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .settings-title {
+    display: none;
+  }
+  /* iPhone は 16px 未満の入力欄をタップすると画面を拡大する */
+  .settings-content .input,
+  .settings-content select {
+    font-size: 16px;
+  }
+  /* 狭い幅ではチーム名と識別子とボタンをそれぞれ 1 行にする */
+  .team-add .input,
+  .team-add .input.narrow {
+    flex: 1 1 100%;
+    width: auto;
+    height: 44px;
+  }
+  .team-add .btn {
+    flex: 1 1 100%;
+    height: 44px;
   }
   .settings-content {
     padding: 20px 16px 80px;

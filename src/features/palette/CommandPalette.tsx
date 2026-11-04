@@ -212,7 +212,7 @@ function Palette() {
         },
       ]),
       { id: "go-search", label: "検索", group: "移動", icon: <Search size={15} />, combo: "/", keywords: "search find", perform: () => go("/search") },
-      { id: "go-settings", label: "設定を開く", group: "移動", icon: <Settings size={15} />, combo: "g s", keywords: "settings", perform: () => go("/settings/workspace") },
+      { id: "go-settings", label: "設定を開く", group: "移動", icon: <Settings size={15} />, combo: "g s", keywords: "settings", perform: () => go("/settings") },
       { id: "go-help", label: "使い方動画を見る", group: "ヘルプ", icon: <PlayCircle size={15} />, combo: "g h", keywords: "help tutorial video", perform: () => go("/help") },
       { id: "shortcuts", label: "キーボードショートカット一覧", group: "ヘルプ", icon: <Keyboard size={15} />, combo: "?", keywords: "keyboard shortcuts", perform: () => useUI.setState({ shortcutsOpen: true }) },
       {
