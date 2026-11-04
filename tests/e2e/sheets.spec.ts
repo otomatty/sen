@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import type { BootstrapPayload, Mutation, StateType } from "../../shared/types";
+import { forbiddenMessage } from "../../worker/sheets/google";
 import {
   buildReport,
   buildSheetRequests,
@@ -475,6 +476,42 @@ test.describe("集計ルール", () => {
         fields: "hiddenByUser",
       },
     ]);
+  });
+
+  test("SERVICE_DISABLED のときは API を有効にする案内", () => {
+    const enabled = "Google Sheets API が有効になっていません。サービスアカウントの Google Cloud プロジェクトで Google Sheets API を有効にしてください";
+    expect(
+      forbiddenMessage(
+        {
+          error: {
+            status: "PERMISSION_DENIED",
+            message: "Google Sheets API has not been used in project 123 before or it is disabled.",
+            details: [{ reason: "SERVICE_DISABLED" }, { reason: "OTHER" }],
+          },
+        },
+        CLIENT_EMAIL,
+      ),
+    ).toBe(enabled);
+    expect(
+      forbiddenMessage(
+        { error: { message: "Google Sheets API has not been used in project 123 before", details: [{ reason: "OTHER" }] } },
+        CLIENT_EMAIL,
+      ),
+    ).toBe(enabled);
+    expect(forbiddenMessage({ error: { message: "The API is disabled." } }, CLIENT_EMAIL)).toBe(enabled);
+    expect(forbiddenMessage({ error: { details: [{ reason: "SERVICE_DISABLED" }] } }, CLIENT_EMAIL)).toBe(enabled);
+  });
+
+  test("権限がないときは共有の案内", () => {
+    const share = `スプレッドシートに書き込めません。サービスアカウント（${CLIENT_EMAIL}）を編集者として共有してください`;
+    expect(
+      forbiddenMessage(
+        { error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED" } },
+        CLIENT_EMAIL,
+      ),
+    ).toBe(share);
+    expect(forbiddenMessage(undefined, CLIENT_EMAIL)).toBe(share);
+    expect(forbiddenMessage("not-json", CLIENT_EMAIL)).toBe(share);
   });
 });
 

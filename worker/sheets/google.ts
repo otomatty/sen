@@ -4,6 +4,8 @@
 const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const KEY_ERROR = "サービスアカウントの鍵を読み取れません（GOOGLE_SERVICE_ACCOUNT_KEY を確認してください）";
 const AUTH_ERROR = "サービスアカウントの認証に失敗しました（鍵を確認してください）";
+const API_DISABLED_ERROR =
+  "Google Sheets API が有効になっていません。サービスアカウントの Google Cloud プロジェクトで Google Sheets API を有効にしてください";
 
 export class SheetsError extends Error {
   constructor(message: string) {
@@ -156,6 +158,30 @@ async function requestToken(tokenUrl: string, assertion: string): Promise<{ acce
   return { accessToken, expiresIn: typeof expiresIn === "number" ? expiresIn : undefined };
 }
 
+/**
+ * 403 の本文から案内を決める。
+ * API が無効（message の "has not been used" / "is disabled"、または details の SERVICE_DISABLED）なら有効化の案内。
+ * それ以外と、本文を判別できないときは共有の案内。鍵・トークンはメッセージに含めない。
+ */
+export function forbiddenMessage(body: unknown, clientEmail: string): string {
+  if (isSheetsApiDisabled(body)) return API_DISABLED_ERROR;
+  return `スプレッドシートに書き込めません。サービスアカウント（${clientEmail}）を編集者として共有してください`;
+}
+
+function isSheetsApiDisabled(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const error = (body as { error?: unknown }).error;
+  if (!error || typeof error !== "object") return false;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === "string" && (message.includes("has not been used") || message.includes("is disabled"))) return true;
+  const details = (error as { details?: unknown }).details;
+  if (!Array.isArray(details)) return false;
+  return details.some((detail) => {
+    if (!detail || typeof detail !== "object") return false;
+    return (detail as { reason?: unknown }).reason === "SERVICE_DISABLED";
+  });
+}
+
 /** シートの取得・書き込み。トークン取得の失敗とはメッセージを分ける */
 async function sheetsFetch(url: string, token: string, clientEmail: string, init: RequestInit): Promise<Response> {
   let res: Response;
@@ -170,9 +196,14 @@ async function sheetsFetch(url: string, token: string, clientEmail: string, init
 
 async function sheetsHttpError(res: Response, token: string, clientEmail: string): Promise<SheetsError> {
   if (res.status === 403) {
-    await discard(res);
     const email = clientEmail || emailForToken(token);
-    return new SheetsError(`スプレッドシートに書き込めません。サービスアカウント（${email}）を編集者として共有してください`);
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      await discard(res);
+    }
+    return new SheetsError(forbiddenMessage(body, email));
   }
   if (res.status === 404) {
     await discard(res);
