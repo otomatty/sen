@@ -583,6 +583,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
           title: "期限を過ぎた作業",
           stateId: startedId,
           dueDate: "2020-01-10",
+          assigneeId: data.me.id,
         },
       },
       {
@@ -695,6 +696,29 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     await expect(page.getByTestId("sheets-sync-now")).toBeEnabled();
     await page.getByTestId("sheets-sync-now").click();
     await expect(page.getByTestId("sheets-error")).toHaveCount(0);
+  });
+
+  test("対象でないワークスペースで名前を変えても、対象ワークスペースへ反映される", async () => {
+    const created = await page.request.post("/api/workspaces", {
+      headers: { "x-sen-client": "1" },
+      data: { name: "連携対象外" },
+    });
+    const createdText = await created.text();
+    if (!created.ok()) throw new Error(`ワークスペースの作成に失敗しました (${created.status()}): ${createdText}`);
+    const other = (JSON.parse(createdText) as { workspaceKey?: string }).workspaceKey ?? "";
+    expect(other, "別ワークスペースの url_key がありません").not.toBe("");
+    expect(other).not.toBe(ws);
+
+    const newName = "改名した担当者";
+    const before = google.batches.length;
+    await mutate(page, other, [{ type: "user.update", args: { name: newName } }]);
+    await expect.poll(() => google.batches.length, { timeout: 15_000 }).toBeGreaterThan(before);
+
+    const latest = google.batches.at(-1);
+    if (!latest) throw new Error("名前変更後の batchUpdate がありません");
+    const assigned = sheetRows(latest, WBS_SHEET).find((row) => row[2]?.includes("期限を過ぎた作業"));
+    expect(assigned, "担当者を付けた課題が WBS にありません").toBeTruthy();
+    expect(assigned?.[4]).toBe(newName);
   });
 
   test("連携の対象でないワークスペースでは区画が出ない", async () => {

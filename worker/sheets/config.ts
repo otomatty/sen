@@ -1,9 +1,11 @@
 // スプレッドシート連携の設定と、Durable Object への依頼。
 // ブラウザ内デモ（demo/backend.ts → worker/app.ts）からも読み込まれるため、
-// cloudflare:workers や Node の API、DB（?raw）には依存しない。
+// cloudflare:workers や Node の API は使わない。
+// DB は worker/db.ts のヘルパーだけ使う（app.ts が既に読み込んでいる）。
 // 鍵 JSON の解析は実行時に google.ts で行う。
 
 import type { EntityName, SheetSyncStatus } from "../../shared/types";
+import { first } from "../db";
 import type { Env, WorkspaceRow } from "../env";
 import type { Change } from "../sync";
 
@@ -49,20 +51,47 @@ export function isSheetsTarget(env: Env, wsUrlKey: string): boolean {
 }
 
 /** 反映のやり直しが必要になるエンティティ */
-export const REPORT_ENTITIES = new Set<EntityName>(["project", "issue", "state", "user", "team", "label"]);
+export const REPORT_ENTITIES = new Set<EntityName>(["project", "issue", "state", "user", "team", "label", "workspace"]);
 
 /**
  * 対象ワークスペースの課題・プロジェクト等を保存したあとに呼ぶ。
+ * 別のワークスペースでも、対象のメンバーであるユーザーの変更なら予約する
+ * （ユーザー名はワークスペースをまたいで共有されるため）。
  * 約 delayMs 後に反映するよう Durable Object へ予約する。失敗しても例外は出さない。
  */
 export async function scheduleSheetSync(env: Env, ws: WorkspaceRow, changes: Change[], origin: string): Promise<void> {
   const cfg = sheetsConfig(env);
-  if (!cfg || cfg.workspaceKey !== ws.url_key) return;
-  if (!changes.some((ch) => REPORT_ENTITIES.has(ch.entity))) return;
+  if (!cfg) return;
+
+  if (cfg.workspaceKey === ws.url_key) {
+    if (!changes.some((ch) => REPORT_ENTITIES.has(ch.entity))) return;
+    await sendSchedule(env, ws.id, origin);
+    return;
+  }
+
+  const userIds = [...new Set(changes.filter((ch) => ch.entity === "user").map((ch) => ch.entityId))];
+  if (userIds.length === 0) return;
+  try {
+    const placeholders = userIds.map(() => "?").join(", ");
+    const target = await first<{ id: string }>(
+      env.DB,
+      `SELECT w.id FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE w.url_key = ? AND m.user_id IN (${placeholders}) LIMIT 1`,
+      cfg.workspaceKey,
+      ...userIds,
+    );
+    if (!target) return;
+    await sendSchedule(env, target.id, origin);
+  } catch (e) {
+    console.error("sheets schedule failed", e);
+  }
+}
+
+/** 対象ワークスペースの Durable Object に反映を予約する。失敗しても例外は出さない。 */
+async function sendSchedule(env: Env, workspaceId: string, origin: string): Promise<void> {
   const ns = env.REALTIME;
   if (!ns) return;
   try {
-    const stub = ns.get(ns.idFromName(ws.id));
+    const stub = ns.get(ns.idFromName(workspaceId));
     await stub.fetch("https://realtime/sheets/schedule", {
       method: "POST",
       body: JSON.stringify({ origin }),
