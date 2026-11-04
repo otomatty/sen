@@ -400,7 +400,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         (ts as Row).canceled_at ?? null,
       );
       touch(ctx, "issue", a.id);
-      await addActivity(ctx, a.id, "created");
+      await addActivity(ctx, a.id, "created", { stateType: state.type });
       if (assigneeId) await addNotifications(ctx, [assigneeId], a.id, "assigned");
       return;
     }
@@ -438,7 +438,9 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         if (st.id !== row.state_id) {
           set.state_id = st.id;
           Object.assign(set, stateTimestamps(st.type, row, now));
-          acts.push(["state", { from: row.state_id, to: st.id }]);
+          const stateActivity: Record<string, unknown> = { from: row.state_id, to: st.id, toType: st.type };
+          if (row.started_at != null) stateActivity.startedAt = row.started_at;
+          acts.push(["state", stateActivity]);
           notify.push([subscribers, "state", { from: row.state_id, to: st.id }]);
         }
       }
@@ -932,6 +934,13 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const issues = await all<Row>(db, "SELECT id FROM issues WHERE state_id = ?", st.id);
       await run(db, "UPDATE issues SET state_id = ?, updated_at = ? WHERE state_id = ?", target.id, now, st.id);
       issues.forEach((i) => touch(ctx, "issue", i.id));
+      await run(
+        db,
+        "UPDATE activities SET data = json_set(data, '$.toType', ?) WHERE workspace_id = ? AND type = 'state' AND json_extract(data, '$.to') = ? AND json_extract(data, '$.toType') IS NULL",
+        st.type,
+        ws.id,
+        st.id,
+      );
       await run(db, "DELETE FROM workflow_states WHERE id = ?", st.id);
       ctx.changes.push({ entity: "state", entityId: st.id, op: "delete" });
       return;
