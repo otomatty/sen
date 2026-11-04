@@ -176,22 +176,26 @@ export class SheetSyncRunner {
     if (pending === null || pending > target) await this.storage.setAlarm(target);
   }
 
-  /** 今すぐ反映。予約中のアラームは消す（この実行が代わり） */
+  /**
+   * 今すぐ反映。成功したときだけ予約中のアラームを消す。
+   * 失敗したときは予約を残す。鳴れば、そこから今までどおりのやり直し（2 分後・10 分後）に進む。
+   */
   private async runNow(origin: string | null): Promise<SheetSyncStatus> {
     const state = await this.load();
     await this.save({ ...state, origin: origin ?? state.origin });
-    await this.storage.deleteAlarm();
-    await this.execute(false);
+    const ok = await this.execute(false);
+    if (ok) await this.storage.deleteAlarm();
     return this.snapshot();
   }
 
   /**
    * @param fromAlarm アラーム経由のときだけ、失敗時に 2 分後・10 分後のやり直しを入れる。
    * 今すぐ反映と毎日の Cron は /sheets/run なので、ここでは入れ直さない。
+   * @returns 反映できたとき true。連携が無効で何もしなかったときと、失敗したときは false。
    */
-  private async execute(fromAlarm: boolean): Promise<void> {
+  private async execute(fromAlarm: boolean): Promise<boolean> {
     const cfg = sheetsConfig(this.env);
-    if (!cfg) return;
+    if (!cfg) return false;
     const now = Date.now();
     try {
       await ensureMigrated(this.env.DB);
@@ -212,6 +216,7 @@ export class SheetSyncRunner {
       );
       const latest = await this.load();
       await this.save({ ...latest, lastAttemptAt: now, lastSuccessAt: now, lastError: null, retries: 0 });
+      return true;
     } catch (e) {
       const message = e instanceof SheetsError ? e.message : "反映に失敗しました";
       // 鍵やトークンはメッセージに含めない。SheetsError 以外は名前だけ（中身に秘密が混ざるのを避ける）
@@ -229,6 +234,7 @@ export class SheetSyncRunner {
         const pending = await this.storage.getAlarm();
         if (pending === null || pending > retryAt) await this.storage.setAlarm(retryAt);
       }
+      return false;
     }
   }
 

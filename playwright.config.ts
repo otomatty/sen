@@ -16,8 +16,15 @@ const GOOGLE_DUMMY = "GOOGLE_CLIENT_ID=e2e-google-client-id\\nGOOGLE_CLIENT_SECR
 // ワーカーは設定を読み直すだけなので、鍵の生成はメインプロセス（TEST_WORKER_INDEX が無いとき）だけが行う。
 // 手元では reuseExistingServer で前回のサーバーを使い回すことがある。そのとき鍵を作り直してファイルを上書きすると、
 // サーバーは古い秘密鍵で署名し、テストは新しい公開鍵で確かめるので、署名の検証が失敗する。
-// 両方のファイルがあるときは鍵を作らず書き換えない。どちらかが無いときだけ作って両方を書く。
-if (!process.env.TEST_WORKER_INDEX && !(fs.existsSync(sheetsVarsPath) && fs.existsSync(sheetsPublicPath))) {
+// 両方のファイルがあり、かつ vars に今のポートの GOOGLE_API_ORIGIN_FOR_TESTS=http://localhost:<port> の行があるときは
+// 鍵を作らず書き換えない。ファイルが無い、またはポートが違うときは作り直して両方を書く。
+const sheetsOriginLine = `GOOGLE_API_ORIGIN_FOR_TESTS=http://localhost:${GOOGLE_PORT}`;
+function sheetsVarsMatchCurrentPort(): boolean {
+  if (!fs.existsSync(sheetsVarsPath) || !fs.existsSync(sheetsPublicPath)) return false;
+  return fs.readFileSync(sheetsVarsPath, "utf8").split(/\r?\n/).includes(sheetsOriginLine);
+}
+
+if (!process.env.TEST_WORKER_INDEX && !sheetsVarsMatchCurrentPort()) {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },
@@ -34,7 +41,7 @@ if (!process.env.TEST_WORKER_INDEX && !(fs.existsSync(sheetsVarsPath) && fs.exis
       "SHEETS_WORKSPACE=sheets-e2e",
       "SHEETS_SPREADSHEET_ID=e2e-spreadsheet",
       "SHEETS_SYNC_DELAY_MS=1000",
-      `GOOGLE_API_ORIGIN_FOR_TESTS=http://localhost:${GOOGLE_PORT}`,
+      sheetsOriginLine,
       `GOOGLE_SERVICE_ACCOUNT_KEY='${serviceAccount}'`,
       "",
     ].join("\n"),

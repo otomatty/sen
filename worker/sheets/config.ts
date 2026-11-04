@@ -72,15 +72,21 @@ export async function scheduleSheetSync(env: Env, ws: WorkspaceRow, changes: Cha
   const userIds = [...new Set(changes.filter((ch) => ch.entity === "user").map((ch) => ch.entityId))];
   if (userIds.length === 0) return;
   try {
-    const placeholders = userIds.map(() => "?").join(", ");
-    const target = await first<{ id: string }>(
-      env.DB,
-      `SELECT w.id FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE w.url_key = ? AND m.user_id IN (${placeholders}) LIMIT 1`,
-      cfg.workspaceKey,
-      ...userIds,
-    );
-    if (!target) return;
-    await sendSchedule(env, target.id, origin);
+    // D1 は 1 つの問い合わせでバインドが 100 個まで。url_key の分を残し、ユーザー ID は 99 個ずつ調べる。
+    const chunkSize = 99;
+    for (let i = 0; i < userIds.length; i += chunkSize) {
+      const chunk = userIds.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const target = await first<{ id: string }>(
+        env.DB,
+        `SELECT w.id FROM workspaces w JOIN members m ON m.workspace_id = w.id WHERE w.url_key = ? AND m.user_id IN (${placeholders}) LIMIT 1`,
+        cfg.workspaceKey,
+        ...chunk,
+      );
+      if (!target) continue;
+      await sendSchedule(env, target.id, origin);
+      return;
+    }
   } catch (e) {
     console.error("sheets schedule failed", e);
   }

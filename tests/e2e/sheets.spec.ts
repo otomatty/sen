@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import type { BootstrapPayload, Mutation, StateType } from "../../shared/types";
+import type { BootstrapPayload, Mutation, SheetSyncStatus, StateType } from "../../shared/types";
 import { forbiddenMessage } from "../../worker/sheets/google";
 import {
   buildReport,
@@ -58,6 +58,9 @@ const google = {
   batches: [] as BatchCall[],
   sheets: [{ sheetId: 0, title: "シート1" }] as { sheetId: number; title: string }[],
   failNext: null as number | null,
+  /** true の間、batchUpdate は failNext を見る前で止まる */
+  holdBatches: false,
+  heldBatches: [] as { release: () => void }[],
 };
 
 function issue(partial: Pick<ReportIssueInput, "id" | "projectId" | "stateType"> & Partial<ReportIssueInput>): ReportIssueInput {
@@ -123,6 +126,8 @@ function resetGoogle() {
   google.batches = [];
   google.sheets = [{ sheetId: 0, title: "シート1" }];
   google.failNext = null;
+  google.holdBatches = false;
+  while (google.heldBatches.length) google.heldBatches.shift()?.release();
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -157,6 +162,12 @@ async function handleGoogle(req: IncomingMessage, res: ServerResponse) {
     return;
   }
   if (req.method === "POST" && url.pathname === `${spreadsheet}:batchUpdate`) {
+    // 止めておくと、1 秒後の予約が失敗設定を先に使ってしまうのを避けられる。
+    if (google.holdBatches) {
+      await new Promise<void>((resolve) => {
+        google.heldBatches.push({ release: () => resolve() });
+      });
+    }
     if (google.failNext != null) {
       const code = google.failNext;
       google.failNext = null;
@@ -191,6 +202,13 @@ function startGoogle(): Promise<Server> {
       resolve(server);
     });
   });
+}
+
+async function sheetsPending(page: Page, ws: string): Promise<boolean> {
+  const res = await page.request.get(`/api/sheets/status?ws=${encodeURIComponent(ws)}`);
+  if (!res.ok()) return false;
+  const body = (await res.json()) as { pending?: boolean };
+  return body.pending === true;
 }
 
 async function mutate(page: Page, ws: string, mutations: Mutation[]) {
@@ -630,6 +648,12 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     expect(JSON.parse(statusText).enabled, `sheets-e2e で連携が無効です: ${statusText}`).toBe(true);
   });
 
+  test.afterEach(() => {
+    google.holdBatches = false;
+    google.failNext = null;
+    while (google.heldBatches.length) google.heldBatches.shift()?.release();
+  });
+
   test.afterAll(async () => {
     await context?.close();
     if (!server) return;
@@ -702,6 +726,68 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const activity = sheetRows(latest, ACTIVITY_SHEET).find((row) => row.some((cell) => cell.includes("シート連携テスト")));
     expect(activity?.[2]).toBe("50%（2/4）");
     expect(activity?.[3]).toBe("保留あり");
+  });
+
+  test("今すぐ反映が失敗しても、保存後の反映の予約は残る", async () => {
+    // 予約は 1 秒後に走る。batchUpdate を止めて、今すぐ反映の失敗設定を予約が先に使わないようにする。
+    // それでも予約が先に止まっていたときは失敗させず、もう一度予約してから試す。
+    google.holdBatches = true;
+    let syncedAfterFailure = false;
+    try {
+      for (let attempt = 0; attempt < 3 && !syncedAfterFailure; attempt++) {
+        google.failNext = null;
+        const before = google.batches.length;
+        await mutate(page, ws, [
+          {
+            type: "issue.update",
+            args: { id: overdueId, patch: { description: `<p>予約の保持 ${attempt}</p>` } },
+          },
+        ]);
+
+        await expect
+          .poll(async () => google.heldBatches.length > 0 || (await sheetsPending(page, ws)), {
+            timeout: 5_000,
+            intervals: [10, 20, 50, 100],
+          })
+          .toBe(true);
+
+        if (google.heldBatches.length > 0) {
+          while (google.heldBatches.length) google.heldBatches.shift()?.release();
+          await expect.poll(() => google.batches.length, { timeout: 15_000 }).toBeGreaterThan(before);
+          continue;
+        }
+
+        google.failNext = 403;
+        const syncResPromise = page.request.post(`/api/sheets/sync?ws=${encodeURIComponent(ws)}`, {
+          headers: { "x-sen-client": "1" },
+        });
+        await expect
+          .poll(() => google.heldBatches.length, { timeout: 15_000, intervals: [10, 20, 50] })
+          .toBeGreaterThan(0);
+
+        google.holdBatches = false;
+        while (google.heldBatches.length) google.heldBatches.shift()?.release();
+        const syncRes = await syncResPromise;
+        const syncText = await syncRes.text();
+        if (!syncRes.ok()) throw new Error(`今すぐ反映の呼び出しが失敗しました (${syncRes.status()}): ${syncText}`);
+        const syncBody = JSON.parse(syncText) as SheetSyncStatus;
+        if (!syncBody.lastError) {
+          google.holdBatches = true;
+          await expect.poll(() => google.batches.length, { timeout: 15_000 }).toBeGreaterThan(before);
+          continue;
+        }
+
+        expect(syncBody.lastError).toContain("編集者として共有");
+        expect(google.failNext).toBeNull();
+        await expect.poll(() => google.batches.length, { timeout: 15_000 }).toBeGreaterThan(before);
+        syncedAfterFailure = true;
+      }
+    } finally {
+      google.failNext = null;
+      google.holdBatches = false;
+      while (google.heldBatches.length) google.heldBatches.shift()?.release();
+    }
+    expect(syncedAfterFailure, "今すぐ反映が失敗したあとに、予約の反映が成功しませんでした").toBe(true);
   });
 
   test("失敗したら理由が表示される", async () => {
