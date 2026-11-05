@@ -114,3 +114,22 @@ test("課題どうしの関係（ブロック・重複）を設定して外せ�
   await expect(page.locator("[data-testid=relation-row][data-kind=duplicate]")).toHaveCount(1);
   await expect(page.getByTestId("prop-status")).toContainText("重複");
 });
+
+test("スマホ幅でも、関係の相手を選ぶ画面が画面の中に収まる", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { ws } = await signupViaUi(page);
+  await seedDemo(page.request, ws);
+  await page.goto(`/${ws}/issue/ENG-15`);
+  await expect(page.getByTestId("issue-detail")).toBeVisible();
+
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("m");
+  await page.keyboard.press("b");
+  await expect(page.getByTestId("picker-relation")).toBeVisible();
+  await expect(page.getByTestId("relation-direction")).toBeVisible();
+
+  const box = await page.getByTestId("picker-relation").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(8);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390 - 8);
+});

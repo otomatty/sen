@@ -438,6 +438,7 @@ select:focus {
   position: fixed;
   z-index: 1100;
   min-width: 200px;
+  max-width: calc(100vw - 16px);
   max-height: min(460px, 80vh);
   display: flex;
   flex-direction: column;
@@ -615,6 +616,8 @@ select:focus {
   line-height: 1.3;
   color: var(--text-tertiary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .relation-slot-line {
   display: flex;
