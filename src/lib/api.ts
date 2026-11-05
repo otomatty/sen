@@ -71,6 +71,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
 export async function apiStream(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   const headers: Record<string, string> = { "x-sen-client": "1", "content-type": "application/json" };
   if (bearer) headers.authorization = `Bearer ${bearer}`;
+  if (currentUserId) headers["x-sen-user"] = currentUserId;
   let res: Response;
   try {
     res = await transport(path, {
@@ -91,8 +92,11 @@ export async function apiStream(path: string, body: unknown, signal?: AbortSigna
     } catch {
       // 本文なし
     }
-    const msg = (data as { error?: string } | null)?.error ?? `エラーが発生しました (${res.status})`;
-    throw new ApiError(msg, res.status);
+    const body = data as { error?: string; code?: string } | null;
+    const code = body?.code;
+    if (res.status === 409 && code === "account-switched") accountSwitchedHandler?.();
+    const msg = body?.error ?? `エラーが発生しました (${res.status})`;
+    throw new ApiError(msg, res.status, code);
   }
   return res;
 }

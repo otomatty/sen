@@ -303,3 +303,17 @@ test("切り替えているあいだは、画面を操作できない", async ({
   await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
   await page.unroute("**/api/accounts/switch");
 });
+
+test("アカウントの一覧が分かるまでは、ログアウトを 2 つに分けて出す", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await page.route("**/api/accounts", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "サーバーでエラーが発生しました" }) }),
+  );
+  await page.reload();
+  await expect(page.getByTestId("app")).toBeVisible();
+  await page.getByTestId("user-menu").click();
+  await expect(page.getByTestId("user-menu-logout-current")).toBeVisible();
+  await expect(page.getByTestId("user-menu-logout-all")).toBeVisible();
+  await expect(page.getByTestId("user-menu-logout")).toHaveCount(0);
+  await page.unroute("**/api/accounts");
+});

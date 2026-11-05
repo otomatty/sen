@@ -257,7 +257,7 @@ export function InvitePage() {
             disabled={busy || !invite}
             beforeSignIn={async () => {
               writeJoinMark(token);
-              if (authed) await refreshAccounts();
+              if (authed && !(await refreshAccounts())) throw new Error("今のアカウントを記録できませんでした。通信できる状態で、もう一度お試しください");
             }}
           />
         )}

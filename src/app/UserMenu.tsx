@@ -41,8 +41,10 @@ export function UserMenu() {
   const restoreFocus = useRef(false);
   const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
   const accounts = useSession((s) => s.accounts);
+  const accountsLoaded = useSession((s) => s.accountsLoaded);
   const maxAccounts = useSession((s) => s.maxAccounts);
   const multi = accounts.length >= 2;
+  const showSplitLogout = isDemo ? false : !accountsLoaded || accounts.length >= 2;
   const blocked = canChangeAccount();
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
 
@@ -275,7 +277,7 @@ export function UserMenu() {
               </>
             )}
             <div className="menu-divider" role="separator" />
-            {multi ? (
+            {showSplitLogout ? (
               <>
                 <button
                   role="menuitem"

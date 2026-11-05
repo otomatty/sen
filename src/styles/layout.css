@@ -268,7 +268,6 @@
 .user-menu .menu-item:hover,
 .user-menu .menu-item:focus-visible {
   background: var(--active);
-  outline: none;
 }
 .user-menu-theme {
   display: flex;

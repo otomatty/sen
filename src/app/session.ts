@@ -17,6 +17,8 @@ interface SessionState {
   invitations: PendingInvitation[];
   defaultWorkspaceId: string | null;
   accounts: DeviceAccount[];
+  /** 一覧の取得に一度でも成功したか。未取得・失敗のときはログアウトを分けて出す */
+  accountsLoaded: boolean;
   maxAccounts: number;
 }
 
@@ -34,6 +36,7 @@ export const useSession = create<SessionState>(() => ({
   invitations: [],
   defaultWorkspaceId: null,
   accounts: [],
+  accountsLoaded: false,
   maxAccounts: 5,
 }));
 
@@ -162,7 +165,7 @@ export async function loadSession() {
     if (!res.user) {
       writeLocal(SESSION_CACHE, null);
       setCurrentUserId(null);
-      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [], accountsLoaded: false });
       return null;
     }
     const invitations = pendingInvitations(res.invitations);
@@ -178,7 +181,7 @@ export async function loadSession() {
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
       setCurrentUserId(null);
-      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [], accountsLoaded: false });
       return null;
     }
     // オフライン：前回ログインしていた情報で起動し、手元のデータを表示する。
@@ -240,20 +243,22 @@ export async function refreshWorkspaces(): Promise<void> {
   return workspacesRefresh;
 }
 
-let accountsRefresh: Promise<void> | null = null;
+let accountsRefresh: Promise<boolean> | null = null;
 
-/** このブラウザでログインしているアカウントの一覧を取り直す */
-export async function refreshAccounts(): Promise<void> {
-  if (DEMO) return;
+/** このブラウザでログインしているアカウントの一覧を取り直す。成功したら true、失敗かデモなら false */
+export async function refreshAccounts(): Promise<boolean> {
+  if (DEMO) return false;
   if (accountsRefresh) return accountsRefresh;
   accountsRefresh = (async () => {
     try {
       const res = await api<{ accounts: DeviceAccount[]; max: number }>("/api/accounts", {
         signal: AbortSignal.timeout(10_000),
       });
-      useSession.setState({ accounts: res.accounts, maxAccounts: res.max });
+      useSession.setState({ accounts: res.accounts, maxAccounts: res.max, accountsLoaded: true });
+      return true;
     } catch {
       // 通信エラー（オフライン含む）のときは今の一覧をそのまま使う
+      return false;
     } finally {
       accountsRefresh = null;
     }
@@ -358,9 +363,11 @@ export async function switchAccount(userId: string) {
 /** 今のアカウントを残したまま、別の Google アカウントを追加する */
 export async function addAccount() {
   if (DEMO) return;
+  const { accounts, maxAccounts } = useSession.getState();
+  if (accounts.length >= maxAccounts) throw new Error(`同時にログインできるのは ${maxAccounts} つまでです`);
   const release = await prepareAccountChange("Google のアカウント選択へ移ります…");
   try {
-    await refreshAccounts();
+    if (!(await refreshAccounts())) throw new Error("今のアカウントを記録できませんでした。通信できる状態で、もう一度お試しください");
     await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
   } catch (e) {
     release();
@@ -401,7 +408,7 @@ export async function signOut() {
     writeLocal("sen:demo-logged-out", true);
   }
   setCurrentUserId(null);
-  useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [] });
+  useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null, accounts: [], accountsLoaded: false });
   notifyOtherTabs();
 }
 
