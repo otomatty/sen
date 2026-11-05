@@ -734,9 +734,9 @@ function frameDb(pcm: Buffer, frame: number): number {
   return 10 * Math.log10(mean);
 }
 
-type SilenceCand = { centerSample: number; lengthSec: number };
+type SilenceCand = { centerSample: number; lengthSec: number; startSample: number; endSample: number };
 
-/** 発話の内側にある 150ms 以上の無音を、重みから見込んだ位置に動的計画法で割り当てる */
+/** 発話の内側にある 150ms 以上の無音から、長くてはっきりしたものを文の区切りにする */
 function cutBySilence(
   silent: boolean[],
   first: number,
@@ -766,17 +766,10 @@ function cutBySilence(
   const dSec = (speechEnd - speechStart) / SAMPLE_RATE;
   if (!(dSec > 0)) return null;
 
-  let acc = 0;
-  const expected: number[] = [];
-  for (let k = 0; k < need; k++) {
-    acc += weights[k];
-    expected.push((speechStart + (dSec * acc * SAMPLE_RATE) / sumW) / SAMPLE_RATE);
-  }
-
-  const chosen = chooseCuts(cands, expected, dSec);
+  const chosen = pickCuts(cands, weights, sumW, speechStart, dSec);
   if (!chosen) return null;
 
-  const bounds = [speechStart, ...chosen.map((j) => cands[j].centerSample), speechEnd];
+  const bounds = [speechStart, ...chosen.map((cand) => cand.centerSample), speechEnd];
   const ranges: { start: number; end: number }[] = [];
   for (let i = 0; i < n; i++) {
     const start = bounds[i] * 2;
@@ -796,57 +789,66 @@ function pushSilence(cands: SilenceCand[], run: number, endFrame: number, first:
   cands.push({
     centerSample: (startSample + endSample) / 2,
     lengthSec: (endSample - startSample) / SAMPLE_RATE,
+    startSample,
+    endSample,
   });
 }
 
-/** Σ (|c − b| / D − min(L, 2) / 2) が最小になる、増加する候補列 */
-function chooseCuts(cands: SilenceCand[], expected: number[], dSec: number): number[] | null {
-  const need = expected.length;
-  const count = cands.length;
-  const inf = Number.POSITIVE_INFINITY;
-  const dp: number[][] = Array.from({ length: need }, () => Array<number>(count).fill(inf));
-  const prev: number[][] = Array.from({ length: need }, () => Array<number>(count).fill(-1));
-  const cost = (k: number, j: number) => {
-    const cand = cands[j];
-    return Math.abs(cand.centerSample / SAMPLE_RATE - expected[k]) / dSec - Math.min(cand.lengthSec, 2) / 2;
-  };
+/** 選んだ最短の無音は、残りの最長の 1.3 倍以上の長さが要る */
+const MIN_CUT_SILENCE_RATIO = 1.3;
+/** 選んだ最短の無音は、残りの最長より 0.3 秒以上長いことが要る */
+const MIN_CUT_SILENCE_MARGIN_SEC = 0.3;
+/** 切れ目が見込み位置からずれてよい幅の下限（秒） */
+const MIN_CUT_OFFSET_SEC = 1.0;
+/** ずれの許容幅は、隣り合う文の見込みの長さの短いほうの 4 分の 1 */
+const CUT_OFFSET_SPAN_RATIO = 0.25;
 
-  for (let j = 0; j < count; j++) dp[0][j] = cost(0, j);
-  for (let k = 1; k < need; k++) {
-    for (let j = k; j < count; j++) {
-      let best = inf;
-      let bestP = -1;
-      for (let p = k - 1; p < j; p++) {
-        if (dp[k - 1][p] < best) {
-          best = dp[k - 1][p];
-          bestP = p;
-        }
-      }
-      if (bestP >= 0) {
-        dp[k][j] = best + cost(k, j);
-        prev[k][j] = bestP;
-      }
+/** 長い無音を区切りの数だけ選び、残りよりはっきり長く見込み位置に近いときだけ返す */
+function pickCuts(
+  cands: SilenceCand[],
+  weights: number[],
+  sumW: number,
+  speechStart: number,
+  dSec: number,
+): SilenceCand[] | null {
+  const need = weights.length - 1;
+  const ranked = cands.slice().sort((a, b) => {
+    if (a.lengthSec !== b.lengthSec) return b.lengthSec - a.lengthSec;
+    return a.centerSample - b.centerSample;
+  });
+  const picked = ranked.slice(0, need);
+  const rest = ranked.slice(need);
+  if (rest.length > 0) {
+    const shortestPicked = Math.min(...picked.map((cand) => cand.lengthSec));
+    const longestRest = Math.max(...rest.map((cand) => cand.lengthSec));
+    if (
+      shortestPicked < MIN_CUT_SILENCE_RATIO * longestRest ||
+      shortestPicked - longestRest < MIN_CUT_SILENCE_MARGIN_SEC
+    ) {
+      return null;
     }
   }
 
-  let best = inf;
-  let bestJ = -1;
-  for (let j = need - 1; j < count; j++) {
-    if (dp[need - 1][j] < best) {
-      best = dp[need - 1][j];
-      bestJ = j;
-    }
-  }
-  if (bestJ < 0 || !Number.isFinite(best)) return null;
+  picked.sort((a, b) => a.centerSample - b.centerSample);
 
-  const chosen: number[] = [];
-  let j = bestJ;
-  for (let k = need - 1; k >= 0; k--) {
-    chosen.push(j);
-    if (k > 0) j = prev[k][j];
+  // 区切りの無音は文の重みに比例しないので、除いた発話の長さで見込みと比べる
+  let selectedSilenceSec = 0;
+  for (const cand of picked) selectedSilenceSec += (cand.endSample - cand.startSample) / SAMPLE_RATE;
+  const speechOnlySec = dSec - selectedSilenceSec;
+
+  let expected = 0;
+  let priorSilenceSec = 0;
+  for (let k = 0; k < need; k++) {
+    const span = (speechOnlySec * weights[k]) / sumW;
+    const nextSpan = (speechOnlySec * weights[k + 1]) / sumW;
+    expected += span;
+    const silenceSec = (picked[k].endSample - picked[k].startSample) / SAMPLE_RATE;
+    const actual = (picked[k].startSample - speechStart) / SAMPLE_RATE - priorSilenceSec;
+    const tolerance = Math.max(MIN_CUT_OFFSET_SEC, CUT_OFFSET_SPAN_RATIO * Math.min(span, nextSpan));
+    if (Math.abs(actual - expected) > tolerance) return null;
+    priorSilenceSec += silenceSec;
   }
-  chosen.reverse();
-  return chosen;
+  return picked;
 }
 
 /** 各文の有音の長さが、重みから見込んだ長さの 0.5〜2 倍で、かつ 0.25 秒以上 */
