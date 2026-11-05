@@ -218,6 +218,35 @@ test("重ねた強調の端の句読点は、外側の隣を見て区切りの�
   expect(htmlToMarkdown('<strong>「<em>両方</em>」</strong>です')).toBe("「***両方***」です");
 });
 
+test("リンクの端の空白は記法の外に出て、単語はつながらない", () => {
+  const cases = [
+    '<p>before<a href="https://example.com"> link </a>after</p>',
+    '<p>a<a href="https://example.com"> https://example.com </a>b</p>',
+    '<p>a<strong><a href="https://example.com"> link </a></strong>b</p>',
+    '<p><a href="https://example.com">link </a>after</p>',
+  ];
+  for (const html of cases) {
+    const md = htmlToMarkdown(html);
+    const back = markdownToHtml(md);
+    expect(htmlVisibleText(back), `${html} => ${md}`).toBe(htmlVisibleText(html));
+    expect(back, md).toContain('href="https://example.com"');
+  }
+  expect(htmlToMarkdown('<p>before<a href="https://example.com"> link </a>after</p>')).toBe("before [link](https://example.com) after");
+  expect(htmlToMarkdown('<p>a<a href="https://example.com"> https://example.com </a>b</p>')).toBe("a <https://example.com> b");
+  expect(htmlToMarkdown('<p>a<strong><a href="https://example.com"> link </a></strong>b</p>')).toBe("a [**link**](https://example.com) b");
+  expect(htmlToMarkdown('<p><a href="https://example.com">link </a>after</p>')).toBe("[link](https://example.com) after");
+  expect(htmlVisibleText(markdownToHtml(htmlToMarkdown("<p>a<a> x </a>b</p>")))).toBe("a x b");
+});
+
+test("プロトタイプの名前は文字のまま残り、関数にはならない", () => {
+  const md = htmlToMarkdown("<p>&constructor; &toString;</p>");
+  const shown = markdownToHtml(md);
+  expect(shown).not.toContain("function");
+  expect(htmlVisibleText(shown)).toBe("&constructor; &toString;");
+  const direct = markdownToHtml("&constructor; &toString; &valueOf; &hasOwnProperty;");
+  expect(direct).not.toContain("function");
+});
+
 test("名前付きの文字参照は1回だけ戻して表示する", () => {
   expect(markdownToText(htmlToMarkdown("<p>&copy; 2026 &eacute;t&eacute;</p>"))).toBe("© 2026 été");
   expect(markdownToHtml(htmlToMarkdown("<p>&copy; 2026 &eacute;t&eacute;</p>"))).toBe("<p>© 2026 été</p>");

@@ -1,7 +1,8 @@
 // HTML 4.01 の名前付き文字参照（252 個）。DOM も Node の API も使わない。
 // 名前の大文字小文字は区別する（copy と COPY は別）。コード位置は HTML 4.01 の表どおり。
+// プロトタイプは持たない。constructor や toString などの名前で、Object の関数を拾わない。
 
-export const HTML4_NAMED_ENTITIES: Readonly<Record<string, string>> = {
+export const HTML4_NAMED_ENTITIES: Readonly<Record<string, string>> = Object.freeze(Object.assign(Object.create(null), {
   nbsp: "\u00A0",
   iexcl: "\u00A1",
   cent: "\u00A2",
@@ -254,4 +255,4 @@ export const HTML4_NAMED_ENTITIES: Readonly<Record<string, string>> = {
   lsaquo: "\u2039",
   rsaquo: "\u203A",
   euro: "\u20AC",
-};
+}));
