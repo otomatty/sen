@@ -1,0 +1,298 @@
+<!-- bun run diagrams で docs/images/ に書き出す -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>プロジェクトとサイクル</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --frame: #f7f7f9;
+    --frame-border: #d6d7dc;
+    --surface: #ffffff;
+    --line: #e7e7eb;
+    --text: #1b1c21;
+    --muted: #5c5f68;
+    --label: #787b84;
+    --accent: #5865e3;
+    --pink: #c93d88;
+    --green: #1e8a5b;
+    --green-text: #17734b;
+    --green-bg: #e4f1eb;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111215;
+      --frame: #17181b;
+      --frame-border: #2d2f34;
+      --surface: #111215;
+      --line: #212226;
+      --text: #e6e6e9;
+      --muted: #a1a3a9;
+      --label: #7d7f86;
+      --accent: #6470e8;
+      --pink: #e255a1;
+      --green: #3fb27f;
+      --green-text: #6fd3a5;
+      --green-bg: #182c25;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 912px;
+    height: 372px;
+    margin: 0;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  body {
+    position: relative;
+    font-family: "Noto Sans JP", "Hiragino Sans", sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .scale {
+    position: absolute;
+    left: 187.5px;
+    top: 33px;
+    width: 685px;
+    height: 18px;
+    color: var(--label);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 18px;
+  }
+
+  .scale span {
+    position: absolute;
+    top: 0;
+    white-space: nowrap;
+  }
+
+  .scale span:nth-child(1) { left: 0; }
+  .scale span:nth-child(2) { left: 230px; }
+  .scale span:nth-child(3) { left: 460px; }
+  .scale span:nth-child(4) { right: 0; }
+
+  .band {
+    position: absolute;
+    left: 25.5px;
+    width: 861px;
+    height: 119px;
+    background: var(--frame);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  .band.a { top: 59.5px; }
+  .band.b { top: 191.5px; }
+
+  .who {
+    position: absolute;
+    left: 14.5px;
+    top: 35.5px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .meta {
+    position: absolute;
+    left: 31.5px;
+    top: 79.5px;
+    color: var(--label);
+    font-family: "JetBrains Mono", "Noto Sans JP", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .dot.accent { background: var(--accent); }
+  .dot.pink { background: var(--pink); }
+
+  .cycles {
+    position: absolute;
+    left: 160.75px;
+    top: 12px;
+    width: 685px;
+    height: 95px;
+    display: flex;
+    gap: 5px;
+  }
+
+  .cycle {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface);
+    border: 1px dashed var(--label);
+    border-radius: 8px;
+    padding: 10px 12px 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cycle-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .cycle-head .name { color: var(--muted); }
+
+  .cycle-head .range {
+    color: var(--label);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  .chips {
+    margin-top: 20px;
+    display: flex;
+    gap: 9px;
+  }
+
+  .chip {
+    height: 31px;
+    padding: 0 19px;
+    background: var(--surface);
+    border: 1px solid var(--frame-border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .chip.project {
+    background: var(--green-bg);
+    border-color: var(--green);
+    color: var(--green-text);
+  }
+
+  .legend {
+    position: absolute;
+    left: 187.5px;
+    top: 325.5px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    color: var(--muted);
+    font-size: 11.7px;
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .legend .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .swatch {
+    width: 28px;
+    height: 18px;
+    border-radius: 4px;
+    flex: none;
+    background: var(--surface);
+  }
+
+  .swatch.project {
+    background: var(--green-bg);
+    border: 1px solid var(--green);
+  }
+
+  .swatch.plain { border: 1px solid var(--frame-border); }
+
+  .swatch.cycle { border: 1px dashed var(--label); }
+</style>
+</head>
+<body>
+  <div class="scale">
+    <span>11/2</span>
+    <span>11/16</span>
+    <span>11/30</span>
+    <span>12/14</span>
+  </div>
+
+  <section class="band a">
+    <div class="who"><span class="dot accent"></span>デフォルト</div>
+    <div class="meta">DEF · 2週</div>
+    <div class="cycles">
+      <div class="cycle">
+        <div class="cycle-head"><span class="name">サイクル 1</span><span class="range">11/2-11/15</span></div>
+        <div class="chips">
+          <span class="chip project">DEF-12</span>
+          <span class="chip">DEF-13</span>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="cycle-head"><span class="name">サイクル 2</span><span class="range">11/16-11/29</span></div>
+        <div class="chips">
+          <span class="chip project">DEF-14</span>
+          <span class="chip">DEF-15</span>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="cycle-head"><span class="name">サイクル 3</span><span class="range">11/30-12/13</span></div>
+        <div class="chips">
+          <span class="chip">DEF-18</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band b">
+    <div class="who"><span class="dot pink"></span>デザイン</div>
+    <div class="meta">DES · 3週</div>
+    <div class="cycles">
+      <div class="cycle">
+        <div class="cycle-head"><span class="name">サイクル 1</span><span class="range">11/2-11/22</span></div>
+        <div class="chips">
+          <span class="chip project">DES-3</span>
+          <span class="chip">DES-4</span>
+        </div>
+      </div>
+      <div class="cycle">
+        <div class="cycle-head"><span class="name">サイクル 2</span><span class="range">11/23-12/13</span></div>
+        <div class="chips">
+          <span class="chip project">DES-5</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="legend">
+    <div class="item"><span class="swatch project"></span>プロジェクト「モバイルアプリ v2.0」の課題</div>
+    <div class="item"><span class="swatch plain"></span>プロジェクトなし</div>
+    <div class="item"><span class="swatch cycle"></span>サイクル（チームごとの期間）</div>
+  </div>
+</body>
+</html>

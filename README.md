@@ -426,8 +426,9 @@ src/           React アプリ
 tutorials/     使い方動画の自動収録（シナリオ・オーバーレイ・録画）
 tests/e2e/     Playwright の E2E テスト
 demo/          バックエンドごとブラウザで動く単一 HTML のデモ版（sql.js）
-scripts/       Cloudflare の初期設定・デプロイ前チェック・デモのビルド・PWA のアイコン書き出し
+scripts/       Cloudflare の初期設定・デプロイ前チェック・デモのビルド・PWA のアイコン書き出し・README の図の書き出し
 docs/images/   README の図（チーム・プロジェクト・サイクル・課題の関係）
+docs/diagrams/ README の図の元データ（HTML。bun run diagrams で docs/images/ に書き出す）
 ```
 
 ## ブラウザだけで動くデモ版
