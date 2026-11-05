@@ -459,11 +459,14 @@ select:focus {
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 32px;
+  min-height: 32px;
   padding: 0 8px;
   border-radius: 6px;
   text-align: left;
   color: var(--text);
+}
+.menu-item.has-hint {
+  padding-block: 5px;
 }
 .menu-item.active {
   background: var(--active);
@@ -481,6 +484,15 @@ select:focus {
 }
 .menu-item-label {
   flex: 1;
+}
+.menu-item-label.has-hint {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.menu-item-hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
 }
 .menu-divider {
   height: 1px;
@@ -576,6 +588,69 @@ select:focus {
 .picker-empty {
   padding: 16px;
   text-align: center;
+  color: var(--text-tertiary);
+}
+
+/* ブロック関係の向き（先に終わらせる → 待つ） */
+.relation-direction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.relation-slot {
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 5px 6px 6px;
+}
+.relation-slot.is-pick {
+  border: 1.5px dashed var(--accent);
+  background: var(--accent-soft);
+}
+.relation-slot-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.relation-slot-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+}
+.relation-slot-id {
+  flex-shrink: 0;
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, "Noto Sans Mono CJK JP", monospace;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.relation-slot-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.relation-slot-empty {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+.relation-arrow {
+  color: var(--accent);
+}
+.relation-preview {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--panel-2);
+}
+.relation-preview.is-empty {
   color: var(--text-tertiary);
 }
 .checkbox {

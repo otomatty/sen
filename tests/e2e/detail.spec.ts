@@ -76,11 +76,15 @@ test("課題どうしの関係（ブロック・重複）を設定して外せ�
   await page.keyboard.press("m");
   await page.keyboard.press("b");
   await expect(page.getByTestId("picker-relation")).toBeVisible();
+  await expect(page.getByTestId("relation-direction")).toBeVisible();
   await page.keyboard.type("二重送信");
+  await expect(page.getByTestId("relation-preview")).toContainText("ENG-2 が終わるまで、ENG-15 は進められません");
   await page.keyboard.press("Enter");
+  await expect(page.getByTestId("toast").filter({ hasText: "ENG-2 が終わるまで、ENG-15 は進められません" })).toBeVisible();
   const rel = page.locator("[data-testid=relation-row][data-kind=blockedBy][data-identifier='ENG-2']");
   await expect(rel).toBeVisible();
   await expect(page.getByTestId("activity")).toContainText("ブロックされている");
+  await expect(page.locator("[data-testid=relations] .relation-group[data-kind=blockedBy]")).toContainText("先に終わらせる課題");
 
   // 一覧ではブロック中の印が付く
   await page.goto(`/${ws}/team/ENG/all`);
@@ -90,6 +94,7 @@ test("課題どうしの関係（ブロック・重複）を設定して外せ�
   await page.goto(`/${ws}/issue/ENG-2`);
   const back = page.locator("[data-testid=relation-row][data-kind=blocks][data-identifier='ENG-15']");
   await expect(back).toBeVisible();
+  await expect(page.locator("[data-testid=relations] .relation-group[data-kind=blocks]")).toContainText("この課題を待っている課題");
   await back.hover();
   await back.getByRole("button", { name: "関係を外す" }).click();
   await expect(back).toBeHidden();
