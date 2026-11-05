@@ -282,10 +282,10 @@ export const RELATION_LABEL: Record<RelationKind, string> = {
   duplicatedBy: "重複",
 };
 
-/** ブロック関係の結果を 1 文で言う。blocker が終わっていれば「すぐ進められる」と言う */
+/** ブロック関係の結果を 1 文で言う。blocker が終わっていれば、この関係では止めないと言う */
 export function blockSentence(blocker: string, blocked: string, blockerDone: boolean): string {
   return blockerDone
-    ? `${blocker} はもう終わっているので、${blocked} はすぐ進められます`
+    ? `${blocker} はもう終わっているので、${blocked} を止めません`
     : `${blocker} が終わるまで、${blocked} は進められません`;
 }
 

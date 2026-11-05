@@ -86,6 +86,16 @@ test("課題どうしの関係（ブロック・重複）を設定して外せ�
   await expect(page.getByTestId("activity")).toContainText("ブロックされている");
   await expect(page.locator("[data-testid=relations] .relation-group[data-kind=blockedBy]")).toContainText("先に終わらせる課題");
 
+  // 完了済みの課題を足しても、未完了のブロッカーが残るので「この関係では止めない」とだけ言う
+  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("m");
+  await page.keyboard.press("b");
+  await expect(page.getByTestId("picker-relation")).toBeVisible();
+  await page.keyboard.type("カーソル型ページング");
+  await expect(page.getByTestId("relation-preview")).toContainText("はもう終わっているので、ENG-15 を止めません");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("picker-relation")).toBeHidden();
+
   // 一覧ではブロック中の印が付く
   await page.goto(`/${ws}/team/ENG/all`);
   await expect(row(page, "ENG-15").getByTestId("blocked-chip")).toBeVisible();

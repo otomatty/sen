@@ -324,7 +324,11 @@ function RelationPicker({
   const blockResult = (picked: Issue) => {
     const pickedName = identifier(picked, teams);
     if (kind === "blockedBy") return blockSentence(pickedName, selfName, finished(picked));
-    return blockSentence(selfName, pickedName, issueIds.length === 1 && finished(selfIssue));
+    return blockSentence(
+      selfName,
+      pickedName,
+      issueIds.length > 0 && issueIds.every((id) => finished(issues[id])),
+    );
   };
   const options = useMemo(() => {
     const exclude = new Set(issueIds);
