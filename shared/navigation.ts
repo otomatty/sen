@@ -130,23 +130,23 @@ export const SCREENS = [
     description:
       "設定の入り口です。開いた直後は「全般」が表示されます。プロフィールと表示、AI 連携、メンバー、ラベル、チーム、削除した課題、各チームの設定をここから開きます。",
     path: "/settings",
-    where: "サイドバー上部のワークスペース名メニューの「設定」",
+    where: "サイドバー上部のワークスペース名メニューの「ワークスペースの設定」",
     combo: "g s",
   },
   {
     id: "settings-profile",
     title: "プロフィールと表示",
     description:
-      "名前、アバターの色、テーマ（システム・ライト・ダーク）を変える画面です。メールアドレスは表示されます。参加しているワークスペースが 2 つ以上のときは、最初に開くワークスペースも選べます。アプリのインストールと、新しいバージョンへの更新もここからできます。",
+      "名前、アバターの色、テーマ（システム・ライト・ダーク）を変える画面です。メールアドレスは表示されます。参加しているワークスペースが 2 つ以上のときは、最初に開くワークスペースも選べます。アプリのインストールと、新しいバージョンへの更新もここからできます。テーマの切り替え、アプリのインストール、新しいバージョンへの更新は、サイドバー下部のユーザーメニューからもできます。",
     path: "/settings/profile",
-    where: "設定の「プロフィールと表示」",
+    where: "サイドバー下部のユーザーメニュー（自分の名前）の「個人設定」。設定の「プロフィールと表示」からも開けます",
   },
   {
     id: "settings-ai",
     title: "AI 連携",
     description: "Claude Code や Cursor などから Sen を操作するための接続トークンを発行する画面です。できることと有効期限を選べます。",
     path: "/settings/ai",
-    where: "設定の「AI 連携」",
+    where: "サイドバー下部のユーザーメニューの「AI 連携」。設定の「AI 連携」からも開けます",
   },
   {
     id: "settings-workspace",
@@ -560,6 +560,14 @@ export const COMMANDS = [
     screen: "settings",
   },
   {
+    id: "go-profile",
+    label: "個人設定を開く",
+    group: "移動",
+    description: "自分のプロフィールと表示の設定を開きます。",
+    keywords: "profile account personal settings プロフィール",
+    screen: "settings-profile",
+  },
+  {
     id: "go-help",
     label: "使い方動画を見る",
     group: "ヘルプ",
@@ -640,7 +648,7 @@ export const COMMANDS = [
     id: "logout",
     label: "ログアウト",
     group: "その他",
-    description: "ログアウトします。",
+    description: "ログインしているアカウントをすべてログアウトします。1 つのアカウントだけログアウトするときは、サイドバー下部のユーザーメニューの「このアカウントからログアウト」を使います。",
     keywords: "logout sign out",
   },
 ] as const satisfies readonly CommandDef[];

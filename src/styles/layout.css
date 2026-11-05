@@ -170,6 +170,167 @@
   border-radius: 50%;
   background: var(--success);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+  flex-shrink: 0;
+}
+.user-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 44px;
+  padding: 0 8px;
+  margin-top: 4px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text);
+}
+.user-button:hover {
+  background: var(--hover);
+}
+.user-button.open {
+  background: var(--active);
+}
+.user-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.user-update-dot {
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+}
+.user-button-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.user-button-name {
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-button .sync-status {
+  padding: 0;
+  padding-left: 3px;
+  min-width: 0;
+}
+.sync-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-button-chevron {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.user-menu [role="menu"] {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.user-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+}
+.user-menu-id {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.user-menu-name,
+.user-menu-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-menu-name {
+  font-weight: 600;
+}
+.user-menu-email {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.user-menu .menu-item:hover,
+.user-menu .menu-item:focus-visible {
+  background: var(--active);
+}
+.user-menu-theme {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 4px 0 8px;
+}
+.user-menu-theme-label {
+  flex: 1;
+  min-width: 0;
+}
+.user-menu .segmented {
+  flex-shrink: 0;
+}
+.user-menu .segmented button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.user-menu-section-label {
+  padding: 6px 8px 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.user-menu .user-menu-account {
+  height: auto;
+  min-height: 44px;
+}
+.user-menu-account-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.user-menu-account-name,
+.user-menu-account-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-menu-account-email {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.user-menu-check {
+  color: var(--accent-text);
+  flex-shrink: 0;
+}
+.user-menu-note {
+  padding: 2px 8px 6px 34px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+.menu-new-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 .sync-status.syncing .sync-dot {
   background: var(--warn);
@@ -355,6 +516,18 @@ a.crumb:hover {
   .page-actions .toolbar-btn {
     border-color: transparent;
     padding: 0 7px;
+  }
+  .user-menu .menu-item {
+    height: 40px;
+  }
+  .user-menu .user-menu-account {
+    min-height: 48px;
+  }
+  .user-menu-theme {
+    min-height: 44px;
+  }
+  .user-menu .segmented button {
+    height: 30px;
   }
 }
 .error-actions {

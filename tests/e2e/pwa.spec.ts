@@ -126,7 +126,7 @@ test("ブラウザがインストールを提案できるときは、メニュ�
   await expect(page.getByTestId("pwa-install")).toBeHidden();
 
   await fire();
-  await page.getByTestId("workspace-menu").click();
+  await page.getByTestId("user-menu").click();
   await page.locator(".menu-item", { hasText: "アプリをインストール" }).click();
   await expect.poll(prompted).toBe(2);
 });
@@ -363,7 +363,7 @@ test("送れない変更があるときは更新せず、操作できる状態�
   await title.fill("オフラインで編集");
   await title.press("Enter");
   await expect(page.getByTestId("sync-status")).toContainText("オフライン", { timeout: 10_000 });
-  await page.getByTestId("workspace-menu").click();
+  await page.getByTestId("user-menu").click();
   await page.locator(".menu-item", { hasText: "新しいバージョンに更新" }).click();
   // 更新している間は画面を操作できない
   await expect.poll(() => page.evaluate(() => document.getElementById("root")!.inert)).toBe(true);
@@ -397,7 +397,7 @@ test("更新する前に、書きかけの説明文は保存し、作成中の�
   await description.click();
   await page.keyboard.press("End");
   await page.keyboard.type("オフラインでも使える");
-  await page.getByTestId("workspace-menu").click();
+  await page.getByTestId("user-menu").click();
   const reloaded = page.waitForEvent("load");
   await page.locator(".menu-item", { hasText: "新しいバージョンに更新" }).click();
   await reloaded;

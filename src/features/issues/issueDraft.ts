@@ -27,6 +27,10 @@ function storageKey(workspaceId: string, userId: string): string {
   return `${DRAFT_PREFIX}${workspaceId}:${userId}`;
 }
 
+function isUserDraftKey(key: string, userId: string): boolean {
+  return key.startsWith(DRAFT_PREFIX) && key.endsWith(`:${userId}`);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -101,6 +105,40 @@ export function clearAllIssueDrafts(): void {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key?.startsWith(DRAFT_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // 消せなくても動作は続ける
+  }
+}
+
+/** そのユーザーの下書きが、どのワークスペースでも、内容のある状態で残っていれば true */
+export function hasIssueDraftForUser(userId: string): boolean {
+  for (const [key, draft] of memory) {
+    if (isUserDraftKey(key, userId) && draftHasContent(draft)) return true;
+  }
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !isUserDraftKey(key, userId)) continue;
+      if (draftHasContent(readStored(key))) return true;
+    }
+  } catch {
+    // 読めなくても、メモリで見た結果を使う
+  }
+  return false;
+}
+
+/** そのユーザーの下書きを、どのワークスペースのものも、localStorage とメモリから消す */
+export function clearIssueDraftsForUser(userId: string): void {
+  for (const key of [...memory.keys()]) {
+    if (isUserDraftKey(key, userId)) memory.delete(key);
+  }
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && isUserDraftKey(key, userId)) keys.push(key);
     }
     for (const key of keys) localStorage.removeItem(key);
   } catch {
