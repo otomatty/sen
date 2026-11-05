@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
+import { APIError } from "better-auth/api";
+import { AVATAR_COLORS } from "../shared/constants";
 import type {
   ApiTokenCreateRequest,
   ApiTokenCreateResponse,
   ApiTokenListResponse,
   BootstrapPayload,
+  DeviceAccount,
   MutateRequest,
   MutateResponse,
   Mutation,
@@ -12,7 +15,7 @@ import type {
   Role,
   SheetSyncStatus,
 } from "../shared/types";
-import { getAuth, getSessionUser, isGoogleConfigured } from "./auth";
+import { MAX_ACCOUNTS, forwardCookies, getAuth, getSessionUser, isGoogleConfigured } from "./auth";
 import { all, ensureMigrated, first, run } from "./db";
 import type { AppEnv, Env, WorkspaceRow } from "./env";
 import { applyMutation, MutationError, type MutationCtx } from "./mutations";
@@ -77,6 +80,11 @@ export function createApp() {
   const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
     const user = await getSessionUser(c);
     if (!user) return err(c, "ログインが必要です", 401);
+    // ログイン中のアカウントは Cookie でブラウザ全体に 1 つ。別のタブで切り替えると、このタブは画面を変えないまま別の人として送ってしまうので、画面が思っている利用者と違えば止める
+    const expected = c.req.header("x-sen-user");
+    if (expected && expected !== user.id) {
+      return c.json({ error: "別のアカウントに切り替わりました。読み込み直します", code: "account-switched" }, 409);
+    }
     c.set("user", user);
     await next();
   };
@@ -121,6 +129,80 @@ export function createApp() {
     const user = await getSessionUser(c);
     if (!user) return c.json({ user: null, workspaces: [] });
     return c.json({ user, workspaces: await listWorkspaces(c, user.id) });
+  });
+
+  app.get("/accounts", async (c) => {
+    const me = await getSessionUser(c);
+    if (!me) return c.json({ accounts: [], max: MAX_ACCOUNTS });
+    try {
+      const adopted = await getAuth(c).api.adoptCurrentSession({ headers: c.req.raw.headers, returnHeaders: true });
+      forwardCookies(c, adopted.headers);
+      const sessions = await getAuth(c).api.listDeviceSessions({ headers: c.req.raw.headers });
+      // 記録したばかりの今のアカウントは、このリクエストの Cookie にはまだ無い
+      const ids = [...new Set([me.id, ...sessions.map((s) => s.user.id)])];
+      const rows = await all<{ id: string; name: string; email: string; avatar_color: string }>(
+        c.env.DB,
+        `SELECT id, name, email, avatar_color FROM users WHERE id IN (${ids.map(() => "?").join(",")})`,
+        ...ids,
+      );
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const bySession = new Map(sessions.map((s) => [s.user.id, s.user]));
+      const accounts: DeviceAccount[] = ids.map((id) => {
+        const row = byId.get(id);
+        const sessionUser = bySession.get(id);
+        return {
+          id,
+          name: row?.name ?? sessionUser?.name ?? (id === me.id ? me.name : ""),
+          email: row?.email ?? sessionUser?.email ?? (id === me.id ? me.email : ""),
+          avatarColor: row?.avatar_color ?? AVATAR_COLORS[0],
+          current: id === me.id,
+        };
+      });
+      accounts.sort((a, b) => a.email.localeCompare(b.email));
+      return c.json({ accounts, max: MAX_ACCOUNTS });
+    } catch (e) {
+      if (e instanceof APIError) return err(c, e.message || "アカウントを切り替えられませんでした", 400);
+      throw e;
+    }
+  });
+
+  app.post("/accounts/switch", async (c) => {
+    try {
+      const body = await readJson<{ userId?: string }>(c);
+      const sessions = await getAuth(c).api.listDeviceSessions({ headers: c.req.raw.headers });
+      const target = sessions.find((s) => s.user.id === body.userId);
+      if (!target) return err(c, "このアカウントは、もう一度ログインが必要です", 404);
+      const switched = await getAuth(c).api.setActiveSession({
+        body: { sessionToken: target.session.token },
+        headers: c.req.raw.headers,
+        returnHeaders: true,
+      });
+      forwardCookies(c, switched.headers);
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e instanceof APIError) return err(c, e.message || "アカウントを切り替えられませんでした", 400);
+      throw e;
+    }
+  });
+
+  app.post("/accounts/sign-out", async (c) => {
+    try {
+      const me = await getSessionUser(c);
+      if (!me) return err(c, "ログインが必要です", 401);
+      const sessions = await getAuth(c).api.listDeviceSessions({ headers: c.req.raw.headers });
+      const cur = sessions.find((s) => s.user.id === me.id);
+      if (!cur) return err(c, "ログアウトできませんでした。もう一度お試しください", 409);
+      const revoked = await getAuth(c).api.revokeDeviceSession({
+        body: { sessionToken: cur.session.token },
+        headers: c.req.raw.headers,
+        returnHeaders: true,
+      });
+      forwardCookies(c, revoked.headers);
+      return c.json({ ok: true });
+    } catch (e) {
+      if (e instanceof APIError) return err(c, e.message || "アカウントを切り替えられませんでした", 400);
+      throw e;
+    }
   });
 
   // ---------------- ワークスペース ----------------

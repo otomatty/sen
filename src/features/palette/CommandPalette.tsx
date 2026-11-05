@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import {
+  ArrowLeftRight,
   ArrowRightLeft,
   BarChart3,
   ChartColumn,
@@ -32,6 +33,7 @@ import {
   Undo2,
   User,
   UserCheck,
+  UserPlus,
   Bell,
   GitBranch,
 } from "lucide-react";
@@ -45,7 +47,7 @@ import { Kbd, Modal } from "../../components/ui";
 import { CycleIcon, TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { useWsKey } from "../../app/hooks";
-import { logout } from "../../app/session";
+import { addAccount, logout, switchAccount, useSession } from "../../app/session";
 import { applyUpdate, installApp, usePWA } from "../../app/pwa";
 import { openRelationPicker, RELATION_ACTIONS, RELATION_ICON } from "../issues/Relations";
 
@@ -72,6 +74,7 @@ function Palette() {
   const issues = useData((s) => s.issues);
   const teamsMap = useData((s) => s.teams);
   const meId = useData((s) => s.meId);
+  const accounts = useSession((s) => s.accounts);
   const canInstall = usePWA((s) => !!s.installPrompt);
   const updateReady = usePWA((s) => s.updateReady);
   const [q, setQ] = useState("");
@@ -230,6 +233,32 @@ function Palette() {
       { id: "theme-dark", label: "テーマ：ダーク", group: "表示", icon: <Moon size={15} />, keywords: "theme dark", perform: () => setTheme("dark") },
       { id: "theme-light", label: "テーマ：ライト", group: "表示", icon: <Sun size={15} />, keywords: "theme light", perform: () => setTheme("light") },
       { id: "theme-system", label: "テーマ：システムに合わせる", group: "表示", icon: <Monitor size={15} />, keywords: "theme system", perform: () => setTheme("system") },
+      ...accounts
+        .filter((a) => !a.current)
+        .map((a) => ({
+          id: `switch-account-${a.id}`,
+          label: `${a.name}（${a.email}）に切り替え`,
+          group: "アカウント",
+          icon: <ArrowLeftRight size={15} />,
+          keywords: "account switch アカウント 切り替え",
+          perform: () => {
+            switchAccount(a.id).catch((e) => toast((e as Error).message, { kind: "error" }));
+          },
+        })),
+      ...(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__
+        ? []
+        : [
+            {
+              id: "add-account",
+              label: "別のアカウントを追加",
+              group: "アカウント",
+              icon: <UserPlus size={15} />,
+              keywords: "account add login アカウント 追加",
+              perform: () => {
+                addAccount().catch((e) => toast((e as Error).message, { kind: "error" }));
+              },
+            },
+          ]),
       { id: "undo", label: "元に戻す", group: "その他", icon: <Undo2 size={15} />, combo: "mod+z", keywords: "undo", perform: () => undo() },
     );
     if (canInstall) {
@@ -240,7 +269,7 @@ function Palette() {
     }
     list.push({ id: "logout", label: "ログアウト", group: "その他", icon: <LogOut size={15} />, keywords: "logout sign out", perform: () => logout() });
     return list;
-  }, [targets, issues, teamsMap, teams, meId, ws, canInstall, updateReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [targets, issues, teamsMap, teams, meId, ws, canInstall, updateReady, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => {
     const cmds = commands.filter((c) => fuzzyMatch(`${c.label} ${c.keywords ?? ""} ${c.group}`, q));

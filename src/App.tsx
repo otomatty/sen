@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AppShell, Toasts } from "./app/AppShell";
-import { lastWorkspaceKey, loadSession, useSession } from "./app/session";
+import { initSessionSync, lastWorkspaceKey, loadSession, useSession } from "./app/session";
 import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPages";
 import { IssuePage, MyIssuesPage, SearchPage, TeamIssuesPage, WorkspaceHome } from "./features/issues/pages";
 import { InboxPage } from "./features/inbox/InboxPage";
@@ -70,6 +70,7 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   useEffect(() => {
+    initSessionSync();
     loadSession().catch(() => useSession.setState({ status: "anon" }));
   }, []);
   return (

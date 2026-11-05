@@ -1,14 +1,14 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router";
-import { ChevronsUpDown, Download, LogOut, Monitor, Moon, RefreshCw, Sparkles, Sun, User } from "lucide-react";
+import { Check, ChevronsUpDown, Download, LogOut, Monitor, Moon, RefreshCw, Sparkles, Sun, User, UserPlus } from "lucide-react";
 import type { Me } from "../../shared/types";
 import { Avatar, Popover } from "../components/ui";
 import { cx } from "../lib/utils";
 import { useData } from "../store/data";
-import { setTheme, useUI, type Theme } from "../store/ui";
+import { setTheme, toast, useUI, type Theme } from "../store/ui";
 import { useWsPath } from "./hooks";
 import { applyUpdate, installApp, usePWA } from "./pwa";
-import { logout } from "./session";
+import { addAccount, canChangeAccount, logout, logoutCurrentAccount, refreshAccounts, switchAccount, useSession } from "./session";
 
 const THEMES: { id: Theme; label: string }[] = [
   { id: "system", label: "システム" },
@@ -40,6 +40,10 @@ export function UserMenu() {
   const profileRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
   const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
+  const accounts = useSession((s) => s.accounts);
+  const maxAccounts = useSession((s) => s.maxAccounts);
+  const multi = accounts.length >= 2;
+  const blocked = canChangeAccount();
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
 
   const close = () => setRect(null);
@@ -112,7 +116,10 @@ export function UserMenu() {
             return;
           }
           const el = buttonRef.current;
-          if (el) setRect(el.getBoundingClientRect());
+          if (el) {
+            setRect(el.getBoundingClientRect());
+            void refreshAccounts();
+          }
         }}
       >
         <span className="user-avatar-wrap">
@@ -222,21 +229,101 @@ export function UserMenu() {
                 <span className="menu-new-dot" aria-hidden />
               </button>
             )}
+            {!isDemo && (
+              <>
+                <div className="menu-divider" role="separator" />
+                {multi && <div className="user-menu-section-label">アカウント</div>}
+                {multi &&
+                  accounts.map((a) => (
+                    <button
+                      key={a.id}
+                      role="menuitemradio"
+                      aria-checked={a.current}
+                      className="menu-item user-menu-account"
+                      data-testid={`user-menu-account-${a.id}`}
+                      disabled={!a.current && !!blocked}
+                      onClick={() => {
+                        if (a.current) return;
+                        switchAccount(a.id).catch((e) => toast((e as Error).message, { kind: "error" }));
+                      }}
+                    >
+                      <Avatar user={a} size={24} />
+                      <span className="user-menu-account-text">
+                        <span className="user-menu-account-name">{a.name}</span>
+                        <span className="user-menu-account-email">{a.email}</span>
+                      </span>
+                      {a.current && <Check size={14} className="user-menu-check" />}
+                    </button>
+                  ))}
+                <button
+                  role="menuitem"
+                  className="menu-item"
+                  data-testid="user-menu-add-account"
+                  disabled={!!blocked || accounts.length >= maxAccounts}
+                  onClick={() => {
+                    addAccount().catch((e) => toast((e as Error).message, { kind: "error" }));
+                  }}
+                >
+                  <span className="menu-item-icon">
+                    <UserPlus size={14} />
+                  </span>
+                  <span className="menu-item-label">別のアカウントを追加</span>
+                </button>
+                {(blocked || accounts.length >= maxAccounts) && (
+                  <div className="user-menu-note">{blocked ?? `同時にログインできるのは ${maxAccounts} つまでです`}</div>
+                )}
+              </>
+            )}
             <div className="menu-divider" role="separator" />
-            <button
-              role="menuitem"
-              className="menu-item"
-              data-testid="user-menu-logout"
-              onClick={() => {
-                close();
-                void logout();
-              }}
-            >
-              <span className="menu-item-icon">
-                <LogOut size={14} />
-              </span>
-              <span className="menu-item-label">ログアウト</span>
-            </button>
+            {multi ? (
+              <>
+                <button
+                  role="menuitem"
+                  className="menu-item"
+                  data-testid="user-menu-logout-current"
+                  disabled={!!blocked}
+                  onClick={() => {
+                    close();
+                    logoutCurrentAccount().catch((e) => toast((e as Error).message, { kind: "error" }));
+                  }}
+                >
+                  <span className="menu-item-icon">
+                    <LogOut size={14} />
+                  </span>
+                  <span className="menu-item-label">このアカウントからログアウト</span>
+                </button>
+                <button
+                  role="menuitem"
+                  className="menu-item danger"
+                  data-testid="user-menu-logout-all"
+                  onClick={() => {
+                    close();
+                    void logout();
+                  }}
+                >
+                  <span className="menu-item-icon">
+                    <LogOut size={14} />
+                  </span>
+                  <span className="menu-item-label">すべてのアカウントからログアウト</span>
+                </button>
+              </>
+            ) : (
+              <button
+                role="menuitem"
+                className="menu-item"
+                data-testid="user-menu-logout"
+                onClick={() => {
+                  close();
+                  void logout();
+                }}
+              >
+                <span className="menu-item-icon">
+                  <LogOut size={14} />
+                </span>
+                <span className="menu-item-label">ログアウト</span>
+              </button>
+            )}
+            {pendingCount > 0 && <div className="user-menu-note">{`未送信の変更（${pendingCount}件）は消えます`}</div>}
           </div>
         </Popover>
       )}

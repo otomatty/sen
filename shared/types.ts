@@ -43,6 +43,16 @@ export interface WorkspaceSummary {
   urlKey: string;
 }
 
+/** このブラウザでログインしているアカウント（複数アカウント） */
+export interface DeviceAccount {
+  id: string;
+  name: string;
+  email: string;
+  avatarColor: string;
+  /** 今使っているアカウント */
+  current: boolean;
+}
+
 export interface Team {
   id: string;
   name: string;

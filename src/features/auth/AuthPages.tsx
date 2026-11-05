@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { api } from "../../lib/api";
 import { Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
-import { devSignIn, lastWorkspaceKey, loadSession, logout, signInWithGoogle, signOut, useSession } from "../../app/session";
+import { devSignIn, lastWorkspaceKey, loadSession, logout, refreshAccounts, signInWithGoogle, useSession } from "../../app/session";
 
 const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 
@@ -79,7 +79,7 @@ function GoogleSignInButton({
   errorCallbackURL: string;
   error?: string | null;
   disabled?: boolean;
-  /** Google へ移る前にすること（別のアカウントに切り替えるときのログアウトなど） */
+  /** Google へ移る前にすること（別のアカウントを追加するとき、今のアカウントを記録に加えるなど） */
   beforeSignIn?: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -221,7 +221,7 @@ export function InvitePage() {
             <div className="auth-divider">または</div>
           </>
         )}
-        {/* ログアウトしてから Google へ移るときも、ボタンが作り直されないよう同じ位置に置く */}
+        {/* ログイン中かどうかでボタンが作り直されないよう、同じ位置に置く */}
         {session.status !== "unknown" && (
           <GoogleSignInButton
             label={authed ? "別の Google アカウントで参加" : "Google でログインして参加"}
@@ -231,7 +231,7 @@ export function InvitePage() {
             disabled={busy || !invite}
             beforeSignIn={async () => {
               writeJoinMark(code);
-              if (authed) await signOut();
+              if (authed) await refreshAccounts();
             }}
           />
         )}

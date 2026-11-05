@@ -11,6 +11,8 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 // 本番では window.fetch、ブラウザ内デモではブラウザ内バックエンドに差し替える
 let transport: FetchLike = (input, init) => fetch(input, init);
 let bearer: string | null = null;
+let currentUserId: string | null = null;
+let accountSwitchedHandler: (() => void) | null = null;
 
 export function setTransport(fn: FetchLike) {
   transport = fn;
@@ -19,10 +21,21 @@ export function setBearerToken(token: string | null) {
   bearer = token;
 }
 
+/** 画面が今見ている利用者。リクエストに載せ、別タブで切り替わっていたらサーバーが止める */
+export function setCurrentUserId(id: string | null) {
+  currentUserId = id;
+}
+
+/** サーバーが「別のアカウントに切り替わった」と返したとき（画面の読み込み直しなど） */
+export function setAccountSwitchedHandler(fn: (() => void) | null) {
+  accountSwitchedHandler = fn;
+}
+
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const headers: Record<string, string> = { "x-sen-client": "1" };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (bearer) headers.authorization = `Bearer ${bearer}`;
+  if (currentUserId) headers["x-sen-user"] = currentUserId;
   let res: Response;
   try {
     res = await transport(path, {
@@ -44,7 +57,8 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   }
   if (!res.ok) {
     // アプリの API は { error }、Better Auth（/api/auth/*）は { message } でエラーを返す
-    const body = data as { error?: string; message?: string } | null;
+    const body = data as { error?: string; message?: string; code?: string } | null;
+    if (res.status === 409 && body?.code === "account-switched") accountSwitchedHandler?.();
     const msg = body?.error ?? body?.message ?? `エラーが発生しました (${res.status})`;
     throw new ApiError(msg, res.status);
   }

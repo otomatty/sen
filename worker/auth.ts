@@ -1,8 +1,9 @@
 import type { Context } from "hono";
 import { betterAuth, type BetterAuthPlugin } from "better-auth";
-import { APIError, createAuthEndpoint } from "better-auth/api";
-import { setSessionCookie } from "better-auth/cookies";
+import { APIError, createAuthEndpoint, sessionMiddleware } from "better-auth/api";
+import { parseCookies, setSessionCookie } from "better-auth/cookies";
 import { bearer } from "better-auth/plugins/bearer";
+import { multiSession } from "better-auth/plugins/multi-session";
 import { AVATAR_COLORS } from "../shared/constants";
 import type { Me } from "../shared/types";
 import { first, run } from "./db";
@@ -13,6 +14,8 @@ import { toMe } from "./serialize";
 // ログインの情報は auth_* テーブル、アプリのプロフィール（表示名・設定など）は users テーブルが持ち、同じ ID で結び付ける。
 
 const SESSION_TTL = 60 * 60 * 24 * 30; // 秒
+/** 1 つのブラウザで同時にログインできるアカウント数 */
+export const MAX_ACCOUNTS = 5;
 /** DEV_TOOLS=1 の環境（ローカル開発・テスト・デモ）で BETTER_AUTH_SECRET が無いときだけ使う */
 const DEV_SECRET = "sen-local-development-only-secret-0000000000";
 /** 開発用ログインで使えるのは、実在しない予約済みドメインのアドレスだけ */
@@ -59,6 +62,31 @@ function devSignIn(env: Env): BetterAuthPlugin {
       }),
     },
   };
+}
+
+/**
+ * 複数アカウントに対応する前からログインしている人は、今のセッションが記録に無い。
+ * そのまま別のアカウントを追加すると、元のアカウントへ戻れなくなるので、先に記録に加える。
+ */
+function adoptCurrentSession() {
+  return {
+    id: "sen-adopt-current-session",
+    endpoints: {
+      adoptCurrentSession: createAuthEndpoint(
+        "/multi-session/adopt-current",
+        { method: "POST", use: [sessionMiddleware], requireHeaders: true },
+        async (ctx) => {
+          const token = ctx.context.session.session.token;
+          const name = `${ctx.context.authCookies.sessionToken.name}_multi-${token.toLowerCase()}`;
+          const cookies = parseCookies(ctx.headers?.get("cookie") ?? "");
+          if (cookies.has(name)) return ctx.json({ adopted: false });
+          // setSessionCookie が新しいセッションとして印を付けるので、multiSession のあとのフックが記録の Cookie を足す。上限の判定もそちらに任せる
+          await setSessionCookie(ctx, ctx.context.session);
+          return ctx.json({ adopted: true });
+        },
+      ),
+    },
+  } satisfies BetterAuthPlugin;
 }
 
 function createAuth(env: Env, baseURL: string) {
@@ -108,7 +136,12 @@ function createAuth(env: Env, baseURL: string) {
       database: { generateId: () => crypto.randomUUID() },
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"] },
     },
-    plugins: [...(dev ? [devSignIn(env)] : []), ...(env.DEMO_MODE === "1" ? [bearer()] : [])],
+    plugins: [
+      multiSession({ maximumSessions: MAX_ACCOUNTS }),
+      adoptCurrentSession(),
+      ...(dev ? [devSignIn(env)] : []),
+      ...(env.DEMO_MODE === "1" ? [bearer()] : []),
+    ],
   });
 }
 
@@ -126,11 +159,15 @@ export function getAuth(c: Context<AppEnv>): Auth {
   return auth;
 }
 
+/** Better Auth が付けた Set-Cookie（期限の延長・削除・切り替え）をそのまま返す */
+export function forwardCookies(c: Context<AppEnv>, headers: Headers) {
+  for (const cookie of headers.getSetCookie()) c.header("set-cookie", cookie, { append: true });
+}
+
 /** ログイン中のユーザー。初めてログインしたときは、アプリのプロフィールを作る */
 export async function getSessionUser(c: Context<AppEnv>): Promise<Me | null> {
   const { headers, response } = await getAuth(c).api.getSession({ headers: c.req.raw.headers, returnHeaders: true });
-  // セッションの期限を延ばした・消したときの Cookie をそのまま返す
-  for (const cookie of headers.getSetCookie()) c.header("set-cookie", cookie, { append: true });
+  forwardCookies(c, headers);
   if (!response) return null;
   const { user } = response;
   const select = () => first<Record<string, unknown>>(c.env.DB, "SELECT * FROM users WHERE id = ?", user.id);
