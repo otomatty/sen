@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Link } from "react-router";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Tag } from "lucide-react";
 import type { ProgressActivity, ProgressTask } from "../../../shared/progress";
 import { cx, readLocal, writeLocal } from "../../lib/utils";
 import { useWsPath } from "../../app/hooks";
@@ -20,6 +20,11 @@ const PROCESS_OPTION_PREFIX = "process:";
 
 function processOptionId(name: string): string {
   return `${PROCESS_OPTION_PREFIX}${name}`;
+}
+
+/** 予約項目の表示名と同じ工程名だけ「」で囲む。メニューと選んだあとのボタンで使う */
+function processDisplayName(name: string): string {
+  return name === "すべて" || name === "工程なし" ? `「${name}」` : name;
 }
 
 function processFilterFromOption(id: string): ProcessFilter {
@@ -44,7 +49,7 @@ export function WbsTab({ model }: { model: ProgressModel }) {
 
   const assigneeLabel =
     assignee === "all" ? "すべて" : assignee === "me" ? "自分" : assignee === "none" ? "未割り当て" : (members.find((member) => member.id === assignee)?.name ?? "すべて");
-  const processLabel = process.kind === "all" ? "すべて" : process.kind === "none" ? "工程なし" : process.name;
+  const processLabel = process.kind === "all" ? "すべて" : process.kind === "none" ? "工程なし" : processDisplayName(process.name);
   const toggle = (projectId: string) => {
     const next = new Set(collapsed);
     if (next.has(projectId)) next.delete(projectId);
@@ -75,7 +80,16 @@ export function WbsTab({ model }: { model: ProgressModel }) {
           options={[
             { id: "all", label: "すべて" },
             { id: "none", label: "工程なし" },
-            ...processes.map((name) => ({ id: processOptionId(name), label: name })),
+            ...(processes.length > 0
+              ? [
+                  "divider" as const,
+                  ...processes.map((name) => ({
+                    id: processOptionId(name),
+                    label: processDisplayName(name),
+                    icon: <Tag size={14} />,
+                  })),
+                ]
+              : []),
           ]}
           onChange={(id) => setProcess(processFilterFromOption(id))}
         />
@@ -250,7 +264,7 @@ function FilterMenu({
   testId: string;
   label: string;
   value: string;
-  options: { id: string; label: string }[];
+  options: ({ id: string; label: string; icon?: ReactNode } | "divider")[];
   onChange: (id: string) => void;
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
@@ -270,10 +284,15 @@ function FilterMenu({
         <Menu
           anchor={anchor}
           onClose={() => setAnchor(null)}
-          items={options.map((option) => ({
-            label: option.label,
-            onSelect: () => onChange(option.id),
-          }))}
+          items={options.map((option) =>
+            option === "divider"
+              ? option
+              : {
+                  label: option.label,
+                  icon: option.icon,
+                  onSelect: () => onChange(option.id),
+                },
+          )}
         />
       )}
     </>
