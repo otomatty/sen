@@ -2,10 +2,15 @@
 // ブラウザ内デモ（demo/backend.ts → worker/app.ts）からも読み込まれるため、
 // cloudflare:workers や Node の API は使わない。
 
-import type { Change } from "../sync";
-import { all } from "../db";
 import type { Env, WorkspaceRow } from "../env";
 import { githubWebhookReady } from "./signature";
+
+/** scheduleGitHubSync が見る分だけ。sync.ts を読むと、テストからこのファイルを辿ったときに移行 SQL まで進む */
+interface GitHubSyncChange {
+  entity: string;
+  entityId: string;
+  op: string;
+}
 
 const API_ORIGIN = "https://api.github.com";
 const DEFAULT_DELAY_MS = 3_000;
@@ -48,7 +53,7 @@ export function githubWebhookUrl(origin: string): string {
 export async function scheduleGitHubSync(
   env: Env,
   ws: WorkspaceRow,
-  changes: Change[],
+  changes: GitHubSyncChange[],
   via: string | null | undefined,
 ): Promise<void> {
   if (via === "GitHub") return;
@@ -77,6 +82,7 @@ export async function githubRealtime(env: Env, workspaceId: string, path: string
 
 /** 編集済みと、GitHub から取り込んだコメントは印を付けない */
 async function addedCommentIds(env: Env, workspaceId: string, ids: string[]): Promise<string[]> {
+  const { all } = await import("../db");
   const found: string[] = [];
   const chunkSize = 90;
   for (let i = 0; i < ids.length; i += chunkSize) {

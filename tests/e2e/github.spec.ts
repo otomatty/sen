@@ -1,10 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import type { BootstrapPayload, GitHubRepo, StateType } from "../../shared/types";
+import type { Activity, BootstrapPayload, Comment, GitHubLink, GitHubRepo, Issue, Mutation, StateType } from "../../shared/types";
+import {
+  initialStateId,
+  mergeLabels,
+  mergeOpenClosed,
+  mergeScalar,
+  nextGitHubAssignees,
+  parseIssueRef,
+  resolveGitHubAssignee,
+  stateIdForGitHub,
+  type WorkflowStateRef,
+} from "../../worker/github/merge";
 import { acceptGitHubWebhook, githubSignature, verifyGitHubSignature } from "../../worker/github/signature";
 import { devSignIn, dismissWelcome, signupViaUi } from "./helpers";
-import { GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
+import { GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock, type MockIssue } from "./github-mock";
 
 const SECRET = "e2e-github-webhook-secret";
 
@@ -270,6 +281,442 @@ test.describe.serial("GitHub 連携の設定", () => {
     await input.blur();
     await expect.poll(async () => (await bootstrap(page, ws)).me.githubLogin).toBeNull();
   });
+
+  test("連携したチームで課題を作ると GitHub に Issue ができ、画面と履歴に出る", async () => {
+    githubMock.labels.set("acme/widgets", [{ name: "Bug" }, { name: "GitHubOnly" }]);
+    const data = await bootstrap(page, ws);
+    const team = data.teams.find((item) => item.key === "DEF");
+    expect(team).toBeTruthy();
+    teamId = team!.id;
+    meId = data.me.id;
+    bugLabel = randomUUID();
+    senOnlyLabel = randomUUID();
+    expect((await postMutation(page, ws, { type: "user.update", args: { githubLogin: "octocat" } })).ok).toBe(true);
+    expect((await postMutation(page, ws, { type: "label.create", args: { id: bugLabel, name: "Bug", color: "#c45c26" } })).ok).toBe(true);
+    expect((await postMutation(page, ws, { type: "label.create", args: { id: senOnlyLabel, name: "SenOnly", color: "#4c6ef5" } })).ok).toBe(true);
+
+    const created = await createSenIssue(page, ws, {
+      title: "同期される課題",
+      description: "最初の本文",
+      assigneeId: meId,
+      labelIds: [bugLabel, senOnlyLabel],
+    });
+    syncedIssueId = created.id;
+    const remote = await waitMockIssue("同期される課題");
+    syncedNumber = remote.number;
+    expect(remote.body).toBe("最初の本文");
+    expect(remote.labels.map((label) => label.name)).toEqual(["Bug"]);
+    expect(remote.assignees.map((user) => user.login)).toEqual(["octocat"]);
+    const link = await waitLink(page, ws, syncedIssueId);
+    expect(link).toMatchObject({ repo: "acme/widgets", number: remote.number });
+    await expect.poll(async () => activityActions(page, ws, syncedIssueId)).toContain("created");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${remote.number}`);
+    await expect(page.getByTestId("github-issue-link")).toHaveAttribute("href", `https://github.com/acme/widgets/issues/${remote.number}`);
+    await expect(page.getByTestId("github-synced-at")).toBeVisible();
+    await expect(page.getByTestId("github-unlink")).toBeVisible();
+    await expect(page.getByTestId("activity-line").filter({ hasText: "を作りました" })).toBeVisible();
+    const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
+    expect(fits).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+    const html = await page.content();
+    expect(html).not.toContain(GITHUB_TOKEN);
+    expect(html).not.toContain(SECRET);
+  });
+
+  test("タイトルと説明は双方向に反映され、同じ変更では PATCH が止ま", async () => {
+    const number = syncedNumber;
+    const before = patchCount(number);
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: syncedIssueId, patch: { title: "Sen で変えた", description: "Sen の説明" } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(number)?.title ?? "", { timeout: 15_000 }).toBe("Sen で変えた");
+    await expect.poll(() => mockIssue(number)?.body ?? "").toBe("Sen の説明");
+    const pushed = patchCount(number);
+    expect(pushed).toBeGreaterThan(before);
+    await page.waitForTimeout(800);
+    expect(patchCount(number)).toBe(pushed);
+
+    const issue = mockIssue(number)!;
+    issue.title = "GitHub で変えた";
+    issue.body = "GitHub の説明";
+    issue.updated_at = new Date().toISOString();
+    const echoed = patchCount(number);
+    expect((await postIssueWebhook(page, number, "edited")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, syncedIssueId)).title, { timeout: 15_000 }).toBe("GitHub で変えた");
+    expect((await senIssue(page, ws, syncedIssueId)).description).toBe("GitHub の説明");
+    await page.goto(`/${ws}/issue/DEF-${(await senIssue(page, ws, syncedIssueId)).number}`);
+    await expect(page.getByTestId("activity-line").filter({ hasText: "GitHub 経由" }).first()).toBeVisible();
+    await page.waitForTimeout(800);
+    expect(patchCount(number)).toBe(echoed);
+  });
+
+  test("完了とキャンセルは closed になり、GitHub の開閉は Sen のステータスになる", async () => {
+    const number = syncedNumber;
+    const data = await bootstrap(page, ws);
+    const done = stateId(data, teamId, "completed", "完了");
+    const canceled = stateId(data, teamId, "canceled", "キャンセル");
+    const unstarted = stateId(data, teamId, "unstarted", "未着手");
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: syncedIssueId, patch: { stateId: done } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(number)?.state ?? "", { timeout: 15_000 }).toBe("closed");
+    expect(mockIssue(number)?.state_reason).toBe("completed");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: syncedIssueId, patch: { stateId: canceled } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(number)?.state_reason ?? "", { timeout: 15_000 }).toBe("not_planned");
+    expect(mockIssue(number)?.state).toBe("closed");
+
+    const issue = mockIssue(number)!;
+    issue.state = "open";
+    issue.state_reason = "reopened";
+    issue.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, number, "reopened")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, syncedIssueId)).stateId, { timeout: 15_000 }).toBe(unstarted);
+
+    issue.state = "closed";
+    issue.state_reason = "completed";
+    issue.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, number, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, syncedIssueId)).stateId, { timeout: 15_000 }).toBe(done);
+  });
+
+  test("閉じた理由だけが変わっても、完了・キャンセル・重複が双方向に反映される", async () => {
+    const created = await createSenIssue(page, ws, { title: "理由を同期する課題", description: "" });
+    const remote = await waitMockIssue("理由を同期する課題");
+    await waitLink(page, ws, created.id);
+    const data = await bootstrap(page, ws);
+    const done = stateId(data, teamId, "completed", "完了");
+    const canceled = stateId(data, teamId, "canceled", "キャンセル");
+    const duplicate = stateId(data, teamId, "canceled", "重複");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { stateId: done } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.state ?? "", { timeout: 15_000 }).toBe("closed");
+    expect(mockIssue(remote.number)?.state_reason).toBe("completed");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { stateId: canceled } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.state_reason ?? "", { timeout: 15_000 }).toBe("not_planned");
+    expect(mockIssue(remote.number)?.state).toBe("closed");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { stateId: done } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.state_reason ?? "", { timeout: 15_000 }).toBe("completed");
+
+    const issue = mockIssue(remote.number)!;
+    issue.state = "closed";
+    issue.state_reason = "not_planned";
+    issue.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(canceled);
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { stateId: duplicate } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.state_reason ?? "", { timeout: 15_000 }).toBe("duplicate");
+    expect(mockIssue(remote.number)?.state).toBe("closed");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { stateId: canceled } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.state_reason ?? "", { timeout: 15_000 }).toBe("not_planned");
+
+    issue.state_reason = "duplicate";
+    issue.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(duplicate);
+  });
+
+  test("説明が両方で変わったら Sen を残し、GitHub 側の説明をコメントにして送る", async () => {
+    const created = await createSenIssue(page, ws, { title: "説明が衝突する課題", description: "元の説明" });
+    const remote = await waitMockIssue("説明が衝突する課題");
+    await waitLink(page, ws, created.id);
+    await page.waitForTimeout(800);
+    remote.body = "GitHub だけが知っている説明";
+    remote.updated_at = new Date().toISOString();
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { description: "Sen に残す説明" } } })).ok).toBe(true);
+    const note = "GitHub 側の説明と同時に変わったため、Sen の説明を残しました。GitHub 側の説明は次のとおりです。";
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).description, { timeout: 15_000 }).toBe("Sen に残す説明");
+    await expect.poll(() => mockIssue(remote.number)?.body ?? "", { timeout: 15_000 }).toBe("Sen に残す説明");
+    await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.body.includes(note) && comment.body.includes("GitHub だけが知っている説明")), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => githubMock.comments.some((comment) => comment.number === remote.number && comment.body.includes(note) && comment.body.includes("GitHub だけが知っている説明") && comment.body.includes("<!-- sen:comment:")), { timeout: 15_000 }).toBe(true);
+  });
+
+  test("両側にあるラベルだけが行き来し、片方にしか無いラベルは残る", async () => {
+    const created = await createSenIssue(page, ws, { title: "ラベルの課題", description: "", labelIds: [bugLabel, senOnlyLabel] });
+    const remote = await waitMockIssue("ラベルの課題");
+    expect(remote.labels.map((label) => label.name)).toEqual(["Bug"]);
+    await waitLink(page, ws, created.id);
+    remote.labels = [{ name: "Bug" }, { name: "GitHubOnly" }];
+    remote.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "labeled")).status()).toBe(202);
+    await page.waitForTimeout(800);
+    const sen = await senIssue(page, ws, created.id);
+    const names = await labelNames(page, ws, sen.labelIds);
+    expect(names).toContain("Bug");
+    expect(names).toContain("SenOnly");
+    expect(names).not.toContain("GitHubOnly");
+    expect(mockIssue(remote.number)?.labels.map((label) => label.name)).toEqual(["Bug", "GitHubOnly"]);
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { labelIds: [senOnlyLabel] } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.labels.map((label) => label.name).join(",") ?? "", { timeout: 15_000 }).toBe("GitHubOnly");
+    expect((await senIssue(page, ws, created.id)).labelIds).toContain(senOnlyLabel);
+  });
+
+  test("登録したメンバーの担当者だけが行き来し、422 のときは担当者を外して送り直す", async () => {
+    const created = await createSenIssue(page, ws, { title: "担当者の課題", description: "担当", assigneeId: meId });
+    const remote = await waitMockIssue("担当者の課題");
+    expect(remote.assignees.map((user) => user.login)).toEqual(["octocat"]);
+    await waitLink(page, ws, created.id);
+    remote.assignees = [{ login: "octocat" }, { login: "outsider" }];
+    remote.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "assigned")).status()).toBe(202);
+    await page.waitForTimeout(800);
+    expect((await senIssue(page, ws, created.id)).assigneeId).toBe(meId);
+    expect(mockIssue(remote.number)?.assignees.map((user) => user.login)).toEqual(["octocat", "outsider"]);
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { assigneeId: null } } })).ok).toBe(true);
+    await expect.poll(() => (mockIssue(remote.number)?.assignees ?? []).map((user) => user.login).join(","), { timeout: 15_000 }).toBe("outsider");
+
+    githubMock.rejectAssignees = true;
+    try {
+      const patches = patchCount(remote.number);
+      expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { title: "担当者は送れない", assigneeId: meId } } })).ok).toBe(true);
+      await expect.poll(() => mockIssue(remote.number)?.title ?? "", { timeout: 15_000 }).toBe("担当者は送れない");
+      const sent = githubMock.requests.filter((item) => item.method === "PATCH" && item.path === `/repos/acme/widgets/issues/${remote.number}`).slice(patches);
+      expect(sent.some((item) => Array.isArray((item.body as { assignees?: unknown } | null)?.assignees) && ((item.body as { assignees: string[] }).assignees.length > 0))).toBe(true);
+      const last = sent[sent.length - 1]?.body as { assignees?: unknown; title?: string };
+      expect(last.assignees).toBeUndefined();
+      expect(last.title).toBe("担当者は送れない");
+      expect(mockIssue(remote.number)?.assignees.map((user) => user.login)).toEqual(["outsider"]);
+      await expect.poll(async () => (await bootstrap(page, ws)).githubLinks.find((link) => link.issueId === created.id)?.lastError ?? "", { timeout: 15_000 }).toContain("担当者を GitHub に反映できませんでした（octocat）");
+      await page.goto(`/${ws}/issue/DEF-${created.number}`);
+      await expect(page.getByTestId("github-last-error")).toContainText("担当者を GitHub に反映できませんでした（octocat）");
+      expect(await page.content()).not.toContain(GITHUB_TOKEN);
+    } finally {
+      githubMock.rejectAssignees = false;
+    }
+  });
+
+  test("コメントは印つきで投稿され、戻ってきても二重にならず、GitHub の @名前 はメンションしない", async ({ browser }) => {
+    const created = await createSenIssue(page, ws, { title: "コメントの課題", description: "コメント用" });
+    const remote = await waitMockIssue("コメントの課題");
+    await waitLink(page, ws, created.id);
+    const commentId = randomUUID();
+    expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body: "Sen からのコメント" } })).ok).toBe(true);
+    await expect.poll(() => githubMock.comments.find((comment) => comment.number === remote.number)?.body ?? "", { timeout: 15_000 }).toContain("Sen からのコメント");
+    const posted = githubMock.comments.find((comment) => comment.number === remote.number)!;
+    expect(posted.body.startsWith("**")).toBe(true);
+    expect(posted.body).toContain("（Sen）");
+    expect(posted.body).toContain(`<!-- sen:comment:${commentId} -->`);
+    expect((await postCommentWebhook(page, remote.number, posted)).status()).toBe(202);
+    await page.waitForTimeout(800);
+    const afterEcho = await threadOf(page, ws, created.id);
+    expect(afterEcho.comments.filter((comment) => comment.body.includes("Sen からのコメント"))).toHaveLength(1);
+
+    const member = githubMock.comments.length;
+    githubMock.comments.push(mockComment(remote.number, "メンバーが書きました", "octocat"));
+    expect((await postCommentWebhook(page, remote.number, githubMock.comments[member]!)).status()).toBe(202);
+    await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.body === "メンバーが書きました" && comment.userId === meId && !comment.githubAuthor), { timeout: 15_000 }).toBe(true);
+
+    await page.goto(`/${ws}/settings/members`);
+    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
+    const ctx = await browser.newContext();
+    const mentioned = await ctx.newPage();
+    await devSignIn(mentioned, { name: "言及 三郎" });
+    await mentioned.goto(`/invite/${code}`);
+    await mentioned.getByTestId("invite-accept").click();
+    await expect(mentioned.getByTestId("app")).toBeVisible();
+    await dismissWelcome(mentioned);
+
+    const outsider = githubMock.comments.length;
+    githubMock.comments.push(mockComment(remote.number, "外部です @言及 三郎", "ghost"));
+    expect((await postCommentWebhook(page, remote.number, githubMock.comments[outsider]!)).status()).toBe(202);
+    await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.githubAuthor === "ghost"), { timeout: 15_000 }).toBe(true);
+    await expect.poll(async () => (await bootstrap(mentioned, ws)).notifications.some((item) => item.type === "mention"), { timeout: 3_000 }).toBe(false);
+    await ctx.close();
+
+    const spoofId = randomUUID();
+    expect((await postMutation(page, ws, { type: "comment.create", args: { id: spoofId, issueId: created.id, body: "成り済まし", githubAuthor: "ghost" } })).ok).toBe(true);
+    await expect.poll(async () => {
+      const comment = (await threadOf(page, ws, created.id)).comments.find((item) => item.id === spoofId);
+      return comment ? comment.githubAuthor : "missing";
+    }, { timeout: 15_000 }).toBeNull();
+
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    const ghost = page.getByTestId("comment").filter({ hasText: "外部です @言及 三郎" });
+    await expect(ghost).toContainText("@ghost（GitHub）");
+    await expect(ghost.getByTestId("github-comment-avatar")).toBeVisible();
+    await expect(ghost).toContainText("GitHub 経由");
+    const own = page.getByTestId("comment").filter({ hasText: "メンバーが書きました" });
+    await expect(own).toContainText("テスト 太郎");
+    await expect(own.getByTestId("github-comment-avatar")).toHaveCount(0);
+    await expect(own).toContainText("GitHub 経由");
+  });
+
+  test("連携のあとに作られた Issue だけを取り込み、古い Issue と PR は取り込まない", async () => {
+    const repo = widgets();
+    const old = pushMockIssue({ title: "連携より前の Issue", created_at: "2000-01-01T00:00:00.000Z", updated_at: new Date().toISOString() });
+    const fresh = pushMockIssue({ title: "連携より後の Issue", created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    const pull = pushMockIssue({ title: "これは PR", created_at: new Date().toISOString(), updated_at: new Date().toISOString(), pull_request: { url: "https://api.github.com/pulls/1" } });
+    expect((await postIssueWebhook(page, old.number, "opened")).status()).toBe(202);
+    expect((await postIssueWebhook(page, fresh.number, "opened")).status()).toBe(202);
+    expect((await postIssueWebhook(page, pull.number, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await bootstrap(page, ws)).issues.some((issue) => issue.title === "連携より後の Issue"), { timeout: 15_000 }).toBe(true);
+    const imported = (await bootstrap(page, ws)).issues.find((issue) => issue.title === "連携より後の Issue")!;
+    await expect.poll(async () => activityActions(page, ws, imported.id)).toContain("imported");
+    await page.waitForTimeout(800);
+    const titles = (await bootstrap(page, ws)).issues.map((issue) => issue.title);
+    expect(titles).not.toContain("連携より前の Issue");
+    expect(titles).not.toContain("これは PR");
+    expect(repo.id).toBeGreaterThan(0);
+  });
+
+  test("Webhook が無くても毎日の突き合わせで Sen に反映される", async () => {
+    const created = await createSenIssue(page, ws, { title: "突き合わせの課題", description: "before" });
+    const remote = await waitMockIssue("突き合わせの課題");
+    await waitLink(page, ws, created.id);
+    await page.waitForTimeout(500);
+    remote.title = "Webhook なしで変えた";
+    remote.updated_at = new Date().toISOString();
+    const res = await page.request.post(`/api/dev/github/reconcile?ws=${encodeURIComponent(ws)}`, { headers: { "x-sen-client": "1" } });
+    expect(res.ok()).toBeTruthy();
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).title, { timeout: 15_000 }).toBe("Webhook なしで変えた");
+    const titles = (await bootstrap(page, ws)).issues.map((issue) => issue.title);
+    expect(titles).not.toContain("連携より前の Issue");
+    expect(titles).not.toContain("これは PR");
+  });
+
+  test("GitHub で Issue が削除されたら紐づけが外れ、履歴に残る", async () => {
+    const created = await createSenIssue(page, ws, { title: "削除される課題", description: "消える" });
+    const remote = await waitMockIssue("削除される課題");
+    await waitLink(page, ws, created.id);
+    githubMock.issues = githubMock.issues.filter((issue) => issue.number !== remote.number || issue.fullName !== "acme/widgets");
+    expect((await postIssueWebhook(page, remote.number, "deleted")).status()).toBe(202);
+    await expect.poll(async () => (await bootstrap(page, ws)).githubLinks.some((link) => link.issueId === created.id), { timeout: 15_000 }).toBe(false);
+    await expect.poll(async () => activityActions(page, ws, created.id)).toContain("unlinked");
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("activity-line").filter({ hasText: "紐づけを外しました" })).toBeVisible();
+  });
+
+  test("手で紐づけ、作成、解除ができ、別の課題や別リポジトリは断る", async () => {
+    const headers = { "x-sen-client": "1" };
+    const unlinked = await page.request.delete(`/api/github/repos/${teamId}?ws=${encodeURIComponent(ws)}`, { headers });
+    expect(unlinked.ok()).toBeTruthy();
+    const older = await createSenIssue(page, ws, { title: "連携より前に作った課題", description: "手で作る" });
+    const senSide = await createSenIssue(page, ws, { title: "Sen に合わせる課題", description: "Sen の本文" });
+    const githubSide = await createSenIssue(page, ws, { title: "上書きされる Sen", description: "上書きされる本文" });
+    const duplicate = await createSenIssue(page, ws, { title: "重複して紐づけたい", description: "" });
+    await page.waitForTimeout(800);
+    const relinked = await page.request.post(`/api/github/repos?ws=${encodeURIComponent(ws)}`, { headers, data: { teamId, repo: "acme/widgets" } });
+    expect(relinked.ok()).toBeTruthy();
+    await page.waitForTimeout(800);
+    expect(githubMock.issues.some((issue) => issue.title === "連携より前に作った課題")).toBe(false);
+    expect(githubMock.issues.some((issue) => issue.title === "Sen に合わせる課題")).toBe(false);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/${ws}/issue/DEF-${older.number}`);
+    await expect(page.getByTestId("github-create")).toBeVisible();
+    const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
+    expect(fits).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await page.getByTestId("github-create").click();
+    const createdRemote = await waitMockIssue("連携より前に作った課題");
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${createdRemote.number}`, { timeout: 15_000 });
+    await expect.poll(async () => activityActions(page, ws, older.id)).toContain("created");
+
+    const senRemote = pushMockIssue({ title: "GitHub 側のタイトル", body: "GitHub 側の本文", created_at: "2000-01-01T00:00:00.000Z" });
+    await page.goto(`/${ws}/issue/DEF-${senSide.number}`);
+    await page.getByTestId("github-link-existing").click();
+    await page.getByTestId("github-link-ref").fill(`acme/widgets#${senRemote.number}`);
+    await page.getByTestId("github-link-prefer-sen").check();
+    await page.getByTestId("github-link-submit").click();
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${senRemote.number}`, { timeout: 15_000 });
+    await expect.poll(() => mockIssue(senRemote.number)?.title ?? "").toBe("Sen に合わせる課題");
+    expect(mockIssue(senRemote.number)?.body).toBe("Sen の本文");
+    expect((await senIssue(page, ws, senSide.id)).title).toBe("Sen に合わせる課題");
+    await expect.poll(async () => activityActions(page, ws, senSide.id)).toContain("linked");
+
+    const githubRemote = pushMockIssue({ title: "GitHub に合わせる", body: "GitHub の本文", created_at: "2000-01-01T00:00:00.000Z" });
+    await page.goto(`/${ws}/issue/DEF-${githubSide.number}`);
+    await page.getByTestId("github-link-existing").click();
+    await page.getByTestId("github-link-ref").fill(`https://github.com/acme/widgets/issues/${githubRemote.number}`);
+    await page.getByTestId("github-link-prefer-github").check();
+    await page.getByTestId("github-link-submit").click();
+    await expect(page.getByTestId("github-issue-link")).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => (await senIssue(page, ws, githubSide.id)).title).toBe("GitHub に合わせる");
+    expect((await senIssue(page, ws, githubSide.id)).description).toBe("GitHub の本文");
+    expect(mockIssue(githubRemote.number)?.title).toBe("GitHub に合わせる");
+
+    const denied = await page.request.post(`/api/github/issues/${duplicate.id}/link?ws=${encodeURIComponent(ws)}`, {
+      headers,
+      data: { mode: "link", ref: String(senRemote.number), prefer: "sen" },
+    });
+    expect(denied.status()).toBe(409);
+    expect(await denied.json()).toMatchObject({ error: "この Issue は、別の課題とすでに紐づいています" });
+
+    addGitHubRepo("other/lib");
+    pushMockIssue({ fullName: "other/lib", title: "別リポジトリ", created_at: new Date().toISOString() });
+    const wrong = await page.request.post(`/api/github/issues/${duplicate.id}/link?ws=${encodeURIComponent(ws)}`, {
+      headers,
+      data: { mode: "link", ref: "other/lib#1", prefer: "github" },
+    });
+    expect(wrong.status()).toBe(400);
+    expect(((await wrong.json()) as { error: string }).error).toContain("連携していないリポジトリ");
+
+    const titleBefore = mockIssue(createdRemote.number)?.title;
+    await page.goto(`/${ws}/issue/DEF-${older.number}`);
+    await page.getByTestId("github-unlink").click();
+    await expect(page.getByTestId("github-create")).toBeVisible({ timeout: 15_000 });
+    expect(mockIssue(createdRemote.number)?.title).toBe(titleBefore);
+    await expect.poll(async () => activityActions(page, ws, older.id)).toContain("unlinked");
+    await expect(page.getByTestId("activity-line").filter({ hasText: "紐づけを外しました" })).toBeVisible();
+  });
+});
+
+test("課題の 3-way 比較はブラウザを使わない", () => {
+  expect(mergeScalar("同じ", "同じ", "同じ")).toBe("none");
+  expect(mergeScalar("元", "Sen", "元")).toBe("push");
+  expect(mergeScalar("元", "元", "GitHub")).toBe("pull");
+  expect(mergeScalar("元", "両方", "両方")).toBe("none");
+  expect(mergeScalar("元", "Sen", "GitHub")).toBe("sen-wins");
+
+  expect(mergeOpenClosed("open", "closed:completed", "open")).toBe("push");
+  expect(mergeOpenClosed("open", "open", "closed:completed")).toBe("pull");
+  expect(mergeOpenClosed("open", "closed:completed", "closed:not_planned")).toBe("sen-wins");
+  expect(mergeOpenClosed("closed:completed", "closed:not_planned", "closed:completed")).toBe("push");
+  expect(mergeOpenClosed("closed:completed", "closed:completed", "closed:not_planned")).toBe("pull");
+  expect(mergeOpenClosed("closed:completed", "closed:not_planned", "closed:duplicate")).toBe("sen-wins");
+  expect(mergeOpenClosed("closed:completed", "closed:not_planned", "closed:not_planned")).toBe("none");
+  expect(mergeOpenClosed("closed:completed", "closed:completed", "closed:completed")).toBe("none");
+  expect(mergeOpenClosed("closed", "closed:completed", "closed:not_planned")).toBe("none");
+  expect(mergeOpenClosed("closed", "open", "closed:completed")).toBe("push");
+  expect(mergeOpenClosed("closed", "closed:completed", "open")).toBe("pull");
+
+  const common = ["bug", "feature"];
+  expect(mergeLabels(["bug"], ["bug", "feature"], ["bug"], common)).toEqual(["bug", "feature"]);
+  expect(mergeLabels(["bug"], ["bug"], ["bug", "feature"], common)).toEqual(["bug", "feature"]);
+  expect(mergeLabels(["bug", "feature"], ["bug"], ["bug", "feature"], common)).toEqual(["bug"]);
+  expect(mergeLabels(["bug"], ["bug", "SenOnly"], ["Bug", "GitHubOnly"], ["bug"])).toEqual(["bug"]);
+  expect(mergeLabels(["bug"], [], ["feature"], common)).toEqual(["feature"]);
+
+  const members = new Set(["octocat", "alice"]);
+  expect(resolveGitHubAssignee(["OctoCat", "outsider"], "octocat", members)).toBe("octocat");
+  expect(resolveGitHubAssignee(["outsider", "Alice"], "octocat", members)).toBe("alice");
+  expect(resolveGitHubAssignee(["outsider"], null, members)).toBeNull();
+  expect(nextGitHubAssignees(["outsider", "octocat"], "octocat", "alice")).toEqual(["outsider", "alice"]);
+  expect(nextGitHubAssignees(["outsider", "octocat"], "octocat", null)).toEqual(["outsider"]);
+
+  const states: WorkflowStateRef[] = [
+    { id: "backlog", name: "バックログ", type: "backlog", position: 0 },
+    { id: "todo", name: "未着手", type: "unstarted", position: 1 },
+    { id: "doing", name: "進行中", type: "started", position: 2 },
+    { id: "done", name: "完了", type: "completed", position: 3 },
+    { id: "cancel", name: "キャンセル", type: "canceled", position: 4 },
+    { id: "dup", name: "重複", type: "canceled", position: 5 },
+  ];
+  expect(stateIdForGitHub(states, "closed", "completed", "unstarted")).toBe("done");
+  expect(stateIdForGitHub(states, "closed", "not_planned", "unstarted")).toBe("cancel");
+  expect(stateIdForGitHub(states, "closed", "duplicate", "unstarted")).toBe("dup");
+  expect(stateIdForGitHub(states, "open", "reopened", "completed")).toBe("todo");
+  expect(stateIdForGitHub(states, "open", "reopened", "started")).toBeNull();
+  expect(initialStateId(states, "open", null)).toBe("todo");
+  expect(parseIssueRef("12", "acme/widgets")).toEqual({ fullName: "acme/widgets", number: 12 });
+  expect(parseIssueRef("acme/widgets#34", "other/repo")).toEqual({ fullName: "acme/widgets", number: 34 });
+  expect(parseIssueRef("https://github.com/acme/widgets/issues/7", "other/repo")).toEqual({ fullName: "acme/widgets", number: 7 });
+  expect(parseIssueRef("not a ref", "acme/widgets")).toBeNull();
 });
 
 async function postWebhook(
@@ -289,6 +736,163 @@ async function bootstrap(page: Page, ws: string): Promise<BootstrapPayload> {
   const res = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
   expect(res.ok()).toBeTruthy();
   return (await res.json()) as BootstrapPayload;
+}
+
+let teamId = "";
+let meId = "";
+let bugLabel = "";
+let senOnlyLabel = "";
+let syncedIssueId = "";
+let syncedNumber = 0;
+
+async function postMutation(page: Page, ws: string, mutation: Mutation | { type: "comment.create"; args: { id: string; issueId: string; body: string; githubAuthor?: string } }) {
+  const res = await page.request.post(`/api/mutate?ws=${encodeURIComponent(ws)}`, {
+    headers: { "x-sen-client": "1" },
+    data: { ops: [{ clientId: randomUUID(), mutation }] },
+  });
+  const text = await res.text();
+  expect(res.ok(), text).toBeTruthy();
+  const body = JSON.parse(text) as { results: { ok: boolean; error?: string }[] };
+  return body.results[0] ?? { ok: false, error: text };
+}
+
+async function createSenIssue(
+  page: Page,
+  ws: string,
+  input: { title: string; description: string; assigneeId?: string; labelIds?: string[] },
+): Promise<Issue> {
+  const id = randomUUID();
+  const result = await postMutation(page, ws, {
+    type: "issue.create",
+    args: { id, teamId, title: input.title, description: input.description, assigneeId: input.assigneeId, labelIds: input.labelIds },
+  });
+  expect(result.ok, result.error).toBe(true);
+  return waitSenIssue(page, ws, id);
+}
+
+async function waitSenIssue(page: Page, ws: string, id: string): Promise<Issue> {
+  let found: Issue | undefined;
+  await expect.poll(async () => {
+    found = (await bootstrap(page, ws)).issues.find((issue) => issue.id === id);
+    return found?.number ?? 0;
+  }, { timeout: 15_000 }).toBeGreaterThan(0);
+  return found!;
+}
+
+async function senIssue(page: Page, ws: string, id: string): Promise<Issue> {
+  const issue = (await bootstrap(page, ws)).issues.find((item) => item.id === id);
+  if (!issue) throw new Error("課題が見つかりません");
+  return issue;
+}
+
+async function waitLink(page: Page, ws: string, issueId: string): Promise<GitHubLink> {
+  let found: GitHubLink | undefined;
+  await expect.poll(async () => {
+    found = (await bootstrap(page, ws)).githubLinks.find((link) => link.issueId === issueId);
+    return found?.number ?? 0;
+  }, { timeout: 15_000 }).toBeGreaterThan(0);
+  return found!;
+}
+
+async function waitMockIssue(title: string): Promise<MockIssue> {
+  let found: MockIssue | undefined;
+  await expect.poll(() => {
+    found = githubMock.issues.find((issue) => issue.fullName === "acme/widgets" && issue.title === title);
+    return Boolean(found);
+  }, { timeout: 15_000 }).toBe(true);
+  return found!;
+}
+
+function mockIssue(number: number): MockIssue | undefined {
+  return githubMock.issues.find((issue) => issue.fullName === "acme/widgets" && issue.number === number);
+}
+
+function patchCount(number: number): number {
+  return githubMock.requests.filter((item) => item.method === "PATCH" && item.path === `/repos/acme/widgets/issues/${number}`).length;
+}
+
+function widgets() {
+  const repo = githubMock.repos.get("acme/widgets");
+  if (!repo) throw new Error("acme/widgets がありません");
+  return repo;
+}
+
+function pushMockIssue(input: { title: string; body?: string | null; created_at: string; updated_at?: string; fullName?: string; pull_request?: unknown }): MockIssue {
+  const fullName = input.fullName ?? "acme/widgets";
+  const number = githubMock.issues.filter((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase()).reduce((max, issue) => Math.max(max, issue.number), 0) + 1;
+  const issue: MockIssue = {
+    id: githubMock.nextIssueId++,
+    number,
+    fullName,
+    title: input.title,
+    body: input.body ?? "",
+    state: "open",
+    state_reason: null,
+    labels: [],
+    assignees: [],
+    created_at: input.created_at,
+    updated_at: input.updated_at ?? input.created_at,
+    ...(input.pull_request ? { pull_request: input.pull_request } : {}),
+  };
+  githubMock.issues.push(issue);
+  return issue;
+}
+
+function mockComment(number: number, body: string, login: string) {
+  const comment = {
+    id: githubMock.nextCommentId++,
+    fullName: "acme/widgets",
+    number,
+    body,
+    user: { login },
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  return comment;
+}
+
+async function postIssueWebhook(page: Page, number: number, action: string) {
+  const repo = widgets();
+  return postWebhook(page.request, {
+    event: "issues",
+    body: JSON.stringify({ action, issue: { number }, repository: { id: repo.id, full_name: repo.full_name } }),
+  });
+}
+
+async function postCommentWebhook(page: Page, number: number, comment: { id: number; body: string; user: { login: string }; created_at: string }) {
+  const repo = widgets();
+  return postWebhook(page.request, {
+    event: "issue_comment",
+    body: JSON.stringify({
+      action: "created",
+      issue: { number },
+      comment: {
+        id: comment.id,
+        body: comment.body,
+        html_url: `https://github.com/acme/widgets/issues/${number}#issuecomment-${comment.id}`,
+        created_at: comment.created_at,
+        user: comment.user,
+      },
+      repository: { id: repo.id, full_name: repo.full_name },
+      sender: comment.user,
+    }),
+  });
+}
+
+async function threadOf(page: Page, ws: string, issueId: string): Promise<{ comments: Comment[]; activities: Activity[] }> {
+  const res = await page.request.get(`/api/issues/${issueId}/thread?ws=${encodeURIComponent(ws)}`);
+  expect(res.ok()).toBeTruthy();
+  return (await res.json()) as { comments: Comment[]; activities: Activity[] };
+}
+
+async function activityActions(page: Page, ws: string, issueId: string): Promise<string[]> {
+  const thread = await threadOf(page, ws, issueId);
+  return thread.activities.filter((item) => item.type === "github").map((item) => String(item.data.action ?? ""));
+}
+
+async function labelNames(page: Page, ws: string, ids: string[]): Promise<string[]> {
+  const labels = (await bootstrap(page, ws)).labels;
+  return ids.map((id) => labels.find((label) => label.id === id)?.name ?? "");
 }
 
 function stateId(data: BootstrapPayload, teamId: string, type: StateType, name: string): string {

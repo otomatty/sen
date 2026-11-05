@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { createApp } from "./app";
 import { all, ensureMigrated, first, run } from "./db";
 import type { Env, WorkspaceRow } from "./env";
+import { requestGitHubReconcile } from "./github/issues";
 import { GitHubSyncRunner } from "./github/runner";
 import { requestSheetSyncNow, sheetsConfig } from "./sheets/config";
 import { SheetSyncRunner } from "./sheets/runner";
@@ -48,11 +49,16 @@ export default {
     } catch (e) {
       console.error("sheets cron failed", e);
     }
-    // Webhook の重複除け。7 日より古い行を消す。突き合わせの依頼はまだしない。
+    // Webhook の重複除け。7 日より古い行を消す。失敗しても、下の突き合わせは頼む。
     try {
       await run(env.DB, "DELETE FROM github_deliveries WHERE received_at < ?", Date.now() - 7 * 86_400_000);
     } catch (e) {
       console.error("github delivery cleanup failed", e instanceof Error ? e.name : "error");
+    }
+    try {
+      await requestGitHubReconcile(env);
+    } catch (e) {
+      console.error("github reconcile failed", e instanceof Error ? e.name : "error");
     }
   },
 } satisfies ExportedHandler<Env>;
@@ -86,7 +92,15 @@ export class WorkspaceRealtime extends DurableObject<Env> {
     super(ctx, env);
     const signal = () => this.syncAlarm();
     this.sheets = new SheetSyncRunner(ctx.storage, env, signal);
-    this.github = new GitHubSyncRunner(ctx.storage, env, signal);
+    this.github = new GitHubSyncRunner(ctx.storage, env, signal, async (origin) => {
+      await this.sheets.handle(
+        new Request("https://realtime/sheets/schedule", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ origin }),
+        }),
+      );
+    });
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 

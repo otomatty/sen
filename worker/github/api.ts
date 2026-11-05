@@ -52,6 +52,8 @@ export interface GhComment {
   created_at: string;
   updated_at: string;
   user: { login: string } | null;
+  /** 一覧 API が返す。Issue の番号を取り出す */
+  issue_url?: string;
 }
 
 export interface GhHook {
@@ -62,7 +64,7 @@ export interface GhIssueWrite {
   title?: string;
   body?: string;
   state?: "open" | "closed";
-  state_reason?: "completed" | "not_planned" | "reopened";
+  state_reason?: "completed" | "not_planned" | "reopened" | "duplicate";
   labels?: string[];
   assignees?: string[];
 }

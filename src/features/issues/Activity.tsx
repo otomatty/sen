@@ -259,7 +259,13 @@ export function CommentCard({ c }: { c: Comment }) {
   return (
     <div className="comment" data-testid="comment">
       <div className="comment-head">
-        <Avatar user={user} size={20} />
+        {c.githubAuthor ? (
+          <span className="avatar avatar-github" data-testid="github-comment-avatar" title={`@${c.githubAuthor}（GitHub）`} style={{ width: 20, height: 20 }}>
+            GH
+          </span>
+        ) : (
+          <Avatar user={user} size={20} />
+        )}
         <b>{c.githubAuthor ? `@${c.githubAuthor}（GitHub）` : (user?.name ?? "（退出したメンバー）")}</b>{c.via && <ViaBadge via={c.via} />}
         <span className="muted" title={formatDateTime(c.createdAt)}>
           {timeAgo(c.createdAt)}

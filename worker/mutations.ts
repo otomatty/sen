@@ -24,6 +24,11 @@ export interface MutationCtx {
   changes: Change[];
   /** AI ツール（MCP）からの操作のとき、そのツールの名前。履歴・コメント・通知に記録する */
   via?: string | null;
+  /**
+   * サーバーの GitHub 同期だけが付ける。クライアントのミューテーション引数では指定できない。
+   * 設定されているとき、comment.create は github_author に author を保存し、@名前 のメンションは検出しない。
+   */
+  githubComment?: { author: string | null } | null;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -37,6 +42,13 @@ const STATE_TYPES: StateType[] = ["backlog", "unstarted", "started", "completed"
 
 function fail(msg: string, status = 400): never {
   throw new MutationError(msg, status);
+}
+
+/** 同期が渡した GitHub ユーザー名。規則に合わなければ保存しない（コメント自体は作る） */
+function storedGitHubAuthor(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const login = value.trim().toLowerCase();
+  return GITHUB_LOGIN.test(login) ? login : null;
 }
 
 /** 空は登録を消す。それ以外は GitHub の規則に合い、小文字で返す */
@@ -187,6 +199,15 @@ function assertAdmin(ctx: MutationCtx) {
 }
 
 // ---- 記録系ヘルパー ----
+/** GitHub の紐づけ・作成・取り込み。同期の処理だけが呼ぶ */
+export async function recordGitHubActivity(
+  ctx: MutationCtx,
+  issueId: string,
+  data: { action: "created" | "linked" | "unlinked" | "imported"; repo: string; number: number; url: string },
+) {
+  await addActivity(ctx, issueId, "github", data);
+}
+
 async function addActivity(ctx: MutationCtx, issueId: string, type: ActivityType, data: Record<string, unknown> = {}) {
   const id = crypto.randomUUID();
   const via = ctx.via ?? null;
@@ -587,9 +608,12 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const body = cleanMarkdown(a.body, "コメント");
       if (isMarkdownBlank(body)) fail("コメントを入力してください");
       const text = markdownToText(body);
+      // githubAuthor は引数では受け付けない。同期が MutationCtx.githubComment を付けたときだけ保存する。
+      const fromGitHub = ctx.githubComment != null;
+      const githubAuthor = fromGitHub ? storedGitHubAuthor(ctx.githubComment?.author) : null;
       await run(
         db,
-        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via, github_author) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         a.id,
         ws.id,
         issue.id,
@@ -598,6 +622,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         now,
         now,
         ctx.via ?? null,
+        githubAuthor,
       );
       touch(ctx, "comment", a.id);
       const members = await all<Row>(
@@ -605,7 +630,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         "SELECT u.id, u.name FROM users u JOIN members m ON m.user_id = u.id WHERE m.workspace_id = ?",
         ws.id,
       );
-      const mentioned = mentionedUserIds(text, members);
+      const mentioned = fromGitHub ? [] : mentionedUserIds(text, members);
       const subscribers = parseJsonArray(issue.subscriber_ids);
       const nextSubs = [...new Set([...subscribers, user.id, ...mentioned])];
       if (nextSubs.length !== subscribers.length) {
@@ -613,7 +638,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         touch(ctx, "issue", issue.id);
       }
       const snippet = text.slice(0, 140);
-      await addNotifications(ctx, mentioned, issue.id, "mention", { commentId: a.id, snippet });
+      if (!fromGitHub) await addNotifications(ctx, mentioned, issue.id, "mention", { commentId: a.id, snippet });
       await addNotifications(
         ctx,
         subscribers.filter((s) => !mentioned.includes(s)),

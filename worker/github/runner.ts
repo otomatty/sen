@@ -1,11 +1,9 @@
 // GitHub 連携の順番待ち。Durable Object のストレージに置き、アラームで 1 件ずつ処理する。
 // 受け付けは drain() を待たない。処理が GitHub と通信して長くなっても、Webhook は 10 秒以内に返せる。
-// この段階の処理関数は何もしない。次の段階で同じ表に中身を足す。
+// db と同期の実装は、処理するときだけ読む。順番待ちのテストがこのファイルを読み込んでも、移行 SQL まで進まない。
 
-import { ensureMigrated, first } from "../db";
 import type { Env } from "../env";
-import { notifyRealtime, writeChanges } from "../sync";
-import { GitHubError, getUser } from "./api";
+import { GitHubError, getUser, type GhLabel } from "./api";
 import { githubConfig } from "./config";
 import type { GitHubCommentEvent, GitHubIncoming, GitHubPullEvent } from "./events";
 
@@ -17,6 +15,10 @@ const META_KEY = "gh:meta";
 export interface GitHubProcessorContext {
   env: Env;
   workspaceId: string;
+  /** 1 回の drain() のあいだ、リポジトリのラベル一覧を覚えておく */
+  labelCache: Map<string, GhLabel[]>;
+  enqueueComment: (commentId: string) => Promise<void>;
+  scheduleSheets?: () => Promise<void>;
 }
 
 export interface GitHubProcessorJob {
@@ -25,15 +27,28 @@ export interface GitHubProcessorJob {
 }
 
 /**
- * 出来事の種類ごとの処理。この段階では受け取った印を消すだけで、同期はしない。
+ * 出来事の種類ごとの処理。pull は次の段階まで何もしない。
  * issue: Sen で変わった課題。githubIssue: GitHub で変わった Issue。
- * comment: Sen で追加されたコメント。githubComment: GitHub で追加されたコメント。pull: PR。
+ * comment: Sen で追加されたコメント。githubComment: GitHub で追加されたコメント。
  */
 export const processors: Record<"issue" | "githubIssue" | "comment" | "githubComment" | "pull", (ctx: GitHubProcessorContext, job: GitHubProcessorJob) => Promise<void>> = {
-  issue: async () => {},
-  githubIssue: async () => {},
-  comment: async () => {},
-  githubComment: async () => {},
+  issue: async (ctx, job) => {
+    const { reconcileIssue } = await import("./sync");
+    await reconcileIssue(ctx, { issueId: job.key.slice("gh:dirty:issue:".length) });
+  },
+  githubIssue: async (ctx, job) => {
+    const { reconcileIssue } = await import("./sync");
+    const [repoId, number] = job.key.slice("gh:dirty:gh:".length).split(":");
+    await reconcileIssue(ctx, { repoId: Number(repoId), number: Number(number) });
+  },
+  comment: async (ctx, job) => {
+    const { pushComment } = await import("./sync");
+    await pushComment(ctx, job.key.slice("gh:dirty:comment:".length));
+  },
+  githubComment: async (ctx, job) => {
+    const { pullComment } = await import("./sync");
+    await pullComment(ctx, job.payload as GitHubCommentEvent);
+  },
   pull: async () => {},
 };
 
@@ -75,10 +90,17 @@ export class GitHubSyncRunner {
   /** 印の出し入れと nextAt。同時に計算しても、遅い方の古い結果で早い時刻を上書きしない */
   private state: Promise<void> = Promise.resolve();
 
+  /** 1 回の drain() で使い回すラベル一覧 */
+  private labels = new Map<string, GhLabel[]>();
+  /** 課題ごとの処理。drain() の全体は待たせず、同じ課題だけ重ならないようにする */
+  private locks = new Map<string, Promise<void>>();
+
   constructor(
     private storage: DurableObjectStorage,
     private env: Env,
     private signal: () => Promise<void>,
+    /** 同じ Durable Object のシート予約。自分へ fetch しない */
+    private localSheets?: (origin: string) => Promise<void>,
   ) {}
 
   async handle(request: Request): Promise<Response | null> {
@@ -102,6 +124,8 @@ export class GitHubSyncRunner {
       await this.enqueueEvent(body);
       return Response.json({ ok: true });
     }
+    if (path === "/github/issue" && request.method === "POST") return this.handleIssue(request);
+    if (path === "/github/reconcile" && request.method === "POST") return this.handleReconcile(request);
     return null;
   }
 
@@ -203,6 +227,7 @@ export class GitHubSyncRunner {
   }
 
   private async drain(): Promise<void> {
+    this.labels = new Map();
     for (let n = 0; n < 50; n++) {
       const current = await this.loadMeta();
       if (current.rateLimitReset != null && current.rateLimitReset > Date.now() + 1500) break;
@@ -216,8 +241,13 @@ export class GitHubSyncRunner {
   private async processOne(job: DueJob): Promise<void> {
     const kind = kindOf(job.key);
     const meta = await this.loadMeta();
+    const workspaceId = meta.workspaceId ?? "";
     try {
-      if (kind) await processors[kind]({ env: this.env, workspaceId: meta.workspaceId ?? "" }, { key: job.key, payload: job.item.payload });
+      const keys = await this.lockKeys(workspaceId, job);
+      await this.withLocks(keys, async () => {
+        if (!kind) return;
+        await processors[kind](this.processorCtx(workspaceId), { key: job.key, payload: job.item.payload });
+      });
       await this.ifCurrent(job, () => this.storage.delete(job.key));
     } catch (e) {
       const gh = e instanceof GitHubError ? e : null;
@@ -251,12 +281,14 @@ export class GitHubSyncRunner {
   private async giveUp(job: DueJob, message: string): Promise<void> {
     const meta = await this.loadMeta();
     const workspaceId = meta.workspaceId;
-    if (!workspaceId) return;
+    if (!workspaceId || !this.env.DB) return;
     const cfg = githubConfig(this.env);
     const reason = (cfg && message.includes(cfg.token) ? "GitHub との同期に失敗しました" : message).slice(0, 500);
     try {
+      const { ensureMigrated, first } = await import("../db");
+      const { notifyRealtime, writeChanges } = await import("../sync");
       await ensureMigrated(this.env.DB);
-      const issueId = await issueIdFor(this.env.DB, workspaceId, job);
+      const issueId = await issueIdFor(this.env.DB, workspaceId, job, first);
       if (!issueId) return;
       const updated = await this.env.DB.prepare("UPDATE github_issue_links SET last_error = ? WHERE issue_id = ? AND workspace_id = ?")
         .bind(reason, issueId, workspaceId)
@@ -356,6 +388,125 @@ export class GitHubSyncRunner {
   private async saveMeta(meta: GhMeta): Promise<void> {
     await this.storage.put(META_KEY, meta);
   }
+
+  private processorCtx(workspaceId: string): GitHubProcessorContext {
+    const origin = this.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ?? "";
+    return {
+      env: this.env,
+      workspaceId,
+      labelCache: this.labels,
+      enqueueComment: (commentId) => this.enqueueComment(commentId),
+      scheduleSheets: this.localSheets ? () => this.localSheets!(origin) : undefined,
+    };
+  }
+
+  private async enqueueComment(commentId: string): Promise<void> {
+    await this.putItem(`gh:dirty:comment:${commentId}`, Date.now());
+    await this.recomputeNext();
+  }
+
+  private async lockKeys(workspaceId: string, job: DueJob): Promise<string[]> {
+    if (!this.env.DB || !workspaceId) return [];
+    const { lockKeysForJob } = await import("./sync");
+    return lockKeysForJob(this.env.DB, workspaceId, job.key, job.item.payload);
+  }
+
+  /** 空ならそのまま。キーは名前順に取り、同じ課題の処理とだけ重ならないようにする */
+  private async withLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
+    const ordered = [...new Set(keys)].filter(Boolean).sort();
+    if (!ordered.length) return fn();
+    const waits: Promise<void>[] = [];
+    const releases: (() => void)[] = [];
+    for (const key of ordered) {
+      const prev = this.locks.get(key) ?? Promise.resolve();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const tail = prev.then(() => gate, () => gate);
+      this.locks.set(key, tail);
+      waits.push(prev.then(() => undefined, () => undefined));
+      releases.push(() => {
+        release();
+        if (this.locks.get(key) === tail) this.locks.delete(key);
+      });
+    }
+    for (const wait of waits) await wait;
+    try {
+      return await fn();
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+  }
+
+  private async handleIssue(request: Request): Promise<Response> {
+    const body = await readJson<{ workspaceId?: unknown; userId?: unknown; issueId?: unknown; action?: unknown; ref?: unknown; prefer?: unknown }>(request);
+    const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
+    const userId = typeof body.userId === "string" ? body.userId : "";
+    const issueId = typeof body.issueId === "string" ? body.issueId : "";
+    let action: "create" | "link" | "unlink" | null = null;
+    if (body.action === "create" || body.action === "link" || body.action === "unlink") action = body.action;
+    if (!workspaceId || !userId || !issueId || !action) return Response.json({ error: "要求が不正です" }, { status: 400 });
+    let prefer: "sen" | "github" | undefined;
+    if (body.prefer === "sen" || body.prefer === "github") prefer = body.prefer;
+    const op = {
+      workspaceId,
+      userId,
+      issueId,
+      action,
+      ref: typeof body.ref === "string" ? body.ref : undefined,
+      prefer,
+    };
+    try {
+      const { lockKeysForManual, runManual } = await import("./sync");
+      const keys = this.env.DB ? await lockKeysForManual(this.env.DB, op) : [`issue:${issueId}`];
+      await this.rememberWorkspace(workspaceId);
+      await this.withLocks(keys, () => runManual(this.processorCtx(workspaceId), op));
+      return Response.json({ ok: true });
+    } catch (e) {
+      const { MutationError } = await import("../mutations");
+      if (e instanceof MutationError) return Response.json({ error: e.message }, { status: e.status });
+      if (e instanceof GitHubError) return Response.json({ error: e.message }, { status: e.status === 401 || e.status === 403 || e.status === 429 ? e.status : 502 });
+      console.error("github issue op failed", e instanceof Error ? e.name : "error");
+      return Response.json({ error: "GitHub との同期に失敗しました" }, { status: 500 });
+    }
+  }
+
+  private async handleReconcile(request: Request): Promise<Response> {
+    const body = await readJson<{ workspaceId?: unknown }>(request);
+    const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
+    if (!workspaceId) return Response.json({ error: "ワークスペースがありません" }, { status: 400 });
+    try {
+      await this.rememberWorkspace(workspaceId);
+      const { scanUpdates } = await import("./sync");
+      await scanUpdates(
+        this.env,
+        workspaceId,
+        {
+          get: async (key) => {
+            const value = await this.storage.get<string>(key);
+            return typeof value === "string" ? value : undefined;
+          },
+          put: (key, value) => this.storage.put(key, value),
+        },
+        {
+          issue: async (repoId, number) => {
+            await this.putItem(`gh:dirty:gh:${repoId}:${number}`, Date.now());
+          },
+          comment: async (payload) => {
+            await this.putItem(`gh:event:comment:${payload.comment.id}`, Date.now(), payload);
+          },
+        },
+      );
+      await this.recomputeNext();
+      return Response.json({ ok: true });
+    } catch (e) {
+      const gh = e instanceof GitHubError ? e : null;
+      console.error("github reconcile failed", gh ? gh.status : e instanceof Error ? e.name : "error");
+      if (gh && (gh.status === 401 || gh.status === 429 || gh.rateLimitReset != null)) await this.note({ error: gh.message, rateLimitReset: gh.rateLimitReset });
+      return Response.json({ error: gh?.message ?? "突き合わせに失敗しました" }, { status: 500 });
+    }
+  }
 }
 
 function kindOf(key: string): keyof typeof processors | null {
@@ -367,15 +518,15 @@ function kindOf(key: string): keyof typeof processors | null {
   return null;
 }
 
-async function issueIdFor(db: D1Database, workspaceId: string, job: DueJob): Promise<string | null> {
+async function issueIdFor(
+  db: D1Database,
+  workspaceId: string,
+  job: DueJob,
+  first: <T>(db: D1Database, sql: string, ...params: (string | number | null)[]) => Promise<T | null>,
+): Promise<string | null> {
   if (job.key.startsWith("gh:dirty:issue:")) return job.key.slice("gh:dirty:issue:".length);
   if (job.key.startsWith("gh:dirty:comment:")) {
-    const row = await first<{ issue_id: string }>(
-      db,
-      "SELECT issue_id FROM comments WHERE id = ? AND workspace_id = ?",
-      job.key.slice("gh:dirty:comment:".length),
-      workspaceId,
-    );
+    const row = await first<{ issue_id: string }>(db, "SELECT issue_id FROM comments WHERE id = ? AND workspace_id = ?", job.key.slice("gh:dirty:comment:".length), workspaceId);
     return row?.issue_id ?? null;
   }
   if (job.key.startsWith("gh:dirty:gh:")) {

@@ -2,8 +2,9 @@
 // drain() の処理中に同じキーへ新しい印が入っても消えないことと、
 // 処理が遅くても /github/event がすぐ返ることを確かめる。
 
-import type { Env } from "../env";
-import { GitHubSyncRunner, processors } from "./runner";
+import { test } from "@playwright/test";
+import type { Env } from "../../worker/env";
+import { GitHubSyncRunner, processors } from "../../worker/github/runner";
 
 const MARK_DELAY_MS = 3_000;
 const SLOW_MS = 2_000;
@@ -281,9 +282,10 @@ async function testDrainsDoNotOverlap(): Promise<void> {
   });
 }
 
-await testNewMarkSurvives();
-await testRetryKeepsNewMark();
-await testEventReturnsWhileDraining();
-await testEarliestNextAt();
-await testDrainsDoNotOverlap();
-console.log("github runner tests ok");
+test("順番待ちは印を消さず、受け付けは処理を待たない", async () => {
+  await testNewMarkSurvives();
+  await testRetryKeepsNewMark();
+  await testEventReturnsWhileDraining();
+  await testEarliestNextAt();
+  await testDrainsDoNotOverlap();
+});

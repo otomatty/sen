@@ -63,6 +63,8 @@ export const githubMock = {
   requests: [] as RecordedRequest[],
   /** POST /hooks が返すステータス。201 以外（403 など）のときは作らない */
   hookStatus: 201,
+  /** 担当者を含む作成・更新を 422 で断る */
+  rejectAssignees: false,
   nextRepoId: 1000,
   nextHookId: 1,
   nextIssueId: 1,
@@ -78,6 +80,7 @@ export function resetGitHubMock() {
   githubMock.labels.clear();
   githubMock.requests = [];
   githubMock.hookStatus = 201;
+  githubMock.rejectAssignees = false;
   githubMock.nextRepoId = 1000;
   githubMock.nextHookId = 1;
   githubMock.nextIssueId = 1;
@@ -200,13 +203,23 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (rest === "issues" && req.method === "GET") {
     const page = Number(url.searchParams.get("page") ?? "1");
-    const list = page > 1 ? [] : githubMock.issues.filter((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase());
+    const since = url.searchParams.get("since");
+    const list =
+      page > 1
+        ? []
+        : githubMock.issues.filter(
+            (issue) => issue.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(issue.updated_at, since),
+          );
     sendJson(res, 200, list.map(issueJson));
     return;
   }
   if (rest === "issues" && req.method === "POST") {
-    const input = body as { title?: string; body?: string };
-    const number = githubMock.issues.filter((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase()).length + 1;
+    const input = body as { title?: string; body?: string; state?: "open" | "closed"; state_reason?: string | null; labels?: unknown; assignees?: unknown };
+    if (rejectedAssignees(input.assignees)) {
+      sendJson(res, 422, { message: "Validation Failed" });
+      return;
+    }
+    const number = githubMock.issues.filter((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase()).reduce((max, issue) => Math.max(max, issue.number), 0) + 1;
     const now = new Date().toISOString();
     const issue: MockIssue = {
       id: githubMock.nextIssueId++,
@@ -214,10 +227,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       fullName,
       title: input.title ?? "",
       body: input.body ?? null,
-      state: "open",
-      state_reason: null,
-      labels: [],
-      assignees: [],
+      state: input.state === "closed" ? "closed" : "open",
+      state_reason: input.state_reason ?? null,
+      labels: labelList(input.labels),
+      assignees: assigneeList(input.assignees),
       created_at: now,
       updated_at: now,
     };
@@ -242,11 +255,17 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       sendJson(res, 404, { message: "Not Found" });
       return;
     }
-    const input = body as { title?: string; body?: string; state?: "open" | "closed"; state_reason?: string | null };
+    const input = body as { title?: string; body?: string; state?: "open" | "closed"; state_reason?: string | null; labels?: unknown; assignees?: unknown };
+    if (rejectedAssignees(input.assignees)) {
+      sendJson(res, 422, { message: "Validation Failed" });
+      return;
+    }
     if (typeof input.title === "string") issue.title = input.title;
     if ("body" in input) issue.body = input.body ?? null;
     if (input.state) issue.state = input.state;
     if ("state_reason" in input) issue.state_reason = input.state_reason ?? null;
+    if ("labels" in input) issue.labels = labelList(input.labels);
+    if ("assignees" in input) issue.assignees = assigneeList(input.assignees);
     issue.updated_at = new Date().toISOString();
     sendJson(res, 200, issueJson(issue));
     return;
@@ -272,8 +291,12 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   if (rest === "issues/comments" && req.method === "GET") {
     const page = Number(url.searchParams.get("page") ?? "1");
-    const list = page > 1 ? [] : githubMock.comments.filter((comment) => comment.fullName.toLowerCase() === fullName.toLowerCase());
-    sendJson(res, 200, list);
+    const since = url.searchParams.get("since");
+    const list =
+      page > 1
+        ? []
+        : githubMock.comments.filter((comment) => comment.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(comment.updated_at, since));
+    sendJson(res, 200, list.map(commentJson));
     return;
   }
 
@@ -286,6 +309,36 @@ function findRepo(owner: string, repo: string): MockRepo | undefined {
 
 function findIssue(fullName: string, number: number): MockIssue | undefined {
   return githubMock.issues.find((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase() && issue.number === number);
+}
+
+function rejectedAssignees(value: unknown): boolean {
+  return githubMock.rejectAssignees && assigneeList(value).length > 0;
+}
+
+function labelList(value: unknown): { name: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string").map((name) => ({ name }));
+}
+
+function assigneeList(value: unknown): { login: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string").map((login) => ({ login }));
+}
+
+function updatedSince(updated: string, since: string | null): boolean {
+  if (!since) return true;
+  const from = Date.parse(since);
+  const at = Date.parse(updated);
+  if (!Number.isFinite(from)) return true;
+  return Number.isFinite(at) && at >= from;
+}
+
+function commentJson(comment: MockComment) {
+  return {
+    ...comment,
+    html_url: `https://github.com/${comment.fullName}/issues/${comment.number}#issuecomment-${comment.id}`,
+    issue_url: `https://api.github.com/repos/${comment.fullName}/issues/${comment.number}`,
+  };
 }
 
 function issueJson(issue: MockIssue) {

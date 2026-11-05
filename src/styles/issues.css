@@ -550,6 +550,53 @@
   padding: 0 8px;
   margin-bottom: 4px;
 }
+.github-issue {
+  margin: 8px 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+  max-width: 100%;
+}
+.github-issue .section-title {
+  margin-bottom: 8px;
+}
+.github-issue-actions,
+.github-issue-row,
+.github-issue-prefer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.github-issue-row a {
+  overflow-wrap: anywhere;
+}
+.github-issue-error {
+  margin: 8px 0 0;
+  color: var(--warn);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.github-issue-prefer {
+  margin: 12px 0;
+}
+.github-issue-prefer label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.avatar-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #24292f;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  flex: none;
+}
 .relation-group + .relation-group {
   margin-top: 4px;
 }

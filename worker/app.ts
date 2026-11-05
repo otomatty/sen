@@ -41,7 +41,9 @@ import { loadStartedOn } from "./progress";
 import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
 import { scheduleGitHubSync, isGitHubTarget } from "./github/config";
 import { handleGitHubWebhook } from "./github/webhook";
+import { requestGitHubIssueOp, requestWorkspaceGitHubReconcile } from "./github/issues";
 import { linkGitHubRepo, readGitHubStatus, unlinkGitHubRepo, updateGitHubRepo } from "./github/repos";
+
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
 }
@@ -348,6 +350,24 @@ export function createApp() {
     return c.json({ ok: true });
   });
 
+  // 課題の紐づけ。管理者でなくても、メンバーなら使える。GitHub への書き込みは Durable Object の中で行う。
+  app.post("/github/issues/:issueId/link", requireUser, requireWorkspace, async (c) => {
+    const body = await readJson<{ mode?: unknown; ref?: unknown; prefer?: unknown }>(c);
+    const mode = body.mode === "create" || body.mode === "link" ? body.mode : null;
+    if (!mode) return err(c, "要求が不正です", 400);
+    await requestGitHubIssueOp(c.env, c.get("workspace"), c.get("user").id, c.req.param("issueId"), {
+      action: mode,
+      ref: typeof body.ref === "string" ? body.ref : undefined,
+      prefer: body.prefer === "sen" || body.prefer === "github" ? body.prefer : undefined,
+    });
+    return c.json({ ok: true });
+  });
+
+  app.delete("/github/issues/:issueId/link", requireUser, requireWorkspace, async (c) => {
+    await requestGitHubIssueOp(c.env, c.get("workspace"), c.get("user").id, c.req.param("issueId"), { action: "unlink" });
+    return c.json({ ok: true });
+  });
+
   // ---------------- スプレッドシート連携（メンバーなら誰でも） ----------------
   app.get("/sheets/status", requireUser, requireWorkspace, async (c) => {
     const ws = c.get("workspace");
@@ -374,6 +394,12 @@ export function createApp() {
   });
 
   // ---------------- 開発用 ----------------
+  app.post("/dev/github/reconcile", requireUser, requireWorkspace, async (c) => {
+    if (c.env.DEV_TOOLS !== "1") return err(c, "無効です", 404);
+    await requestWorkspaceGitHubReconcile(c.env, c.get("workspace"));
+    return c.json({ ok: true });
+  });
+
   app.post("/dev/seed-demo", requireUser, requireWorkspace, async (c) => {
     if (c.env.DEV_TOOLS !== "1") return err(c, "無効です", 404);
     if (c.get("role") !== "admin") return err(c, "管理者のみ実行できます", 403);
