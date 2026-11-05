@@ -350,14 +350,17 @@ interface ManifestEntry {
 function startNarrationPrefetch(narrator: Narrator, scenarios: LoadedScenario[]): Promise<void> {
   log(`ナレーション: ${narrator.describe()}`);
   const pending = (async () => {
-    const texts: string[] = [];
+    const scripts: string[][] = [];
     for (const s of scenarios) {
-      texts.push(titleNarration(s.title, s.summary));
-      texts.push(...collectNarrationTexts(await readFile(s.file, "utf8")));
+      scripts.push([titleNarration(s.title, s.summary), ...collectNarrationTexts(await readFile(s.file, "utf8"))]);
     }
-    await narrator.prefetch(texts, (done, total) => {
-      log(`ナレーションを準備しています（${done}/${total}）`);
+    await narrator.prefetchScripts(scripts, {
+      onProgress: (done, total) => {
+        log(`ナレーションを準備しています（${done}/${total}）`);
+      },
+      onLog: log,
     });
+    log(`ナレーションを準備しました（API へのリクエスト ${narrator.requestCount} 回）`);
   })();
   void pending.catch(() => {});
   return pending;
