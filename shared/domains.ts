@@ -58,6 +58,9 @@ export function isEmailAllowed(email: string, domains: string[]): boolean {
 
 export const MAX_ALLOWED_DOMAINS = 20;
 
+/** 1 回の招待で指定できるメールアドレスの数（画面とサーバーで共有） */
+export const MAX_INVITATIONS_PER_REQUEST = 20;
+
 /** ローカル部は先頭 1 文字だけ残す（例: t***@example.com） */
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf("@");

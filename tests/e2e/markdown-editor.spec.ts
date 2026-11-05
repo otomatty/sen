@@ -359,6 +359,67 @@ test("コメントの表と注記が表示され、メンションは強調さ�
   await expect(comment.locator(".mention")).toContainText("佐藤 花子");
 });
 
+test("日本語の句読点を太字にすると、保存した Markdown では句読点が太字の外に出る", async ({ page }) => {
+  const { ws } = await signupViaUi(page);
+
+  const quote = await createIssue(page, ws, "かぎ括弧", "");
+  const quoteEditor = await openIssue(page, ws, quote.ident);
+  await quoteEditor.click();
+  await page.keyboard.type("「重要」です");
+  await selectText(quoteEditor, "「重要」");
+  await page.keyboard.press("Control+b");
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await storedDescription(page, ws, quote.id)) ?? "", { timeout: 15_000 }).toBe("「**重要**」です");
+  await page.reload();
+  const quoteAgain = await openIssue(page, ws, quote.ident);
+  await expect(quoteAgain.locator("strong")).toHaveText("重要");
+  await expect(quoteAgain).toContainText("「重要」です");
+  await expect(quoteAgain).not.toContainText("**");
+
+  const period = await createIssue(page, ws, "句点", "");
+  const periodEditor = await openIssue(page, ws, period.ident);
+  await periodEditor.click();
+  await page.keyboard.type("重要。次に");
+  await selectText(periodEditor, "重要。");
+  await page.keyboard.press("Control+b");
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await storedDescription(page, ws, period.id)) ?? "", { timeout: 15_000 }).toBe("**重要**。次に");
+  await page.reload();
+  const periodAgain = await openIssue(page, ws, period.ident);
+  await expect(periodAgain.locator("strong")).toHaveText("重要");
+  await expect(periodAgain).toContainText("重要。次に");
+  await expect(periodAgain).not.toContainText("**");
+});
+
+async function selectText(editor: ReturnType<Page["getByTestId"]>, target: string) {
+  await editor.evaluate((el, text) => {
+    const view = el as HTMLElement & {
+      editor?: {
+        chain: () => {
+          focus: () => {
+            setTextSelection: (range: { from: number; to: number }) => { run: () => void };
+          };
+        };
+        state: {
+          doc: {
+            descendants: (f: (node: { isText: boolean; text?: string }, pos: number) => void) => void;
+          };
+        };
+      };
+    };
+    const tiptap = view.editor;
+    if (!tiptap) throw new Error("エディタがありません");
+    let from = -1;
+    tiptap.state.doc.descendants((node, pos) => {
+      if (from >= 0 || !node.isText || !node.text) return;
+      const index = node.text.indexOf(text);
+      if (index >= 0) from = pos + index;
+    });
+    if (from < 0) throw new Error(`「${text}」がありません`);
+    tiptap.chain().focus().setTextSelection({ from, to: from + text.length }).run();
+  }, target);
+}
+
 test("作成画面のタイトルは 256 文字で止まり、長すぎる説明は保存されない", async ({ page }) => {
   test.setTimeout(120_000);
   const { ws } = await signupViaUi(page);

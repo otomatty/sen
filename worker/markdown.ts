@@ -2,6 +2,8 @@
 // 新しい本文は、受け取った Markdown をそのまま保存する。表示用の HTML は shared/markdown.ts が作る。
 // Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
 
+import { HTML4_NAMED_ENTITIES } from "../shared/html4-entities";
+
 
 interface El {
   type: "el";
@@ -37,10 +39,22 @@ const BLOCK_TAGS = new Set([
   "tr",
 ]);
 
+/**
+ * 数値と、HTML 4 の表にある名前を 1 回だけ戻す。表に無い名前はそのまま残す。
+ * 名前の大文字小文字は区別する。amp・lt・gt・quot・apos・nbsp だけは、これまで通り区別しない。
+ * apos は HTML 4 の表に無い。これまで戻していたので、そのまま戻す。
+ */
 function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, ent: string) => {
-    const e = ent.toLowerCase();
-    switch (e) {
+  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]{1,31});/g, (all, ent: string) => {
+    if (ent[0] === "#") {
+      const hex = ent[1] === "x" || ent[1] === "X";
+      const cp = hex ? Number.parseInt(ent.slice(2), 16) : Number.parseInt(ent.slice(1), 10);
+      if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
+      return String.fromCodePoint(cp);
+    }
+    const named = HTML4_NAMED_ENTITIES[ent];
+    if (named !== undefined) return named;
+    switch (ent.toLowerCase()) {
       case "amp":
         return "&";
       case "lt":
@@ -53,12 +67,8 @@ function decodeEntities(s: string): string {
         return "'";
       case "nbsp":
         return "\u00A0";
-      default: {
-        const hex = e.startsWith("#x");
-        const cp = hex ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
-        if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
-        return String.fromCodePoint(cp);
-      }
+      default:
+        return all;
     }
   });
 }
@@ -361,14 +371,18 @@ function joinBlocks(parts: Block[]): string {
   return out;
 }
 
-function renderPieces(nodes: Node[]): Piece[] {
+/** edgeBefore / edgeAfter は、この並びの外側の隣。その側に文字が無い子には、それを隣として渡す */
+function renderPieces(nodes: Node[], edgeBefore: string | null = null, edgeAfter: string | null = null): Piece[] {
   const out: Piece[] = [];
-  for (const n of nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
     if (n.type === "text") {
       if (n.text) out.push({ text: escapeInline(n.text), fromText: true });
       continue;
     }
-    const inline = inlinePieces(n);
+    const before = lastOutputChar(out) ?? edgeBefore;
+    const after = firstNeighborChar(nodes, i + 1) ?? edgeAfter;
+    const inline = inlinePieces(n, before, after);
     if (inline) {
       out.push(...inline);
       continue;
@@ -383,10 +397,212 @@ function renderInline(nodes: Node[]): string {
   return piecesToString(renderPieces(nodes));
 }
 
-function wrapMarked(marker: string, children: Node[]): Piece[] {
-  const inner = renderPieces(children);
-  if (!piecesToString(inner)) return [];
-  return [{ text: marker, fromText: false }, ...inner, { text: marker, fromText: false }];
+/** 句読点は Unicode の P と S。空白は区切りの外に出す対象（行頭・行末は呼び出し側が null で表す） */
+function isPunct(ch: string): boolean {
+  return /[\p{P}\p{S}]/u.test(ch);
+}
+
+function isWhitespace(ch: string): boolean {
+  return /[\p{Zs}\t\n\f\r]/u.test(ch);
+}
+
+/** 空白でも句読点でもない文字。行頭・行末や、テキストでない隣は null */
+function isWordish(ch: string | null): boolean {
+  return ch != null && !isWhitespace(ch) && !isPunct(ch);
+}
+
+function lastCodePoint(s: string): string | null {
+  if (!s) return null;
+  const end = s.length - 1;
+  const tail = s.charCodeAt(end);
+  if (tail >= 0xdc00 && tail <= 0xdfff && end > 0) {
+    const lead = s.charCodeAt(end - 1);
+    if (lead >= 0xd800 && lead <= 0xdbff) return s.slice(end - 1);
+  }
+  return s[end] ?? null;
+}
+
+function firstCodePoint(s: string): string | null {
+  if (!s) return null;
+  const cp = s.codePointAt(0);
+  return cp === undefined ? null : String.fromCodePoint(cp);
+}
+
+function lastOutputChar(pieces: Piece[]): string | null {
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    const ch = lastCodePoint(pieces[i].text);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+interface FlatChar {
+  ch: string;
+  fromText: boolean;
+}
+
+function flattenPieces(pieces: Piece[]): FlatChar[] {
+  const out: FlatChar[] = [];
+  for (const piece of pieces) {
+    for (const ch of piece.text) out.push({ ch, fromText: piece.fromText });
+  }
+  return out;
+}
+
+function charsToPieces(chars: FlatChar[]): Piece[] {
+  const out: Piece[] = [];
+  for (const c of chars) {
+    const last = out[out.length - 1];
+    if (last && last.fromText === c.fromText) last.text += c.ch;
+    else out.push({ text: c.ch, fromText: c.fromText });
+  }
+  return out;
+}
+
+/**
+ * 強調の直後に出る文字。空白ならその空白、そうでなければ句読点（区切りや動かした句読点）か本文の文字。
+ * 強調そのものは、先頭の空白以外、最初の文字が文字や数字になることはない。
+ */
+function openingCharOf(node: Node): string | null {
+  if (node.type === "text") {
+    if (!node.text) return null;
+    return firstCodePoint(escapeInline(node.text));
+  }
+  switch (node.tag) {
+    case "br":
+      return "\n";
+    case "input":
+      return null;
+    case "img":
+      return firstCodePoint(escapeInline((node.attrs.alt ?? "").trim() || node.attrs.src || ""));
+    case "code":
+      return "`";
+    case "a":
+      return (node.attrs.href ?? "").trim() ? "[" : openingCharOfNodes(node.children);
+    case "strong":
+    case "b":
+    case "em":
+    case "i":
+    case "s":
+    case "del":
+    case "strike":
+      return openingCharOfEmphasis(node);
+    default:
+      if (BLOCK_TAGS.has(node.tag)) return null;
+      return openingCharOfNodes(node.children);
+  }
+}
+
+function openingCharOfNodes(nodes: Node[]): string | null {
+  for (const n of nodes) {
+    const ch = openingCharOf(n);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+function openingCharOfEmphasis(el: El): string | null {
+  const chars = flattenPieces(renderPieces(el.children));
+  if (chars.length && chars[0].fromText && isWhitespace(chars[0].ch)) return chars[0].ch;
+  if (!chars.length) return null;
+  return "*";
+}
+
+function firstNeighborChar(nodes: Node[], index: number): string | null {
+  for (let i = index; i < nodes.length; i++) {
+    const ch = openingCharOf(nodes[i]);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+function isBlankText(n: Node): boolean {
+  return n.type === "text" && n.text.trim() === "";
+}
+
+/** 空白だけのテキストを除いて、リンクがちょうど 1 つのときだけリンクを返す */
+function singleLink(children: Node[]): { link: El; leading: Node[]; trailing: Node[] } | null {
+  const leading: Node[] = [];
+  const trailing: Node[] = [];
+  let link: El | null = null;
+  for (const child of children) {
+    if (!link) {
+      if (isBlankText(child)) {
+        leading.push(child);
+        continue;
+      }
+      if (child.type === "el" && child.tag === "a" && (child.attrs.href ?? "").trim()) {
+        link = child;
+        continue;
+      }
+      return null;
+    }
+    if (isBlankText(child)) {
+      trailing.push(child);
+      continue;
+    }
+    return null;
+  }
+  if (!link) return null;
+  return { link, leading, trailing };
+}
+
+function markedLink(el: El, marker: string): Piece[] {
+  const href = (el.attrs.href ?? "").trim();
+  const inner = trimPieces(renderPieces(el.children));
+  if (!piecesToString(inner)) return [{ text: `[](${linkDestination(href)})`, fromText: false }];
+  return [
+    { text: "[", fromText: false },
+    { text: marker, fromText: false },
+    ...inner,
+    { text: marker, fromText: false },
+    { text: `](${linkDestination(href)})`, fromText: false },
+  ];
+}
+
+/**
+ * 端の空白は常に区切りの外へ出す。空白だけなら区切りを付けない。
+ * 端の句読点は、どちらかの外側が文字（空白でも句読点でもない）のとき、両端とも外へ出す。
+ * 外に出せるのは元の HTML の文字だけ。中身が残らなければ区切りを付けない。
+ * 両側が行頭・行末・空白・句読点なら、句読点は中に残す（`**#** と` のように区切りが効くため）。
+ */
+function emphasize(marker: string, pieces: Piece[], before: string | null, after: string | null): Piece[] {
+  const chars = flattenPieces(pieces);
+  if (!chars.length) return [];
+  let start = 0;
+  while (start < chars.length && chars[start].fromText && isWhitespace(chars[start].ch)) start++;
+  let end = chars.length;
+  while (end > start && chars[end - 1].fromText && isWhitespace(chars[end - 1].ch)) end--;
+  const leadWs = chars.slice(0, start);
+  const trailWs = chars.slice(end);
+  if (start === end) return charsToPieces(chars);
+
+  const neighborBefore = leadWs.length ? leadWs[leadWs.length - 1].ch : before;
+  const neighborAfter = trailWs.length ? trailWs[0].ch : after;
+  let coreStart = start;
+  let coreEnd = end;
+  if (isWordish(neighborBefore) || isWordish(neighborAfter)) {
+    while (coreStart < coreEnd && chars[coreStart].fromText && isPunct(chars[coreStart].ch)) coreStart++;
+    while (coreEnd > coreStart && chars[coreEnd - 1].fromText && isPunct(chars[coreEnd - 1].ch)) coreEnd--;
+  }
+  if (coreStart === coreEnd) return charsToPieces(chars);
+  return [
+    ...charsToPieces(leadWs),
+    ...charsToPieces(chars.slice(start, coreStart)),
+    { text: marker, fromText: false },
+    ...charsToPieces(chars.slice(coreStart, coreEnd)),
+    { text: marker, fromText: false },
+    ...charsToPieces(chars.slice(coreEnd, end)),
+    ...charsToPieces(trailWs),
+  ];
+}
+
+function wrapMarked(marker: string, el: El, before: string | null, after: string | null): Piece[] {
+  const around = singleLink(el.children);
+  if (around) return [...renderPieces(around.leading), ...markedLink(around.link, marker), ...renderPieces(around.trailing)];
+  // 端の子の強調は、間に文字が無ければ親の外側をその側の隣にする。
+  // 区切りが隣り合うと 1 つになり、効くかどうかは外側の文字で決まる。内側が句読点を外に出せば、親も元の文字として外に出せる。
+  return emphasize(marker, renderPieces(el.children, before, after), before, after);
 }
 
 function linkPieces(el: El): Piece[] {
@@ -401,20 +617,20 @@ function linkPieces(el: El): Piece[] {
 }
 
 /** インライン要素を、テキストと変換が作った記法に分けて返す。ブロックなら null */
-function inlinePieces(el: El): Piece[] | null {
+function inlinePieces(el: El, before: string | null, after: string | null): Piece[] | null {
   switch (el.tag) {
     case "br":
       return [{ text: "\n", fromText: false }];
     case "strong":
     case "b":
-      return wrapMarked("**", el.children);
+      return wrapMarked("**", el, before, after);
     case "em":
     case "i":
-      return wrapMarked("*", el.children);
+      return wrapMarked("*", el, before, after);
     case "s":
     case "del":
     case "strike":
-      return wrapMarked("~~", el.children);
+      return wrapMarked("~~", el, before, after);
     case "u":
     case "span":
     case "label":
@@ -546,7 +762,7 @@ function escapeTrailingHeadingHashes(text: string): string {
 }
 
 function renderElement(el: El): string {
-  const inline = inlinePieces(el);
+  const inline = inlinePieces(el, null, null);
   if (inline) return piecesToString(inline);
   switch (el.tag) {
     case "h1":
