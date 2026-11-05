@@ -9,14 +9,19 @@
  * 流れ: アプリをビルド → まっさらな DB でローカル起動 → デモデータを投入 →
  *       ヘッドレス Chromium で各シナリオを AI（スクリプト）が操作 → CDP で録画 → ffmpeg で MP4 化 →
  *       public/tutorials/ に動画・サムネイル・manifest.json を書き出す
+ *
+ * スプレッドシート連携のシナリオ（export const sheets = true）は、データの初期化のあとで
+ * 模擬の Google に向けてサーバーを起動し直してから撮る。--url では撮れない。
  */
 import { spawn, spawnSync, execSync, type ChildProcess } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chromium, request, type APIRequestContext } from "playwright";
+import { chromium, request, type APIRequestContext, type Browser } from "playwright";
+import { googleMock, TUTORIAL_SHEETS_DELAY_MS, TUTORIAL_SPREADSHEET_ID } from "./google-mock";
 import { overlayScript } from "./lib/overlay";
 import { ScreenRecorder } from "./lib/recorder";
 import { Director, PARK } from "./lib/director";
@@ -26,7 +31,11 @@ import { sourceHash } from "./lib/source-hash";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = path.join(ROOT, "public", "tutorials");
 const WORK_DIR = path.join(os.tmpdir(), "sen-tutorials");
+const DEV_VARS = path.join(ROOT, "dist", "sen", ".dev.vars");
 const PORT = Number(process.env.TUTORIAL_PORT ?? 4319);
+const GOOGLE_PORT = Number(process.env.TUTORIAL_GOOGLE_PORT ?? 4339);
+const TUTORIALS_BEGIN = "# >>> tutorials（収録が自動で書き足す。収録のたびに書き直す）";
+const TUTORIALS_END = "# <<< tutorials";
 const VIEWPORT = { width: 1280, height: 800 };
 const SCALE = 1.5;
 const VIDEO_WIDTH = 1600;
@@ -57,25 +66,209 @@ async function waitForServer(base: string, timeoutMs = 90_000) {
   throw new Error("サーバーが起動しませんでした");
 }
 
-async function startServer(): Promise<{ base: string; proc: ChildProcess | null }> {
-  if (urlArg) return { base: urlArg.replace(/\/$/, ""), proc: null };
+/** /api/health に繋がらなくなるまで待つ（--strictPort なので、空いてから次を起動する） */
+async function waitUntilDown(base: string, timeoutMs: number) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try {
+      const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1_000) });
+      await res.arrayBuffer().catch(() => {});
+    } catch (e) {
+      const name = e instanceof Error ? e.name : "";
+      if (name !== "TimeoutError" && name !== "AbortError") return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`サーバーが停止しませんでした（ポート ${PORT}）`);
+}
+
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      child.off("exit", done);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    child.once("exit", done);
+    if (child.exitCode !== null || child.signalCode !== null) done();
+  });
+}
+
+let serverProc: ChildProcess | null = null;
+
+function spawnPreview(): ChildProcess {
+  const proc = spawn("bunx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
+    cwd: ROOT,
+    env: { ...process.env, SEN_PERSIST_DIR: path.join(WORK_DIR, "state"), PORT: String(PORT) },
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
+  // 出力を読まないとパイプが詰まり、プロセスが止まらなくなる
+  proc.stdout?.on("data", (d) => process.env.DEBUG && process.stdout.write(d));
+  proc.stderr?.on("data", (d) => process.env.DEBUG && process.stderr.write(d));
+  proc.on("error", (err) => log(`サーバーの起動に失敗しました: ${err.message}`));
+  return proc;
+}
+
+/** fresh のときだけ保存先を消す。起動し直すときはアカウントとデータを残す */
+async function launchServer(fresh: boolean): Promise<void> {
+  if (fresh) {
+    await rm(path.join(WORK_DIR, "state"), { recursive: true, force: true });
+    log(`ローカルサーバーを起動しています（ポート ${PORT}、まっさらな DB）…`);
+  }
+  serverProc = spawnPreview();
+  await waitForServer(`http://localhost:${PORT}`);
+}
+
+async function stopServer(): Promise<void> {
+  const current = serverProc;
+  serverProc = null;
+  if (!current) return;
+  if (current.pid) {
+    try {
+      process.kill(-current.pid);
+    } catch {
+      try {
+        current.kill();
+      } catch {
+        // すでに終了している
+      }
+    }
+  } else {
+    try {
+      current.kill();
+    } catch {
+      // すでに終了している
+    }
+  }
+  // 終了を待つ。終わらなければ強制終了し、そのあとポートが空くまで待つ
+  await waitForExit(current, 5_000);
+  if (current.exitCode === null && current.signalCode === null && current.pid) {
+    try {
+      process.kill(-current.pid, "SIGKILL");
+    } catch {
+      try {
+        current.kill("SIGKILL");
+      } catch {
+        // すでに終了している
+      }
+    }
+    await waitForExit(current, 5_000);
+  }
+  await waitUntilDown(`http://localhost:${PORT}`, 20_000);
+}
+
+/** ビルドは最初の 1 回だけ。起動そのものは launchServer に分けて、あとから起動し直せる */
+async function bootServer(): Promise<string> {
+  if (urlArg) return urlArg.replace(/\/$/, "");
   if (!skipBuild) {
     log("アプリをビルドしています…");
     execSync("bunx vite build", { cwd: ROOT, stdio: "inherit" });
   }
-  const persist = path.join(WORK_DIR, "state");
-  await rm(persist, { recursive: true, force: true });
-  log(`ローカルサーバーを起動しています（ポート ${PORT}、まっさらな DB）…`);
-  const proc = spawn("bunx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
-    cwd: ROOT,
-    env: { ...process.env, SEN_PERSIST_DIR: persist, PORT: String(PORT) },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: process.platform !== "win32",
+  // 最初は連携なしで起動する。前回の収録が書き足した設定が残っていても外す
+  await removeTutorialsBlock();
+  await launchServer(true);
+  return `http://localhost:${PORT}`;
+}
+
+function withoutTutorialsBlock(text: string): string {
+  const kept: string[] = [];
+  let skipping = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (!skipping && line === TUTORIALS_BEGIN) {
+      skipping = true;
+      continue;
+    }
+    if (skipping) {
+      if (line === TUTORIALS_END) skipping = false;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").replace(/\s*$/, "");
+}
+
+async function readDevVars(): Promise<string | null> {
+  try {
+    return await readFile(DEV_VARS, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** マーカーで囲んだ連携の設定を取り除く。ファイルが無ければ何もしない */
+async function removeTutorialsBlock(): Promise<void> {
+  const current = await readDevVars();
+  if (current === null || !current.includes(TUTORIALS_BEGIN)) return;
+  const next = withoutTutorialsBlock(current);
+  await writeFile(DEV_VARS, next ? `${next}\n` : "");
+}
+
+let serviceAccountKey: string | null = null;
+
+/** 収録のたびに作り捨てる。鍵そのものはログに出さない */
+function tutorialServiceAccountKey(): string {
+  if (serviceAccountKey) return serviceAccountKey;
+  const { privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
   });
-  proc.stderr?.on("data", (d) => process.env.DEBUG && process.stderr.write(d));
-  const base = `http://localhost:${PORT}`;
-  await waitForServer(base);
-  return { base, proc };
+  // JSON は 1 行になる（改行は \n として入る）
+  serviceAccountKey = JSON.stringify({
+    type: "service_account",
+    client_email: "sen-tutorial@sen-tutorial.iam.gserviceaccount.com",
+    private_key: privateKey,
+  });
+  return serviceAccountKey;
+}
+
+/**
+ * dist/sen/.dev.vars の末尾に連携の設定を書く。vite preview はここを読む。
+ * 同じマーカーのブロックが残っていても、先に消してから 1 つだけ書き足す。
+ */
+async function writeTutorialsBlock(ws: string): Promise<void> {
+  const origin = googleMock.origin;
+  if (!origin) throw new Error("模擬の Google が起動していません");
+  const body = withoutTutorialsBlock((await readDevVars()) ?? "");
+  const block = [
+    TUTORIALS_BEGIN,
+    `SHEETS_WORKSPACE=${ws}`,
+    `SHEETS_SPREADSHEET_ID=${TUTORIAL_SPREADSHEET_ID}`,
+    `SHEETS_SYNC_DELAY_MS=${TUTORIAL_SHEETS_DELAY_MS}`,
+    `GOOGLE_API_ORIGIN_FOR_TESTS=${origin}`,
+    `GOOGLE_SERVICE_ACCOUNT_KEY='${tutorialServiceAccountKey()}'`,
+    TUTORIALS_END,
+  ].join("\n");
+  await mkdir(path.dirname(DEV_VARS), { recursive: true });
+  await writeFile(DEV_VARS, body ? `${body}\n${block}\n` : `${block}\n`);
+}
+
+async function switchSheets(enable: boolean, ws: string): Promise<void> {
+  if (enable) {
+    // 初期化の操作で反映が予約されないよう、初期化のあとで連携を有効にする。
+    // 動画を「まだ反映していません」から始めるため。
+    googleMock.reset();
+    await writeTutorialsBlock(ws);
+    log("スプレッドシート連携を有効にしてサーバーを起動し直しています…");
+  } else {
+    await removeTutorialsBlock();
+    log("スプレッドシート連携を無効にしてサーバーを起動し直しています…");
+  }
+  await stopServer();
+  await launchServer(false);
+}
+
+async function reopenApi(current: APIRequestContext, base: string): Promise<APIRequestContext> {
+  const state = await current.storageState();
+  await current.dispose();
+  return request.newContext({
+    baseURL: base,
+    extraHTTPHeaders: { "x-sen-client": "1" },
+    storageState: state,
+  });
 }
 
 async function prepareAccount(api: APIRequestContext): Promise<string> {
@@ -99,13 +292,16 @@ async function resetData(api: APIRequestContext, ws: string, freshUser: boolean)
   });
 }
 
-async function loadScenarios(): Promise<(Scenario & { file: string })[]> {
+type LoadedScenario = Scenario & { file: string; needsSheets: boolean };
+
+async function loadScenarios(): Promise<LoadedScenario[]> {
   const dir = path.join(ROOT, "tutorials", "scenarios");
   const files = (await readdir(dir)).filter((f) => /\.tsx?$/.test(f)).sort();
-  const list: (Scenario & { file: string })[] = [];
+  const list: LoadedScenario[] = [];
   for (const f of files) {
-    const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default: Scenario };
-    list.push({ ...mod.default, file: path.join(dir, f) });
+    // export const sheets = true のシナリオは、スプレッドシート連携を有効にして撮る
+    const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default: Scenario; sheets?: boolean };
+    list.push({ ...mod.default, file: path.join(dir, f), needsSheets: mod.sheets === true });
   }
   return list.sort((a, b) => a.order - b.order);
 }
@@ -130,23 +326,44 @@ async function main() {
   if (!scenarios.length) throw new Error("該当するシナリオがありません");
   await mkdir(OUT_DIR, { recursive: true });
   await mkdir(WORK_DIR, { recursive: true });
-  const { base, proc } = await startServer();
-  const api = await request.newContext({ baseURL: base, extraHTTPHeaders: { "x-sen-client": "1" } });
-  const ws = await prepareAccount(api);
-  log(`ワークスペース: ${ws}`);
-  const storage = await api.storageState();
 
-  const manifestPath = path.join(OUT_DIR, "manifest.json");
-  const manifest: { tutorials: ManifestEntry[] } = existsSync(manifestPath)
-    ? JSON.parse(await readFile(manifestPath, "utf8"))
-    : { tutorials: [] };
-
-  const browser = await chromium.launch({ args: ["--font-render-hinting=none", "--disable-lcd-text"] });
+  let api: APIRequestContext | undefined;
+  let browser: Browser | undefined;
   const failures: string[] = [];
   try {
+    if (!urlArg && scenarios.some((s) => s.needsSheets)) {
+      const origin = await googleMock.start(GOOGLE_PORT);
+      log(`模擬の Google を起動しました（${origin}）`);
+    }
+    const base = await bootServer();
+    api = await request.newContext({ baseURL: base, extraHTTPHeaders: { "x-sen-client": "1" } });
+    const ws = await prepareAccount(api);
+    log(`ワークスペース: ${ws}`);
+    const storage = await api.storageState();
+
+    const manifestPath = path.join(OUT_DIR, "manifest.json");
+    const manifest: { tutorials: ManifestEntry[] } = existsSync(manifestPath)
+      ? JSON.parse(await readFile(manifestPath, "utf8"))
+      : { tutorials: [] };
+
+    browser = await chromium.launch({ args: ["--font-render-hinting=none", "--disable-lcd-text"] });
+    // 最初のサーバーは連携なし。シナリオごとに、必要な状態と違えば起動し直す
+    let sheetsOn = false;
     for (const s of scenarios) {
       log(`収録中: ${s.order}. ${s.title}`);
+      if (!api) throw new Error("API の準備ができていません");
       await resetData(api, ws, !!s.freshUser);
+      if (urlArg && s.needsSheets) {
+        const message = `${s.id}: スプレッドシート連携の動画は、ローカルで収録してください（--url では模擬の Google を使えません）`;
+        failures.push(message);
+        console.error(message);
+        continue;
+      }
+      if (!urlArg && s.needsSheets !== sheetsOn) {
+        await switchSheets(s.needsSheets, ws);
+        sheetsOn = s.needsSheets;
+        api = await reopenApi(api, base);
+      }
       const context = await browser.newContext({
         baseURL: base,
         viewport: VIEWPORT,
@@ -233,13 +450,16 @@ async function main() {
       await context.close();
     }
   } finally {
-    await browser.close();
-    await api.dispose();
-    if (proc?.pid) {
+    await browser?.close().catch(() => {});
+    await api?.dispose().catch(() => {});
+    try {
+      await stopServer();
+    } finally {
       try {
-        process.kill(-proc.pid);
-      } catch {
-        proc.kill();
+        await googleMock.stop();
+      } finally {
+        // サーバーを止めたあと、模擬サーバー向けの設定を dist/ に残さない
+        await removeTutorialsBlock();
       }
     }
   }

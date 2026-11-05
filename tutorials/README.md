@@ -5,6 +5,7 @@ Sen の使い方動画は、人が画面を録画するのではなく、**AI �
 ```
 tutorials/
   run.ts            収録の司令塔（ビルド → 起動 → デモデータ投入 → 各シナリオを録画 → MP4 化 → manifest 出力）
+  google-mock.ts    収録用の模擬 Google（OAuth トークンと Sheets API）
   lib/
     director.ts     シナリオから使う操作 API（カーソル移動・クリック・入力・キー表示・字幕・強調）
     overlay.ts      ページに重ねる表示（カーソル・クリックの波紋・押したキー・字幕・タイトル）
@@ -70,6 +71,12 @@ bun run tutorials:check
 `src/`・`tutorials/lib/`・シナリオのどれかが収録時から変わっていると、撮り直しが必要な動画を一覧にします（CI でも警告として表示されます）。
 
 アプリは manifest を読み、各画面右上の「▶ 使い方」とヘルプ画面に動画を表示します。
+
+## スプレッドシート連携の動画
+
+シナリオが `export const sheets = true` を宣言していると、その動画にはスプレッドシート連携が必要だとみなします。収録は模擬の Google（`tutorials/google-mock.ts`）を起動し、デモデータの初期化が終わってから、連携を有効にしたサーバーで撮ります。本物の Google にはつながりません。`--url` では模擬の Google を使えないので、この動画は撮れません。
+
+シートの中身は、アプリが実際に送った書き込み（batchUpdate）から模擬サーバーが組み立てたものです。シナリオからは `googleMock.snapshot()` で読めます。
 
 ## オプション
 
