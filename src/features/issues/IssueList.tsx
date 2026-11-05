@@ -2,13 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   pointerWithin,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
 } from "@dnd-kit/core";
 import { useLocation, useNavigate } from "react-router";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
@@ -270,8 +272,16 @@ export function IssueList({
 
   // ---- ドラッグ＆ドロップ（別のグループへ移す / 手動の並び順で並べ替える） ----
   const dndEnabled = !hideGroupHeaders && (view.grouping !== "none" || view.ordering === "manual") && view.grouping !== "label";
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // 指は PointerSensor だと縦スクロールが先に始まり pointercancel で消える。マウスは距離、指は長押しで分ける。
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+  );
   const [dragId, setDragId] = useState<string | null>(null);
+  // Android は長押しで右クリックメニューが開く。指を動かしたら閉じる（動かさず離したときは開いたまま）。
+  const onDragMove = (e: DragMoveEvent) => {
+    if (Math.hypot(e.delta.x, e.delta.y) > 8 && useUI.getState().contextMenu) useUI.setState({ contextMenu: null });
+  };
   const onDragEnd = (e: DragEndEvent) => {
     setDragId(null);
     const [fromKey, issueId] = String(e.active.id).split("::");
@@ -322,6 +332,7 @@ export function IssueList({
         return rows.length ? rows : hits;
       }}
       onDragStart={(e) => setDragId(String(e.active.id))}
+      onDragMove={onDragMove}
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragId(null)}
     >
