@@ -246,8 +246,8 @@ test("GitHub の Issue に多い記法は、1 文字足して保存しても残�
   ].join("\n");
   const issue = await createIssue(page, ws, "GitHub の本文", description);
   const editor = await openIssue(page, ws, issue.ident);
-  await editor.click();
-  await editor.press("Control+End");
+  await editor.locator("p").filter({ hasText: /^末尾/ }).click();
+  await editor.press("End");
   await editor.pressSequentially("Z");
   await expect(editor).toContainText("末尾Z");
   await page.keyboard.press("Escape");
@@ -297,8 +297,8 @@ test("同じ本文に 1 文字足して保存を繰り返しても、2 回目以
   let previous = "";
   for (let i = 0; i < marks.length; i++) {
     const editor = await openIssue(page, ws, issue.ident);
-    await editor.click();
-    await editor.press("Control+End");
+    await editor.locator("p").filter({ hasText: /^末尾/ }).click();
+    await editor.press("End");
     await editor.pressSequentially(marks[i]);
     await expect(editor).toContainText(`末尾${marks.slice(0, i + 1).join("")}`);
     await page.keyboard.press("Escape");

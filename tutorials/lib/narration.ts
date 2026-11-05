@@ -5,6 +5,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // 字幕とタイトルカードを Gemini TTS で読み上げ、24kHz モノラルの PCM にする。
+// 1 本の台本はまとめて 1 リクエストで読み、無音の位置で文ごとに切り分ける。
 // API キーはログにもエラーにもファイルにも出さない。
 
 const DEFAULT_MODEL = "gemini-3.8-flash-tts";
@@ -13,9 +14,13 @@ const DEFAULT_STYLE =
   "Calm, warm and clear narration for a software tutorial video, at a relaxed, slightly slow pace.";
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
 const DEFAULT_CONCURRENCY = 3;
+const DEFAULT_TEMPO = 1.2;
 const SAMPLE_RATE = 24000;
 /** s16le・モノラルなので、1 秒は 48000 バイト */
 const BYTES_PER_SECOND = SAMPLE_RATE * 2;
+/** 切り分けに使う 10ms 区間（240 サンプル） */
+const FRAME_SAMPLES = 240;
+const FRAME_BYTES = FRAME_SAMPLES * 2;
 const MAX_ATTEMPTS = 6;
 /** 5xx とネットワークエラーの待ち（秒） */
 const BACKOFF_SEC = [2, 4, 8, 16, 32];
@@ -24,8 +29,16 @@ const RATE_LIMIT_BACKOFF_SEC = [10, 20, 30, 60, 60];
 const DEFAULT_REQUESTS_PER_MINUTE = 10;
 const RATE_WINDOW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 90_000;
+/** これより長い 429 の待ちは、1 日の上限とみなして待たない */
+const DAILY_QUOTA_WAIT_MS = 120_000;
+const MAX_SCRIPT_LINES = 8;
+const SCRIPT_STYLE =
+  "Read the paragraphs in order, exactly as written. Leave a long, clear pause of about two seconds between paragraphs.";
+const NO_AUDIO_MESSAGE = "応答に音声データがありませんでした";
 const SILENCE_FILTER =
   "silenceremove=start_periods=1:start_silence=0.05:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_silence=0.05:start_threshold=-50dB,areverse";
+
+type FetchedAudio = { bytes: Buffer; kind: "wav" | "pcm" | "auto"; rate: number; ext: string };
 
 export interface NarrationClip {
   /** 24kHz / モノラル / s16le の .pcm */
@@ -44,6 +57,10 @@ export interface NarratorOptions {
   /** 直近 1 分に送り始めるリクエストの上限。1 未満や非数は既定 */
   requestsPerMinute?: number;
   baseUrl?: string;
+  /** 読み上げの速さ。1 で等倍。未指定は 1.2 */
+  tempo?: number;
+  /** 台本をまとめて読む。未指定は true */
+  batch?: boolean;
 }
 
 /** 再試行しても直らないエラー（キーやモデル名の誤り、1 日あたりの上限など） */
@@ -145,7 +162,11 @@ export class Narrator {
   private readonly concurrency: number;
   private readonly requestsPerMinute: number;
   private readonly baseUrl: string;
-  /** 同じ文への同時リクエストは、1 つの Promise にまとめる */
+  private readonly tempo: number;
+  private readonly batch: boolean;
+  /** API へ送った HTTP リクエストの回数（再試行も 1 回ずつ数える） */
+  private requests = 0;
+  /** 同じ最終ファイルへの同時処理は、1 つの Promise にまとめる */
   private readonly inflight = new Map<string, Promise<NarrationClip>>();
   /** 送り始めた時刻（ms、昇順）。60 秒より古いものは捨てる。先読みと clip で共有する */
   private readonly requestStarts: number[] = [];
@@ -161,6 +182,8 @@ export class Narrator {
     this.baseUrl = (opts.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.concurrency = normalizeConcurrency(opts.concurrency);
     this.requestsPerMinute = normalizeRequestsPerMinute(opts.requestsPerMinute);
+    this.tempo = normalizeTempo(opts.tempo);
+    this.batch = opts.batch ?? true;
   }
 
   /** 環境変数から作る。GEMINI_API_KEY が無ければ null（キーの値はどこにも出さない） */
@@ -176,16 +199,23 @@ export class Narrator {
       concurrency: process.env.GEMINI_TTS_CONCURRENCY ? Number(process.env.GEMINI_TTS_CONCURRENCY) : undefined,
       requestsPerMinute: process.env.GEMINI_TTS_RPM ? Number(process.env.GEMINI_TTS_RPM) : undefined,
       baseUrl: process.env.GEMINI_API_BASE_URL,
+      tempo: process.env.GEMINI_TTS_TEMPO ? Number(process.env.GEMINI_TTS_TEMPO) : undefined,
+      batch: parseBatch(process.env.GEMINI_TTS_BATCH),
     });
   }
 
-  /** toSpeech した文の PCM が、すでにキャッシュにあるか */
+  /** 速めたあとの PCM が、すでにキャッシュにあるか（倍率が 1 のときは合成したファイル） */
   has(text: string): boolean {
     try {
-      return statSync(this.cachePath(toSpeech(text))).isFile();
+      return statSync(this.outputPath(toSpeech(text))).isFile();
     } catch {
       return false;
     }
+  }
+
+  /** API へ送った HTTP リクエストの回数 */
+  get requestCount(): number {
+    return this.requests;
   }
 
   /** toSpeech してから、キャッシュにあればそれを、無ければ API から取得する */
@@ -230,9 +260,81 @@ export class Narrator {
     await Promise.all(Array.from({ length: workers }, () => worker()));
   }
 
-  /** ログ用。モデルと声だけ（API キーは含めない） */
+  /**
+   * 動画ごとの台本を先に読み上げる。
+   * batch が無効なら、文を並べて prefetch と同じに読む。
+   * 有効なら、最大 8 文ずつ 1 リクエストにまとめ、無音で切り分けてキャッシュする。
+   */
+  async prefetchScripts(
+    scripts: string[][],
+    opts?: { onProgress?: (done: number, total: number) => void; onLog?: (message: string) => void },
+  ): Promise<void> {
+    if (!this.batch) {
+      await this.prefetch(scripts.flat(), opts?.onProgress);
+      return;
+    }
+
+    const seen = new Set<string>();
+    const perScript: string[][] = [];
+    for (const script of scripts) {
+      const lines: string[] = [];
+      for (const text of script) {
+        const speech = toSpeech(text);
+        if (!speech || seen.has(speech)) continue;
+        seen.add(speech);
+        lines.push(speech);
+      }
+      perScript.push(lines);
+    }
+    const total = seen.size;
+    if (total === 0) return;
+
+    let done = 0;
+    const bump = () => {
+      done++;
+      opts?.onProgress?.(done, total);
+    };
+
+    const jobs: (() => Promise<void>)[] = [];
+    for (const lines of perScript) {
+      const remaining: string[] = [];
+      for (const speech of lines) {
+        if (await this.hasOriginal(speech)) {
+          jobs.push(async () => {
+            await this.load(speech);
+            bump();
+          });
+        } else {
+          remaining.push(speech);
+        }
+      }
+      for (const chunk of chunkLines(remaining)) {
+        jobs.push(() => this.prepareChunk(chunk, bump, opts?.onLog));
+      }
+    }
+    if (jobs.length === 0) return;
+
+    let failed = false;
+    let next = 0;
+    const worker = async () => {
+      while (!failed) {
+        const index = next++;
+        if (index >= jobs.length) return;
+        try {
+          await jobs[index]();
+        } catch (err) {
+          failed = true;
+          throw err;
+        }
+      }
+    };
+    const workers = Math.min(this.concurrency, jobs.length);
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  }
+
+  /** ログ用。モデルと声と速さ（API キーは含めない） */
   describe(): string {
-    return `${this.model} / ${this.voice}`;
+    return `${this.model} / ${this.voice} / ${formatTempo(this.tempo)} 倍速`;
   }
 
   private cachePath(speech: string): string {
@@ -252,7 +354,7 @@ export class Narrator {
   }
 
   private load(speech: string): Promise<NarrationClip> {
-    const file = this.cachePath(speech);
+    const file = this.outputPath(speech);
     const existing = this.inflight.get(file);
     if (existing) return existing;
     const pending = this.produce(speech, file).finally(() => {
@@ -266,8 +368,64 @@ export class Narrator {
     const cached = await readCached(file);
     if (cached) return cached;
 
-    await mkdir(this.cacheDir, { recursive: true });
+    const original = this.cachePath(speech);
+    if (file !== original) {
+      await this.ensureOriginal(speech);
+      return this.applyTempo(original, file);
+    }
+
     const pcm = await this.synthesize(speech);
+    await this.writeAtomic(file, pcm);
+    return { file, duration: pcm.length / BYTES_PER_SECOND };
+  }
+
+  /** 無音を削った合成結果。速さはかけない */
+  private async ensureOriginal(speech: string): Promise<void> {
+    const file = this.cachePath(speech);
+    if (await readCached(file)) return;
+    const pcm = await this.synthesize(speech);
+    await this.writeAtomic(file, pcm);
+  }
+
+  /** 元の PCM を atempo で速め、一時ファイルから rename して置く */
+  private async applyTempo(original: string, file: string): Promise<NarrationClip> {
+    await mkdir(this.cacheDir, { recursive: true });
+    const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      await run("ffmpeg", [
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "s16le",
+        "-ar",
+        String(SAMPLE_RATE),
+        "-ac",
+        "1",
+        "-i",
+        original,
+        "-af",
+        `atempo=${formatTempo(this.tempo)}`,
+        "-f",
+        "s16le",
+        "-ar",
+        String(SAMPLE_RATE),
+        "-ac",
+        "1",
+        tmp,
+      ]);
+      await rename(tmp, file);
+    } catch (err) {
+      await rm(tmp, { force: true });
+      throw err;
+    }
+    const written = await readCached(file);
+    if (!written) throw new Error("速めた音声を書き出せませんでした");
+    return written;
+  }
+
+  private async writeAtomic(file: string, pcm: Buffer): Promise<void> {
+    await mkdir(this.cacheDir, { recursive: true });
     const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
       await writeFile(tmp, pcm);
@@ -276,12 +434,16 @@ export class Narrator {
       await rm(tmp, { force: true });
       throw err;
     }
-    return { file, duration: pcm.length / BYTES_PER_SECOND };
   }
 
   /** API から音声を受け取り、無音を削った 24kHz モノラル s16le にする */
   private async synthesize(speech: string): Promise<Buffer> {
-    const audio = await this.fetchAudio(speech);
+    const audio = await this.fetchAudio(speech, this.style);
+    return this.decodeAudio(audio, true);
+  }
+
+  private async decodeAudio(audio: FetchedAudio, silence: boolean): Promise<Buffer> {
+    await mkdir(this.cacheDir, { recursive: true });
     const id = randomBytes(8).toString("hex");
     const src = path.join(this.cacheDir, `${id}${audio.ext}`);
     const out = path.join(this.cacheDir, `${id}.out.pcm`);
@@ -289,7 +451,9 @@ export class Narrator {
     try {
       const args = ["-y", "-loglevel", "error"];
       if (audio.kind === "pcm") args.push("-f", "s16le", "-ar", String(audio.rate), "-ac", "1");
-      args.push("-i", src, "-af", SILENCE_FILTER, "-f", "s16le", "-ar", String(SAMPLE_RATE), "-ac", "1", out);
+      args.push("-i", src);
+      if (silence) args.push("-af", SILENCE_FILTER);
+      args.push("-f", "s16le", "-ar", String(SAMPLE_RATE), "-ac", "1", out);
       await run("ffmpeg", args);
       return await readFile(out);
     } finally {
@@ -298,10 +462,10 @@ export class Narrator {
     }
   }
 
-  private async fetchAudio(speech: string): Promise<{ bytes: Buffer; kind: "wav" | "pcm" | "auto"; rate: number; ext: string }> {
+  private async fetchAudio(speech: string, style: string): Promise<FetchedAudio> {
     const url = `${this.baseUrl}/v1beta/models/${this.model}:generateContent`;
     const body = JSON.stringify({
-      contents: [{ parts: [{ text: speech, speechMetadata: { style: this.style } }] }],
+      contents: [{ parts: [{ text: speech, speechMetadata: { style } }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voice } } },
@@ -312,6 +476,7 @@ export class Narrator {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       await this.acquireRequestSlot();
       try {
+        this.requests++;
         const res = await fetch(url, {
           method: "POST",
           headers: {
@@ -328,10 +493,13 @@ export class Narrator {
         }
         if (res.status === 429 || res.status >= 500) {
           lastError = httpError(res.status, parsed, this.model, this.#apiKey);
-          if (res.status === 429 && isDailyQuota(parsed)) {
-            throw new FatalNarrationError(
-              `${lastError}（1 日あたりの上限に達しています。時間をおいてから撮り直してください）`,
-            );
+          if (res.status === 429) {
+            const hinted = retryDelayMs(parsed);
+            if (isDailyQuota(parsed) || (hinted != null && hinted > DAILY_QUOTA_WAIT_MS)) {
+              throw new FatalNarrationError(
+                `${lastError}（1 日あたりの上限に達しています。時間をおいてから撮り直してください）`,
+              );
+            }
           }
           if (attempt === MAX_ATTEMPTS - 1) break;
           const delay = res.status === 429 ? rateLimitDelayMs(parsed, attempt) : backoffMs(attempt);
@@ -348,7 +516,7 @@ export class Narrator {
 
         const inline = extractInlineAudio(parsed);
         if (!inline) {
-          lastError = "応答に音声データがありませんでした";
+          lastError = NO_AUDIO_MESSAGE;
           if (attempt === MAX_ATTEMPTS - 1) break;
           await sleep(backoffMs(attempt));
           continue;
@@ -362,6 +530,77 @@ export class Narrator {
       }
     }
     throw new Error(lastError);
+  }
+
+  private async hasOriginal(speech: string): Promise<boolean> {
+    return (await readCached(this.cachePath(speech))) != null;
+  }
+
+  /** 速めたファイル。倍率が 1 のときは合成したファイルそのもの */
+  private outputPath(speech: string): string {
+    const original = this.cachePath(speech);
+    if (this.tempo === 1) return original;
+    return `${original.slice(0, -4)}.t${formatTempo(this.tempo)}.pcm`;
+  }
+
+  /** 1 文は load、2 文以上はまとめ読み。失敗したら 1 回だけ読み直し、それでもだめなら 1 文ずつ */
+  private async prepareChunk(speeches: string[], bump: () => void, onLog?: (message: string) => void): Promise<void> {
+    if (speeches.length < 2) {
+      for (const speech of speeches) {
+        await this.load(speech);
+        bump();
+      }
+      return;
+    }
+    let wrote = await this.tryReadScript(speeches);
+    if (!wrote) wrote = await this.tryReadScript(speeches);
+    if (!wrote) {
+      onLog?.(`台本を切り分けられなかったので、1 文ずつ読み上げます（${speeches.length} 文）`);
+      for (const speech of speeches) {
+        await this.load(speech);
+        bump();
+      }
+      return;
+    }
+    for (const speech of speeches) {
+      await this.load(speech);
+      bump();
+    }
+  }
+
+  /**
+   * まとめて 1 回読み、文ごとに切り分けて元のキャッシュへ書く。
+   * 音声が無い、または切り分けられないときは false。FatalNarrationError はそのまま投げる。
+   */
+  private async tryReadScript(speeches: string[]): Promise<boolean> {
+    let pcm: Buffer;
+    try {
+      const audio = await this.fetchAudio(speeches.join("\n\n"), `${this.style} ${SCRIPT_STYLE}`);
+      pcm = await this.decodeAudio(audio, false);
+    } catch (err) {
+      if (err instanceof FatalNarrationError) throw err;
+      if (isNoAudio(err)) return false;
+      throw err;
+    }
+    if (pcm.length < 2) return false;
+    const ranges = splitScript(
+      pcm,
+      speeches.map((speech) => scriptWeight(speech)),
+    );
+    if (!ranges || ranges.length !== speeches.length) return false;
+    const trimmed: Buffer[] = [];
+    for (const range of ranges) {
+      trimmed.push(await this.trimSilence(pcm.subarray(range.start, range.end)));
+    }
+    for (let i = 0; i < speeches.length; i++) {
+      await this.writeAtomic(this.cachePath(speeches[i]), trimmed[i]);
+    }
+    return true;
+  }
+
+  /** 切り分けた 1 文に、1 文合成と同じ無音除去をかける */
+  private trimSilence(pcm: Buffer): Promise<Buffer> {
+    return this.decodeAudio({ bytes: pcm, kind: "pcm", rate: SAMPLE_RATE, ext: ".raw" }, true);
   }
 
   /**
@@ -389,6 +628,260 @@ export class Narrator {
     else this.requestStarts.splice(at, 0, startAt);
     return startAt - now;
   }
+}
+
+/**
+ * 読み上げにかかる長さの見込み。空白は数えない。
+ * ひらがな・カタカナ・「ー」は 1、漢字・「々」は 1.8。
+ * ASCII の英数字は、1 文字だけなら 2、2 文字以上の連続は 1 文字 0.9。
+ * 読点は 2.5、句点・感嘆符・疑問符は 4。それ以外は 0。
+ */
+export function scriptWeight(speech: string): number {
+  const chars = Array.from(speech);
+  let total = 0;
+  for (let i = 0; i < chars.length; ) {
+    const ch = chars[i];
+    if (isSpeechSpace(ch)) {
+      i++;
+      continue;
+    }
+    if (isAsciiAlnum(ch)) {
+      let j = i + 1;
+      while (j < chars.length && isAsciiAlnum(chars[j])) j++;
+      const len = j - i;
+      total += len === 1 ? 2 : len * 0.9;
+      i = j;
+      continue;
+    }
+    total += speechCharWeight(ch);
+    i++;
+  }
+  return total;
+}
+
+/**
+ * 24kHz モノラル s16le を、文ごとの重みと無音の位置で切り分ける。
+ * 返り値は文ごとの [start, end) バイト位置（2 の倍数）。切れなければ null。
+ */
+export function splitScript(pcm: Buffer, weights: number[]): { start: number; end: number }[] | null {
+  const n = weights.length;
+  if (n === 0) return null;
+  if (weights.some((w) => !Number.isFinite(w) || w < 0)) return null;
+  const sumW = weights.reduce((sum, w) => sum + w, 0);
+  if (sumW <= 0) return null;
+
+  const frameCount = Math.floor(pcm.length / FRAME_BYTES);
+  if (frameCount === 0) return null;
+
+  const silent = new Array<boolean>(frameCount);
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < frameCount; i++) {
+    silent[i] = frameDb(pcm, i) < -45;
+    if (!silent[i]) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  }
+  if (first < 0 || last < first) return null;
+
+  const speechStart = first * FRAME_SAMPLES;
+  const speechEnd = (last + 1) * FRAME_SAMPLES;
+  const ranges =
+    n === 1 ? [{ start: speechStart * 2, end: speechEnd * 2 }] : cutBySilence(silent, first, last, weights, sumW);
+  if (!ranges) return null;
+  return acceptRanges(silent, ranges, weights, sumW) ? ranges : null;
+}
+
+function speechCharWeight(ch: string): number {
+  if (ch === "、" || ch === "，" || ch === "," || ch === "・") return 2.5;
+  if (ch === "。" || ch === "．" || ch === "！" || ch === "？" || ch === "!" || ch === "?") return 4;
+  if (isKana(ch) || ch === "ー") return 1;
+  if (isKanji(ch)) return 1.8;
+  return 0;
+}
+
+function isSpeechSpace(ch: string): boolean {
+  return /\s/u.test(ch);
+}
+
+function isAsciiAlnum(ch: string): boolean {
+  return ch.length === 1 && ((ch >= "0" && ch <= "9") || (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z"));
+}
+
+function isKana(ch: string): boolean {
+  const c = ch.codePointAt(0);
+  if (c == null) return false;
+  return (c >= 0x3041 && c <= 0x3096) || (c >= 0x30a1 && c <= 0x30fa) || c === 0x30fc;
+}
+
+function isKanji(ch: string): boolean {
+  const c = ch.codePointAt(0);
+  if (c == null) return false;
+  return c === 0x3005 || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff);
+}
+
+/** 10ms 区間の平均二乗を dB にする。x は -1〜1 */
+function frameDb(pcm: Buffer, frame: number): number {
+  const start = frame * FRAME_BYTES;
+  let sumSq = 0;
+  for (let s = 0; s < FRAME_SAMPLES; s++) {
+    const x = pcm.readInt16LE(start + s * 2) / 32768;
+    sumSq += x * x;
+  }
+  const mean = sumSq / FRAME_SAMPLES;
+  if (mean <= 0) return Number.NEGATIVE_INFINITY;
+  return 10 * Math.log10(mean);
+}
+
+type SilenceCand = { centerSample: number; lengthSec: number; startSample: number; endSample: number };
+
+/** 発話の内側にある 150ms 以上の無音から、長くてはっきりしたものを文の区切りにする */
+function cutBySilence(
+  silent: boolean[],
+  first: number,
+  last: number,
+  weights: number[],
+  sumW: number,
+): { start: number; end: number }[] | null {
+  const n = weights.length;
+  const cands: SilenceCand[] = [];
+  let run = -1;
+  for (let i = first; i <= last; i++) {
+    if (silent[i]) {
+      if (run < 0) run = i;
+      continue;
+    }
+    if (run >= 0) {
+      pushSilence(cands, run, i, first, last);
+      run = -1;
+    }
+  }
+
+  const need = n - 1;
+  if (cands.length < need) return null;
+
+  const speechStart = first * FRAME_SAMPLES;
+  const speechEnd = (last + 1) * FRAME_SAMPLES;
+  const dSec = (speechEnd - speechStart) / SAMPLE_RATE;
+  if (!(dSec > 0)) return null;
+
+  const chosen = pickCuts(cands, weights, sumW, speechStart, dSec);
+  if (!chosen) return null;
+
+  const bounds = [speechStart, ...chosen.map((cand) => cand.centerSample), speechEnd];
+  const ranges: { start: number; end: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const start = bounds[i] * 2;
+    const end = bounds[i + 1] * 2;
+    if (end <= start) return null;
+    ranges.push({ start, end });
+  }
+  return ranges;
+}
+
+function pushSilence(cands: SilenceCand[], run: number, endFrame: number, first: number, last: number): void {
+  const runFrames = endFrame - run;
+  // 発話範囲の端に接する無音は、文の区切りに使わない
+  if (runFrames < 15 || run <= first || endFrame - 1 >= last) return;
+  const startSample = run * FRAME_SAMPLES;
+  const endSample = endFrame * FRAME_SAMPLES;
+  cands.push({
+    centerSample: (startSample + endSample) / 2,
+    lengthSec: (endSample - startSample) / SAMPLE_RATE,
+    startSample,
+    endSample,
+  });
+}
+
+/** 選んだ最短の無音は、残りの最長の 1.3 倍以上の長さが要る */
+const MIN_CUT_SILENCE_RATIO = 1.3;
+/** 選んだ最短の無音は、残りの最長より 0.3 秒以上長いことが要る */
+const MIN_CUT_SILENCE_MARGIN_SEC = 0.3;
+/** 切れ目が見込み位置からずれてよい幅の下限（秒） */
+const MIN_CUT_OFFSET_SEC = 1.0;
+/** ずれの許容幅は、隣り合う文の見込みの長さの短いほうの 4 分の 1 */
+const CUT_OFFSET_SPAN_RATIO = 0.25;
+
+/** 長い無音を区切りの数だけ選び、残りよりはっきり長く見込み位置に近いときだけ返す */
+function pickCuts(
+  cands: SilenceCand[],
+  weights: number[],
+  sumW: number,
+  speechStart: number,
+  dSec: number,
+): SilenceCand[] | null {
+  const need = weights.length - 1;
+  const ranked = cands.slice().sort((a, b) => {
+    if (a.lengthSec !== b.lengthSec) return b.lengthSec - a.lengthSec;
+    return a.centerSample - b.centerSample;
+  });
+  const picked = ranked.slice(0, need);
+  const rest = ranked.slice(need);
+  if (rest.length > 0) {
+    const shortestPicked = Math.min(...picked.map((cand) => cand.lengthSec));
+    const longestRest = Math.max(...rest.map((cand) => cand.lengthSec));
+    if (
+      shortestPicked < MIN_CUT_SILENCE_RATIO * longestRest ||
+      shortestPicked - longestRest < MIN_CUT_SILENCE_MARGIN_SEC
+    ) {
+      return null;
+    }
+  }
+
+  picked.sort((a, b) => a.centerSample - b.centerSample);
+
+  // 区切りの無音は文の重みに比例しないので、除いた発話の長さで見込みと比べる
+  let selectedSilenceSec = 0;
+  for (const cand of picked) selectedSilenceSec += (cand.endSample - cand.startSample) / SAMPLE_RATE;
+  const speechOnlySec = dSec - selectedSilenceSec;
+
+  let expected = 0;
+  let priorSilenceSec = 0;
+  for (let k = 0; k < need; k++) {
+    const span = (speechOnlySec * weights[k]) / sumW;
+    const nextSpan = (speechOnlySec * weights[k + 1]) / sumW;
+    expected += span;
+    const silenceSec = (picked[k].endSample - picked[k].startSample) / SAMPLE_RATE;
+    const actual = (picked[k].startSample - speechStart) / SAMPLE_RATE - priorSilenceSec;
+    const tolerance = Math.max(MIN_CUT_OFFSET_SEC, CUT_OFFSET_SPAN_RATIO * Math.min(span, nextSpan));
+    if (Math.abs(actual - expected) > tolerance) return null;
+    priorSilenceSec += silenceSec;
+  }
+  return picked;
+}
+
+/** 各文の有音の長さが、重みから見込んだ長さの 0.5〜2 倍で、かつ 0.25 秒以上 */
+function acceptRanges(silent: boolean[], ranges: { start: number; end: number }[], weights: number[], sumW: number): boolean {
+  const ds: number[] = [];
+  for (const range of ranges) {
+    const startSample = range.start / 2;
+    const endSample = range.end / 2;
+    if (range.start % 2 !== 0 || range.end % 2 !== 0 || endSample <= startSample) return false;
+    let firstSample = -1;
+    let lastSample = -1;
+    const frameCount = silent.length;
+    for (let i = 0; i < frameCount; i++) {
+      if (silent[i]) continue;
+      const fs = i * FRAME_SAMPLES;
+      const fe = fs + FRAME_SAMPLES;
+      if (fs < startSample || fe > endSample) continue;
+      if (firstSample < 0) firstSample = fs;
+      lastSample = fe;
+    }
+    if (firstSample < 0) return false;
+    const samples = lastSample - firstSample;
+    if (samples < SAMPLE_RATE * 0.25) return false;
+    ds.push(samples / SAMPLE_RATE);
+  }
+  const sumD = ds.reduce((sum, d) => sum + d, 0);
+  for (let i = 0; i < ds.length; i++) {
+    const e = (sumD * weights[i]) / sumW;
+    if (!(e > 0)) return false;
+    const ratio = ds[i] / e;
+    if (ratio < 0.5 || ratio > 2) return false;
+  }
+  return true;
 }
 
 /**
@@ -466,6 +959,39 @@ export async function muxNarration(opts: {
 function normalizeConcurrency(value: number | undefined): number {
   if (value == null || !Number.isFinite(value) || value < 1) return DEFAULT_CONCURRENCY;
   return Math.floor(value);
+}
+
+/** 有限で 0.5 以上 2 以下なら小数 2 桁。それ以外は既定 */
+function normalizeTempo(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value) || value < 0.5 || value > 2) return DEFAULT_TEMPO;
+  return Math.round(value * 100) / 100;
+}
+
+/** 1.2 や 1.25 のように、末尾の 0 を付けない */
+function formatTempo(tempo: number): string {
+  return tempo.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+/** 0 / false / off（大文字小文字は問わない）ならまとめ読みを切る。それ以外は有効 */
+function parseBatch(value: string | undefined): boolean {
+  if (value == null) return true;
+  const v = value.trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "off";
+}
+
+/** 最大 8 文。まとまりの数は ceil(n/8)、1 つは ceil(n/まとまりの数) で均等に分ける */
+function chunkLines(lines: string[]): string[][] {
+  const n = lines.length;
+  if (n === 0) return [];
+  const chunks = Math.ceil(n / MAX_SCRIPT_LINES);
+  const size = Math.ceil(n / chunks);
+  const out: string[][] = [];
+  for (let i = 0; i < n; i += size) out.push(lines.slice(i, i + size));
+  return out;
+}
+
+function isNoAudio(err: unknown): boolean {
+  return err instanceof Error && err.message === NO_AUDIO_MESSAGE;
 }
 
 function normalizeRequestsPerMinute(value: number | undefined): number {

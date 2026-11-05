@@ -4,6 +4,7 @@
 // Worker とブラウザの両方で動くよう、DOM も Node の API も cloudflare:workers も使わず、marked だけを使う。
 
 import { Marked, type RendererObject, type Token, type Tokens, type TokenizerThis } from "marked";
+import { HTML4_NAMED_ENTITIES } from "./html4-entities";
 
 export const ALERT_TYPES = ["note", "tip", "important", "warning", "caution"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
@@ -38,36 +39,51 @@ function escapeHtml(s: string): string {
 /** `\&` の &。文字参照を戻す処理が、続く `amp;` などまで一緒に戻さないようにする */
 const ESCAPED_AMP = "\uE000";
 
-/** 文字参照を1回だけ戻す。nbsp は呼び出し側が空白か NBSP かを決める */
-function decodeEntities(s: string, nbsp: string): string {
-  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, ent: string) => {
-    const e = ent.toLowerCase();
-    switch (e) {
-      case "amp":
-        return "&";
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "quot":
-        return '"';
-      case "apos":
-        return "'";
-      case "nbsp":
-        return nbsp;
-      default: {
-        const hex = e.startsWith("#x");
-        const cp = hex ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
-        if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
-        return String.fromCodePoint(cp);
-      }
-    }
-  });
+/**
+ * amp・lt・gt・quot・apos・nbsp と数値だけ戻す。
+ * それ以外の名前は null（表示では文字参照のまま、平文では HTML 4 の表を見る）。
+ * 不正な数値は元の参照文字列を返す。
+ */
+function decodeBasicEntity(ent: string, nbsp: string): string | null {
+  const e = ent.toLowerCase();
+  switch (e) {
+    case "amp":
+      return "&";
+    case "lt":
+      return "<";
+    case "gt":
+      return ">";
+    case "quot":
+      return '"';
+    case "apos":
+      return "'";
+    case "nbsp":
+      return nbsp;
+  }
+  if (!e.startsWith("#")) return null;
+  const hex = e.startsWith("#x");
+  const cp = hex ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
+  if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return `&${ent};`;
+  return String.fromCodePoint(cp);
 }
 
-/** 本文中の文字。文字参照は戻してから、残った & < > " ' を一度だけエスケープする */
+/** 文字参照を1回だけ戻す。nbsp は呼び出し側が空白か NBSP かを決める。HTML 4 の名前は戻さない */
+function decodeEntities(s: string, nbsp: string): string {
+  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, ent: string) => decodeBasicEntity(ent, nbsp) ?? all);
+}
+
+/**
+ * 本文・リンクの文字・画像の代替テキスト・属性値。
+ * 6 つの名前と数値は戻してからエスケープする。
+ * それ以外の `&名前;`（`&[A-Za-z][A-Za-z0-9]{1,31};`）は `&` をエスケープせず文字参照のまま出す。
+ */
 function escapeText(s: string): string {
-  return escapeHtml(decodeEntities(s, "\u00A0"));
+  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]{1,31});|[&<>"']/gi, (all, ent?: string) => {
+    if (!ent) return escapeHtml(all);
+    const decoded = decodeBasicEntity(ent, "\u00A0");
+    if (decoded === null) return all;
+    return escapeHtml(decoded);
+  });
 }
 
 function isSafeHref(href: string): boolean {
@@ -480,15 +496,15 @@ const renderer: RendererObject = {
     const text = token.tokens?.length ? this.parser.parseInline(token.tokens) : escapeText(token.text);
     const href = decodeEntities(token.href, "\u00A0");
     if (!isSafeHref(href)) return text;
-    return `<a href="${escapeHtml(href)}">${text}</a>`;
+    return `<a href="${escapeText(token.href)}">${text}</a>`;
   },
   image(token) {
     // 平文抽出は \& を印に置く。代替テキストでは、今まで通り & に戻してから文字参照を処理する。
     const alt = (token.tokens?.length ? inlinePlain(token.tokens) : token.text).replaceAll(ESCAPED_AMP, "&");
     const src = decodeEntities(token.href, "\u00A0");
     if (!isSafeImageSrc(src)) return escapeText(alt);
-    const title = token.title ? ` title="${escapeHtml(decodeEntities(token.title, "\u00A0"))}"` : "";
-    return `<img src="${escapeHtml(src)}" alt="${escapeHtml(decodeEntities(alt, "\u00A0"))}"${title}>`;
+    const title = token.title ? ` title="${escapeText(token.title)}"` : "";
+    return `<img src="${escapeText(token.href)}" alt="${escapeText(alt)}"${title}>`;
   },
   text(token) {
     if ("tokens" in token && token.tokens) return this.parser.parseInline(token.tokens);
@@ -688,9 +704,18 @@ function softenNbsp(s: string): string {
   return s.replace(/&nbsp;/gi, " ");
 }
 
-/** 平文の文字参照。戻した改行は行を増やさないよう空白にする */
+/**
+ * 平文の文字参照。6 つの名前と数値に加え、HTML 4 の名前を1回だけ戻す。
+ * 表に無い名前はそのまま残す。戻した改行は行を増やさないよう空白にする。
+ */
 function decodePlainText(s: string): string {
-  return decodeEntities(s, " ").replace(/[\n\r]/g, " ");
+  return s
+    .replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]{1,31});/gi, (all, ent: string) => {
+      const decoded = decodeBasicEntity(ent, " ");
+      if (decoded === null) return HTML4_NAMED_ENTITIES[ent] ?? all;
+      return decoded;
+    })
+    .replace(/[\n\r]/g, " ");
 }
 
 function htmlPlain(src: string): string {
