@@ -216,6 +216,21 @@ function AssistantPanelBody() {
     else panelRef.current?.focus();
   }, []);
 
+  const wasSendingRef = useRef(false);
+  useLayoutEffect(() => {
+    const wasSending = wasSendingRef.current;
+    wasSendingRef.current = sending;
+    if (!wasSending || sending) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const active = document.activeElement;
+    // ページ側の入力欄など、パネルの外にフォーカスがあるときは奪わない
+    if (active && active !== document.body && active !== document.documentElement && !panel.contains(active)) return;
+    const input = inputRef.current;
+    if (input && !input.disabled) input.focus();
+    else panel.focus();
+  }, [sending]);
+
   useLayoutEffect(() => {
     const el = logRef.current;
     if (!el || !stickRef.current) return;

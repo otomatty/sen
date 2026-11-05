@@ -7,11 +7,26 @@ import {
 } from "../../shared/assistant";
 import { isScreenId, type ScreenId } from "../../shared/navigation";
 import { historyText, screenTitle } from "./prompt";
-import { parseHistoryAction } from "./tools";
+import { LIMITS, parseHistoryAction } from "./tools";
 
 const FORMAT_ERROR = "形式が正しくありません";
 const EMPTY_QUESTION = "質問を入力してください";
 const TOO_LONG = "質問は1000文字以内で入力してください";
+/** 1 回の応答で出せる操作の合計。履歴の assistant メッセージも同じ数まで */
+const MAX_HISTORY_ACTIONS = Object.values(LIMITS).reduce((sum, count) => sum + count, 0);
+
+/** 検証に通った操作だけを数え、上限に達したらそこで止める。先に配列は切らない */
+function takeHistoryActions(raw: unknown): AssistantAction[] {
+  if (!Array.isArray(raw)) return [];
+  const actions: AssistantAction[] = [];
+  for (const item of raw) {
+    const parsed = parseHistoryAction(item);
+    if (!parsed) continue;
+    actions.push(parsed);
+    if (actions.length >= MAX_HISTORY_ACTIONS) break;
+  }
+  return actions;
+}
 
 export interface NormalizedMessage {
   role: "user" | "assistant";
@@ -58,13 +73,7 @@ export function parseAssistantRequest(body: unknown): { ok: true; value: ParsedR
     if (last && text.length > ASSISTANT_MAX_QUESTION) return { ok: false, error: TOO_LONG };
     const clipped =
       raw.role === "assistant" ? text.slice(0, 4000) : last ? text : text.slice(0, ASSISTANT_MAX_QUESTION);
-    const actions =
-      raw.role === "assistant" && Array.isArray(raw.actions)
-        ? raw.actions.flatMap((action) => {
-            const parsed = parseHistoryAction(action);
-            return parsed ? [parsed] : [];
-          })
-        : [];
+    const actions = raw.role === "assistant" ? takeHistoryActions(raw.actions) : [];
     messages.push({ role: raw.role, text: clipped, actions });
   }
 

@@ -47,6 +47,8 @@ let generation = 0;
 let controller: AbortController | null = null;
 let workspaceKey: string | null = null;
 let statusSeq = 0;
+/** 最後に status の取得を始めた時刻。画面に戻ったときの再取得を間引く */
+let statusFetchedAt = 0;
 
 function nextId(): string {
   return crypto.randomUUID();
@@ -122,6 +124,8 @@ function applyEvent(id: string, event: AssistantEvent) {
     return;
   }
   if (event.type === "done") {
+    // 応答で残りが確定した。それより前に始めた status の取得では上書きしない
+    statusSeq += 1;
     useAssistant.setState((s) => ({
       status: {
         enabled: s.status?.enabled ?? true,
@@ -138,6 +142,8 @@ function applyEvent(id: string, event: AssistantEvent) {
 
 function finish(id: string, myGen: number, opts?: { error?: string; quota?: boolean }) {
   if (myGen !== generation) return;
+  // 429 で残りを 0 にしたあと、古い status の応答で戻さない
+  if (opts?.quota) statusSeq += 1;
   useAssistant.setState((s) => ({
     sending: false,
     status: opts?.quota
@@ -196,6 +202,7 @@ function pageContext(): { ws: string; screen: string | null } | null {
 /** ワークスペースを開いたとき。失敗したら使えない扱いにする。別のワークスペースなら会話を消す */
 export async function loadAssistantStatus(ws: string) {
   const seq = ++statusSeq;
+  statusFetchedAt = Date.now();
   if (workspaceKey !== ws) {
     workspaceKey = ws;
     generation += 1;
@@ -215,8 +222,33 @@ export async function loadAssistantStatus(ws: string) {
   }
 }
 
+/**
+ * 会話を消さずに、いまのワークスペースの status だけを取り直す。
+ * minIntervalMs より新しい取得があるときは何もしない。
+ * 失敗しても、すでに持っている status は上書きしない。まだ持っていないときだけ使えない扱いにする。
+ */
+export async function refreshAssistantStatus(opts?: { minIntervalMs?: number }) {
+  const ws = workspaceKey;
+  if (!ws) return;
+  if (opts?.minIntervalMs != null && Date.now() - statusFetchedAt < opts.minIntervalMs) return;
+  const seq = ++statusSeq;
+  statusFetchedAt = Date.now();
+  try {
+    const status = await api<unknown>(`/api/assistant/status?ws=${encodeURIComponent(ws)}`);
+    if (seq !== statusSeq || workspaceKey !== ws) return;
+    if (!isStatus(status)) throw new Error("status");
+    useAssistant.setState({ status });
+  } catch (e) {
+    if (isAbortError(e)) return;
+    if (seq !== statusSeq || workspaceKey !== ws) return;
+    if (useAssistant.getState().status) return;
+    useAssistant.setState({ status: { enabled: false, limit: 0, remaining: 0 } });
+  }
+}
+
 export function openAssistant(question?: string) {
   useAssistant.setState({ open: true });
+  void refreshAssistantStatus();
   const text = question?.trim() ?? "";
   if (!text) return;
   const ctx = pageContext();
@@ -233,10 +265,13 @@ export function stopAssistant() {
 }
 
 export function resetAssistant() {
+  // generation を進めると、送信中の catch は何もせずに戻る。中止したときだけ残りを取り直す
+  const inflight = controller != null;
   generation += 1;
   controller?.abort();
   controller = null;
   useAssistant.setState({ messages: [], sending: false });
+  if (inflight) void refreshAssistantStatus();
 }
 
 export async function sendAssistantQuestion(ws: string, text: string, screen: string | null) {
@@ -282,15 +317,30 @@ export async function sendAssistantQuestion(ws: string, text: string, screen: st
     );
     if (myGen !== generation) return;
     if (!res.body) throw new ApiError("応答を読み取れませんでした", 0);
+    let sawDone = false;
     await readNdjson(res.body, (event) => {
       if (myGen !== generation) return;
+      if (event.type === "done") sawDone = true;
       applyEvent(assistantId, event);
     });
+    if (myGen !== generation) return;
+    // 停止はエラーにしない。done の前に切れた応答は成功にせず、消費された残りを取り直す
+    if (mine.signal.aborted) {
+      finish(assistantId, myGen);
+      void refreshAssistantStatus();
+      return;
+    }
+    if (!sawDone) {
+      finish(assistantId, myGen, { error: "応答が途中で終了しました。もう一度お試しください。" });
+      void refreshAssistantStatus();
+      return;
+    }
     finish(assistantId, myGen);
   } catch (e) {
     if (myGen !== generation) return;
-    if (isAbortError(e)) {
+    if (isAbortError(e) || mine.signal.aborted) {
       finish(assistantId, myGen);
+      void refreshAssistantStatus();
       return;
     }
     const message = e instanceof ApiError ? e.message : "ネットワークに接続できません";

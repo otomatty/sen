@@ -18,7 +18,7 @@ import { VideoModal } from "../features/help/VideoModal";
 import { WelcomeModal } from "../features/help/WelcomeModal";
 import { Sidebar } from "./Sidebar";
 import { AssistantPanel } from "../features/assistant/AssistantPanel";
-import { loadAssistantStatus } from "../store/assistant";
+import { loadAssistantStatus, refreshAssistantStatus } from "../store/assistant";
 import { preloadEditor } from "../components/Editor";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useCurrentTeamId } from "./hooks";
@@ -166,6 +166,20 @@ export function AppShell() {
     if (typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) return;
     if (!ws) return;
     void loadAssistantStatus(ws);
+    // オフラインから戻ったときと、しばらく離れていた画面に戻ったときに status を取り直す
+    const onOnline = () => {
+      void refreshAssistantStatus();
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshAssistantStatus({ minIntervalMs: 60_000 });
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [ws]);
 
   useEffect(() => {

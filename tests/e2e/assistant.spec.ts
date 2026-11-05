@@ -19,6 +19,8 @@ interface MockTextTurn {
   text?: string;
   tools?: ToolSpec[];
   stopReason?: "end_turn" | "tool_use" | "max_tokens" | "refusal";
+  /** message_start と最初の本文のあと、残りを送るまで待つミリ秒 */
+  holdMs?: number;
 }
 
 interface MockErrorTurn {
@@ -91,11 +93,12 @@ function sseEvent(type: string, data: unknown): string {
   return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-/** Anthropic Messages API のストリーミング（公式 SDK が読む SSE） */
-function streamBody(turn: MockTextTurn): string {
+/** Anthropic Messages API のストリーミング（公式 SDK が読む SSE）。head は message_start と最初の本文 */
+function streamParts(turn: MockTextTurn): { head: string; tail: string } {
   const stopReason = turn.stopReason ?? (turn.tools?.length ? "tool_use" : "end_turn");
-  const parts: string[] = [];
-  parts.push(
+  const head: string[] = [];
+  const tail: string[] = [];
+  head.push(
     sseEvent("message_start", {
       type: "message_start",
       message: {
@@ -119,51 +122,78 @@ function streamBody(turn: MockTextTurn): string {
   );
   let index = 0;
   if (turn.text) {
-    parts.push(
+    head.push(
       sseEvent("content_block_start", {
         type: "content_block_start",
         index,
         content_block: { type: "text", text: "", citations: null },
       }),
     );
-    parts.push(
+    head.push(
       sseEvent("content_block_delta", {
         type: "content_block_delta",
         index,
         delta: { type: "text_delta", text: turn.text },
       }),
     );
-    parts.push(sseEvent("content_block_stop", { type: "content_block_stop", index }));
+    head.push(sseEvent("content_block_stop", { type: "content_block_stop", index }));
     index += 1;
   }
   for (const tool of turn.tools ?? []) {
     const id = `toolu_e2e_${++toolSeq}`;
-    parts.push(
+    tail.push(
       sseEvent("content_block_start", {
         type: "content_block_start",
         index,
         content_block: { type: "tool_use", id, name: tool.name, input: {}, caller: { type: "direct" } },
       }),
     );
-    parts.push(
+    tail.push(
       sseEvent("content_block_delta", {
         type: "content_block_delta",
         index,
         delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.input) },
       }),
     );
-    parts.push(sseEvent("content_block_stop", { type: "content_block_stop", index }));
+    tail.push(sseEvent("content_block_stop", { type: "content_block_stop", index }));
     index += 1;
   }
-  parts.push(
+  tail.push(
     sseEvent("message_delta", {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null, stop_details: null },
       usage: { output_tokens: 16 },
     }),
   );
-  parts.push(sseEvent("message_stop", { type: "message_stop" }));
-  return parts.join("");
+  tail.push(sseEvent("message_stop", { type: "message_stop" }));
+  return { head: head.join(""), tail: tail.join("") };
+}
+
+function waitHold(res: ServerResponse, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = () => {
+      clearTimeout(timer);
+      res.off("close", finish);
+      resolve();
+    };
+    timer = setTimeout(finish, ms);
+    res.on("close", finish);
+  });
+}
+
+async function writeStream(res: ServerResponse, turn: MockTextTurn) {
+  const { head, tail } = streamParts(turn);
+  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+  const hold = turn.holdMs ?? 0;
+  if (hold > 0) {
+    res.socket?.setNoDelay(true);
+    res.write(head);
+    await waitHold(res, hold);
+    if (!res.destroyed && !res.writableEnded) res.end(tail);
+    return;
+  }
+  res.end(head + tail);
 }
 
 async function handleAnthropic(req: IncomingMessage, res: ServerResponse) {
@@ -189,8 +219,7 @@ async function handleAnthropic(req: IncomingMessage, res: ServerResponse) {
     sendJson(res, next.error.status, next.error.body);
     return;
   }
-  res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
-  res.end(streamBody(next));
+  await writeStream(res, next);
 }
 
 function startAnthropic(): Promise<Server> {
@@ -446,6 +475,75 @@ test.describe("AI アシスタント", () => {
     });
     expect(res.status()).toBe(429);
     expect(await res.text()).toContain("上限");
+
+    await page.keyboard.press("Control+k");
+    await expect(page.getByTestId("command-palette")).toBeVisible();
+    await page.getByTestId("palette-input").fill("まだ聞けますか");
+    await expect(page.locator('[data-command="ask-ai"]')).toHaveCount(0);
+  });
+
+  test("停止すると、残り回数がサーバーの値に戻る", async ({ page }) => {
+    await signUp(page);
+    await openPanel(page);
+    await expect(page.getByTestId("assistant-remaining")).toHaveText("今日はあと 3 回");
+    anthropic.queue.push({ text: "途中まで届いた答えです。", holdMs: 20_000, stopReason: "end_turn" });
+    await ask(page, "途中で止める質問");
+    await expect(page.locator("[data-testid=assistant-message][data-role=assistant]")).toContainText("途中まで届いた答えです。");
+    await page.getByTestId("assistant-stop").click();
+    await expect(page.getByTestId("assistant-remaining")).toHaveText("今日はあと 2 回");
+    await expect(page.locator("[data-testid=assistant-message][data-role=user]")).toContainText("途中で止める質問");
+  });
+
+  test("done の無い応答はエラーになる", async ({ page }) => {
+    await signUp(page);
+    await openPanel(page);
+    await expect(page.getByTestId("assistant-remaining")).toHaveText("今日はあと 3 回");
+    await page.route(/\/api\/assistant(?:\?|$)/, async (route) => {
+      const url = new URL(route.request().url());
+      if (route.request().method() !== "POST" || url.pathname !== "/api/assistant") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/x-ndjson; charset=utf-8" },
+        body: `${JSON.stringify({ type: "text", text: "途中まで" })}\n`,
+      });
+    });
+    const refreshed = page.waitForResponse((res) => {
+      const url = new URL(res.url());
+      return url.pathname === "/api/assistant/status" && res.request().method() === "GET" && res.ok();
+    });
+    await ask(page, "途中で切れる質問");
+    await refreshed;
+    await expect(page.getByTestId("assistant-error")).toHaveText("応答が途中で終了しました。もう一度お試しください。");
+    await expect(page.getByTestId("assistant-remaining")).toHaveText("今日はあと 3 回");
+  });
+
+  test("チームの画面は、いま開いているチームで開く", async ({ page }) => {
+    const { ws } = await signUp(page);
+    await page.getByTestId("workspace-menu").click();
+    await page.locator(".menu-item", { hasText: "設定" }).click();
+    await page.getByTestId("settings-nav-teams").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/settings/teams$`));
+    await page.getByLabel("チーム名").fill("セキュリティ");
+    await page.getByLabel("識別子").fill("SEC");
+    await page.getByRole("button", { name: "チームを作成" }).click();
+    await expect(page.getByTestId("nav-team-SEC-issues")).toBeVisible();
+    await page.getByTestId("nav-team-SEC-issues").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/team/SEC/all$`));
+
+    await openPanel(page);
+    anthropic.queue.push({
+      text: "サイクルの画面から開けます。",
+      tools: [{ name: "open_screen", input: { screen: "team-cycles" } }],
+      stopReason: "tool_use",
+    });
+    anthropic.queue.push({ text: "こちらです。", stopReason: "end_turn" });
+    await ask(page, "サイクルはどこで見られますか？");
+    await expect(page.getByTestId("assistant-open-screen")).toBeEnabled();
+    await page.getByTestId("assistant-open-screen").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/team/SEC/cycles$`));
   });
 
   test("AI 側のエラーでは回数を戻す", async ({ page }) => {
@@ -482,6 +580,20 @@ test.describe("AI アシスタント", () => {
     await expect.poll(() => anthropic.requests.length).toBe(1);
     const user = [...(requestBody(0).messages ?? [])].reverse().find((message) => message.role === "user");
     expect(lastText(user!)).toBe("ラベルの付け方");
+  });
+
+  test("最初の status の取得に失敗しても、オンラインに戻ると入り口が出る", async ({ page }) => {
+    const statusRoute = /\/api\/assistant\/status(?:\?|$)/;
+    await page.route(statusRoute, async (route) => {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "一時的な失敗" }) });
+    });
+    const failed = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/assistant/status" && res.status() === 503);
+    await signupViaUi(page);
+    await failed;
+    await expect(page.getByTestId("nav-assistant")).toHaveCount(0);
+    await page.unroute(statusRoute);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(page.getByTestId("nav-assistant")).toBeVisible();
   });
 
   test("新しい利用者の status は有効で、残りは上限と同じ", async ({ page }) => {

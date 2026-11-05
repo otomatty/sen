@@ -190,8 +190,9 @@ function Palette() {
   const meId = useData((s) => s.meId);
   const canInstall = usePWA((s) => !!s.installPrompt);
   const updateReady = usePWA((s) => s.updateReady);
-  const assistantEnabled = useAssistant((s) => s.status?.enabled === true);
-  const assistantOn = !(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) && assistantEnabled;
+  const assistantStatus = useAssistant((s) => s.status);
+  const assistantOn = !(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) && assistantStatus?.enabled === true;
+  const canAskAssistant = assistantOn && (assistantStatus?.remaining ?? 0) > 0;
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -297,7 +298,7 @@ function Palette() {
         perform: () => go(`/issue/${identifier(i, teamsMap)}`),
       }));
     const list = [...cmds, ...issueHits];
-    if (q.trim() && assistantOn) {
+    if (q.trim() && canAskAssistant) {
       list.push({
         id: "ask-ai",
         label: `AI に聞く：「${q}」`,
@@ -308,7 +309,7 @@ function Palette() {
       });
     }
     return list;
-  }, [commands, q, issues, teamsMap, assistantOn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [commands, q, issues, teamsMap, canAskAssistant]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setActive(0), [q]);
   useEffect(() => {

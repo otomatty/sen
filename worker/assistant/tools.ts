@@ -5,7 +5,7 @@ import type { AssistantAction } from "../../shared/assistant";
 import { isScreenId, type ScreenId } from "../../shared/navigation";
 import { findTutorial, screenTitle } from "./prompt";
 
-const LIMITS = { open_screen: 3, play_tutorial: 2, ask_user: 1 } as const;
+export const LIMITS = { open_screen: 3, play_tutorial: 2, ask_user: 1 } as const;
 
 export interface ToolBudget {
   counts: { open_screen: number; play_tutorial: number; ask_user: number };
