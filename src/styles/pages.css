@@ -592,35 +592,11 @@
 .settings-inline-link:hover {
   text-decoration: underline;
 }
-.invite-emails {
-  width: 100%;
-  min-height: 76px;
-  margin-top: 12px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-strong);
-  background: var(--panel);
-  resize: vertical;
-  line-height: 1.5;
-}
-.invite-emails:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-  outline: none;
-}
-.invite-banner,
 .domain-hint,
-.form-warn,
 .settings-card > .form-error {
   margin: 8px 0;
   line-height: 1.6;
 }
-.invite-banner,
-.form-warn {
-  color: var(--warn);
-  font-size: 13px;
-}
-.invite-actions,
 .domain-save {
   display: flex;
   flex-wrap: wrap;
@@ -628,12 +604,29 @@
   gap: 8px;
   padding: 4px 0 12px;
 }
-.invite-role {
+.members-page-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 13px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 760px;
+  margin-bottom: 32px;
+}
+.members-page-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.members-page-head h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.members-page-head p {
+  margin: 0;
+}
+.members-page-head > .btn {
+  flex-shrink: 0;
 }
 .invitation-row {
   flex-wrap: wrap;
@@ -651,38 +644,243 @@
   gap: 8px;
   margin-left: auto;
 }
-.invite-results {
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
+.invite-dialog .modal-head {
+  padding: 16px 20px 0;
+  flex-shrink: 0;
 }
-.invite-results-bar {
+.invite-dialog .modal-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+.invite-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 20px 20px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.invite-dialog-body p {
+  margin: 0;
+}
+.invite-dialog-foot {
   display: flex;
   justify-content: flex-end;
-  padding-top: 8px;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+.invite-done-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+  flex-shrink: 0;
+}
+.invite-banner {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  line-height: 1.6;
+}
+.invite-banner svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.invite-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.invite-field-label {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.invite-chip-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 76px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  cursor: text;
+}
+.invite-chip-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.invite-chip-input {
+  flex: 1 1 120px;
+  min-width: 120px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+}
+.invite-chip-input:focus,
+.invite-chip-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.invite-chip-input::placeholder {
+  color: var(--text-tertiary);
+}
+.invite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-height: 24px;
+  padding: 1px 2px 1px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.invite-chip-text {
+  overflow-wrap: anywhere;
+}
+.invite-chip-note {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.invite-chip.is-pending {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.invite-chip.is-blocked {
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+.invite-chip.is-invalid,
+.invite-chip.is-member {
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+.invite-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: inherit;
+  flex-shrink: 0;
+}
+.invite-chip-x:hover {
+  background: var(--hover);
+}
+.invite-chip-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.invite-chip-message {
+  font-size: 12.5px;
+}
+.invite-chip-message.is-invalid,
+.invite-chip-message.is-member {
+  color: var(--danger);
+}
+.invite-chip-message.is-blocked {
+  color: var(--warn);
+}
+.invite-chip-message.is-pending {
+  color: var(--accent-text);
+}
+.invite-role-switch {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+}
+.invite-role-switch button {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.invite-role-switch button.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.invite-mail-ok {
+  color: var(--success);
+}
+.invite-mail-warn {
+  color: var(--warn);
+}
+.invite-done-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 0 14px;
 }
 .invite-result {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  gap: 8px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 .invite-result:last-child {
   border-bottom: 0;
 }
-.invite-result p {
-  margin: 0;
-}
-.invite-result-link-row {
+.invite-result-top {
   display: flex;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-.invite-result-link-row .input {
+.invite-result-main {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
+}
+.invite-result-link {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.invite-result-link:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+.btn.invite-copied {
+  color: var(--success);
 }
 .domain-chips {
   display: flex;
@@ -1527,7 +1725,6 @@
   .settings-content textarea {
     font-size: 16px;
   }
-  .invite-actions .btn,
   .domain-save .btn,
   .invitation-actions .btn {
     min-height: 40px;
@@ -1538,11 +1735,36 @@
   .invitation-actions .btn {
     flex: 1;
   }
-  .invite-result-link-row {
-    flex-wrap: wrap;
+  .members-page-head {
+    flex-direction: column;
+    align-items: stretch;
   }
-  .invite-result-link-row .btn {
+  .members-page-head > .btn {
+    width: 100%;
+    height: 44px;
+  }
+  .invite-chip-input,
+  .invite-result-link {
+    font-size: 16px;
+  }
+  .invite-result-link {
+    height: 40px;
+  }
+  .invite-dialog-foot .btn,
+  .invite-result .btn,
+  .invite-role-switch button {
     min-height: 40px;
+  }
+  .invite-role-switch button {
+    height: 40px;
+  }
+  .invite-chip {
+    min-height: 36px;
+  }
+  .invite-chip-x,
+  .invite-dialog .icon-btn {
+    width: 36px;
+    height: 36px;
   }
   /* 狭い幅ではチーム名と識別子とボタンをそれぞれ 1 行にする */
   .team-add .input,

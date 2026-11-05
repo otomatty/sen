@@ -16,10 +16,6 @@ const INIT_BODY = {
   },
 };
 
-function inviteSection(page: Page) {
-  return page.locator(".settings-section", { has: page.getByTestId("invite-emails") });
-}
-
 function domainSection(page: Page) {
   return page.locator(".settings-section", { has: page.getByRole("heading", { name: "利用できるドメイン", exact: true }) });
 }
@@ -202,7 +198,8 @@ test("再送すると古いリンクは無効になり、新しいリンクで�
   await invitationRow(page, email).getByTestId("invitation-resend").click();
   await expect(page.getByTestId("confirm-dialog")).toContainText("今のリンクは使えなくなります");
   await page.getByTestId("confirm-ok").click();
-  const result = page.locator(`[data-testid="invite-result"][data-email="${email}"]`);
+  const dialog = page.getByTestId("invite-dialog");
+  const result = dialog.locator(`[data-testid="invite-result"][data-email="${email}"]`);
   await expect(result.getByTestId("invite-result-link")).not.toHaveValue(oldLink);
   const newLink = await result.getByTestId("invite-result-link").inputValue();
   expect(inviteToken(newLink)).not.toBe(inviteToken(oldLink));
@@ -225,7 +222,7 @@ test("管理者でないメンバーは招待できず、招待の API は 403 �
   const guest = await joinByInvite(browser, link, { email, name: "一般 メンバー" });
   try {
     await guest.page.goto(`/${ws}/settings/members`);
-    await expect(guest.page.getByTestId("invite-emails")).toHaveCount(0);
+    await expect(guest.page.getByTestId("invite-open")).toHaveCount(0);
     await expect(guest.page.getByText("メンバーの招待は管理者が行います。")).toBeVisible();
 
     const target = uniqueEmail("nope");
@@ -247,21 +244,66 @@ test("管理者でないメンバーは招待できず、招待の API は 403 �
 test("既にメンバーのアドレスは招待できない", async ({ page }) => {
   const { email, ws } = await signupViaUi(page, { name: "管理 花子" });
   await page.goto(`/${ws}/settings/members`);
-  await page.getByTestId("invite-emails").fill(email);
-  await page.getByTestId("invite-submit").click();
-  await expect(inviteSection(page).locator(".form-error")).toContainText(`${email}（既にメンバーです）`);
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  await dialog.getByTestId("invite-emails").fill(email);
+  await dialog.getByTestId("invite-emails").press("Enter");
+  await expect(dialog.locator(`[data-testid="invite-chip"][data-email="${email}"]`)).toHaveAttribute("data-status", "member");
+  await expect(dialog.getByTestId("invite-chip-message")).toHaveText(`${email} は、すでにメンバーです。`);
+  await expect(dialog.getByTestId("invite-submit")).toBeDisabled();
   await expect(page.getByTestId("invitation-row")).toHaveCount(0);
+
+  const res = await page.request.post(`/api/invitations?ws=${encodeURIComponent(ws)}`, {
+    headers: CLIENT,
+    data: { emails: [email], role: "member" },
+  });
+  expect(res.status()).toBe(400);
+  expect(((await res.json()) as { error?: string }).error).toContain(`${email}（既にメンバーです）`);
   expect(await pendingEmails(page, ws)).toEqual([]);
 });
 
 test("形式の正しくないアドレスは招待できない", async ({ page }) => {
   const { ws } = await signupViaUi(page, { name: "管理 花子" });
   await page.goto(`/${ws}/settings/members`);
-  await page.getByTestId("invite-emails").fill("not-an-email");
-  await page.getByTestId("invite-submit").click();
-  await expect(inviteSection(page).locator(".form-error")).toContainText("not-an-email（形式が正しくありません）");
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  await dialog.getByTestId("invite-emails").fill("not-an-email");
+  await dialog.getByTestId("invite-emails").press("Enter");
+  await expect(dialog.locator('[data-testid="invite-chip"][data-email="not-an-email"]')).toHaveAttribute("data-status", "invalid");
+  await expect(dialog.getByTestId("invite-chip-message")).toHaveText("not-an-email は、メールアドレスの形式が正しくありません。");
+  await expect(dialog.getByTestId("invite-submit")).toBeDisabled();
   await expect(page.getByTestId("invitation-row")).toHaveCount(0);
+
+  const res = await page.request.post(`/api/invitations?ws=${encodeURIComponent(ws)}`, {
+    headers: CLIENT,
+    data: { emails: ["not-an-email"], role: "member" },
+  });
+  expect(res.status()).toBe(400);
+  expect(((await res.json()) as { error?: string }).error).toContain("not-an-email（形式が正しくありません）");
   expect(await pendingEmails(page, ws)).toEqual([]);
+});
+
+test("カンマ区切りのアドレスはチップになり、招待中のアドレスは分かる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "管理 花子" });
+  const pending = uniqueEmail("chip-pending");
+  await inviteByEmail(page, ws, pending);
+
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  const input = dialog.getByTestId("invite-emails");
+  const a = uniqueEmail("chip-a");
+  const b = uniqueEmail("chip-b");
+  await input.fill(`${a}, ${b}`);
+  await input.press("Enter");
+  await expect(dialog.getByTestId("invite-chip")).toHaveCount(2);
+  await expect(dialog.getByTestId("invite-submit")).toHaveText("2 人を招待");
+
+  await input.fill(pending);
+  await input.press("Enter");
+  const chip = dialog.locator(`[data-testid="invite-chip"][data-email="${pending}"]`);
+  await expect(chip).toHaveAttribute("data-status", "pending");
+  await expect(chip).toContainText("招待中");
+  await expect(dialog.getByTestId("invite-chip-message")).toHaveText(`${pending} は招待中です。新しいリンクで招待し直します。`);
 });
 
 test("ワークスペースを持たない人は、作成画面から招待に参加できる", async ({ page, browser }) => {
@@ -291,8 +333,12 @@ test("ワークスペースを持たない人は、作成画面から招待に�
 test("招待の結果に「メールを送りました」と出る", async ({ page }) => {
   const { ws } = await signupViaUi(page, { name: "管理 花子" });
   const email = uniqueEmail("mail");
-  await inviteByEmail(page, ws, email);
-  const result = page.locator(`[data-testid="invite-result"][data-email="${email}"]`);
+  await page.goto(`/${ws}/settings/members`);
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  await dialog.getByTestId("invite-emails").fill(email);
+  await dialog.getByTestId("invite-submit").click();
+  const result = dialog.locator(`[data-testid="invite-result"][data-email="${email}"]`);
   await expect(result).toContainText("メールを送りました");
 });
 
@@ -395,9 +441,13 @@ test("許可外のドメインは招待できず、保存前の招待は取り�
   expect(await pendingEmails(page, ws)).not.toContain(pending);
 
   const rejected = uniqueEmail("rejected", "other.example.com");
-  await page.getByTestId("invite-emails").fill(rejected);
-  await page.getByTestId("invite-submit").click();
-  await expect(inviteSection(page).locator(".form-error")).toContainText(`${rejected}（利用できるドメインではありません）`);
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  await dialog.getByTestId("invite-emails").fill(rejected);
+  await dialog.getByTestId("invite-emails").press("Enter");
+  await expect(dialog.locator(`[data-testid="invite-chip"][data-email="${rejected}"]`)).toHaveAttribute("data-status", "blocked");
+  await expect(dialog.getByTestId("invite-chip-message")).toHaveText(`${rejected} は、利用できるドメインのアドレスではありません。`);
+  await expect(dialog.getByTestId("invite-submit")).toBeDisabled();
   await expect(invitationRow(page, rejected)).toHaveCount(0);
 
   const apiEmail = uniqueEmail("api", "other.example.com");

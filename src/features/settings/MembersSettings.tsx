@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, Trash2, X } from "lucide-react";
-import type { InvitationCreateResponse, InvitationIssued, InvitationListResponse, InvitationSummary, Role } from "../../../shared/types";
-import { emailDomain, isEmailAllowed, isValidDomain, isValidEmail, MAX_ALLOWED_DOMAINS, normalizeDomain, normalizeEmail } from "../../../shared/domains";
+import { useSearchParams } from "react-router";
+import { Trash2, UserPlus, X } from "lucide-react";
+import type { InvitationIssued, InvitationListResponse, InvitationSummary, Role } from "../../../shared/types";
+import { emailDomain, isEmailAllowed, isValidDomain, MAX_ALLOWED_DOMAINS, normalizeDomain } from "../../../shared/domains";
 import { useData } from "../../store/data";
 import { removeMember, setAllowedDomains, setMemberRole } from "../../store/actions";
 import { useMembers } from "../../store/selectors";
 import { toast } from "../../store/ui";
-import { copyText } from "../../lib/utils";
 import { api } from "../../lib/api";
 import { confirmDialog } from "../../components/ConfirmDialog";
 import { Avatar, Button, Spinner } from "../../components/ui";
 import { useIsAdmin } from "../../app/hooks";
+import { InviteDialog } from "./InviteDialog";
 import { Section } from "./parts";
 
 const EMPTY_DOMAINS: string[] = [];
@@ -24,28 +25,10 @@ function sameList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
-/** カンマ・読点・空白・改行で分ける */
-function splitEmails(raw: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const part of raw.split(/[\s,、，]+/)) {
-    const email = normalizeEmail(part);
-    if (!email || seen.has(email)) continue;
-    seen.add(email);
-    out.push(email);
-  }
-  return out;
-}
-
 function expiryLabel(inv: Pick<InvitationSummary, "expiresAt" | "status">, now = Date.now()): string {
   if (inv.status === "expired" || inv.expiresAt <= now) return "期限切れ";
   const days = Math.max(1, Math.ceil((inv.expiresAt - now) / DAY_MS));
   return `${days}日後に期限切れ`;
-}
-
-function mailStatus(issued: InvitationIssued): string {
-  if (issued.emailSent) return "メールを送りました";
-  return issued.emailError ? `メールは送られていません：${issued.emailError}` : "メールは送られていません";
 }
 
 function MemberList() {
@@ -102,130 +85,6 @@ function MemberList() {
           </div>
         );
       })}
-      {!admin && <p className="muted settings-empty">メンバーの招待は管理者が行います。</p>}
-    </Section>
-  );
-}
-
-function IssuedResults({ issued, onClose }: { issued: InvitationIssued[]; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.scrollIntoView({ block: "nearest" });
-  }, [issued]);
-  if (!issued.length) return null;
-  return (
-    <div className="invite-results" ref={ref}>
-      <div className="invite-results-bar">
-        <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-          閉じる
-        </Button>
-      </div>
-      {issued.map((r) => (
-        <div key={r.invitation.id} className="invite-result" data-testid="invite-result" data-email={r.invitation.email}>
-          <b className="invite-result-email">{r.invitation.email}</b>
-          <span className="muted small">{mailStatus(r)}</span>
-          <div className="invite-result-link-row">
-            <input
-              className="input"
-              readOnly
-              value={r.link}
-              data-testid="invite-result-link"
-              aria-label={`${r.invitation.email} の招待リンク`}
-              onFocus={(e) => e.target.select()}
-            />
-            <Button
-              type="button"
-              icon={<Copy size={14} />}
-              onClick={() => void copyText(r.link).then(() => toast("招待リンクをコピーしました"))}
-            >
-              コピー
-            </Button>
-          </div>
-          <p className="muted small">このリンクは今だけ表示されます</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InviteForm({
-  wsKey,
-  emailEnabled,
-  issued,
-  onIssued,
-  onDone,
-}: {
-  wsKey: string;
-  emailEnabled: boolean | null;
-  issued: InvitationIssued[];
-  onIssued: (issued: InvitationIssued[]) => void;
-  onDone: () => void;
-}) {
-  const allowed = useData((s) => s.workspace?.allowedDomains) ?? EMPTY_DOMAINS;
-  const [raw, setRaw] = useState("");
-  const [role, setRole] = useState<Role>("member");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const emails = splitEmails(raw);
-  const blocked = allowed.length ? emails.filter((e) => isValidEmail(e) && !isEmailAllowed(e, allowed)) : [];
-
-  const submit = async () => {
-    if (!wsKey || busy) return;
-    setError(null);
-    if (!emails.length) {
-      setError("メールアドレスを指定してください");
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await api<InvitationCreateResponse>(`/api/invitations?ws=${encodeURIComponent(wsKey)}`, {
-        body: { emails, role },
-      });
-      setRaw("");
-      onIssued(res.results);
-      onDone();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Section
-      title="メンバーを招待"
-      description="招待したい人のメールアドレスを入力してください。招待は 7 日間有効で、1 回だけ使えます。招待したアドレスの Google アカウントでログインしたときだけ参加できます。"
-    >
-      {emailEnabled === false && (
-        <p className="invite-banner">
-          招待メールの送信が設定されていないため、メールは送られません。招待したあとに表示されるリンクを、本人に送ってください。
-        </p>
-      )}
-      <textarea
-        className="invite-emails"
-        data-testid="invite-emails"
-        aria-label="招待するメールアドレス"
-        placeholder="hanako@example.com, ichiro@example.com"
-        value={raw}
-        rows={3}
-        onChange={(e) => setRaw(e.target.value)}
-      />
-      {allowed.length > 0 && <p className="muted small domain-hint">利用できるドメイン：{allowed.join("、")}</p>}
-      <div className="invite-actions">
-        <label className="invite-role">
-          権限
-          <select data-testid="invite-role" aria-label="権限" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            <option value="member">メンバー</option>
-            <option value="admin">管理者</option>
-          </select>
-        </label>
-        <Button type="button" variant="primary" data-testid="invite-submit" disabled={busy || !raw.trim() || !wsKey} onClick={() => void submit()}>
-          {busy ? "招待しています…" : "招待する"}
-        </Button>
-      </div>
-      {blocked.length > 0 && <p className="form-warn">許可されていないドメインのアドレスが含まれています：{blocked.join("、")}</p>}
-      {error && <p className="form-error">{error}</p>}
-      <IssuedResults issued={issued} onClose={() => onIssued([])} />
     </Section>
   );
 }
@@ -462,14 +321,18 @@ function AllowedDomains({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+type InviteDialogState = { kind: "compose" } | { kind: "done"; results: InvitationIssued[]; resent: boolean };
+
 export function MembersSettings() {
   const admin = useIsAdmin();
   const wsKey = useData((s) => s.workspace?.urlKey ?? "");
+  const wsName = useData((s) => s.workspace?.name ?? "");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [invitations, setInvitations] = useState<InvitationSummary[]>([]);
   const [emailEnabled, setEmailEnabled] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [issued, setIssued] = useState<InvitationIssued[]>([]);
+  const [dialog, setDialog] = useState<InviteDialogState | null>(null);
   const [tick, setTick] = useState(0);
   const [scope, setScope] = useState(wsKey);
   const loadSeq = useRef(0);
@@ -477,11 +340,26 @@ export function MembersSettings() {
   if (scope !== wsKey) {
     setScope(wsKey);
     setInvitations([]);
-    setIssued([]);
+    setDialog(null);
     setEmailEnabled(null);
     setLoadError(null);
     setLoading(!!wsKey);
   }
+
+  // サイドバーや受信トレイの「メンバーを招待」は ?invite=1 で開く。開いたらパラメーターは消す。
+  const inviteRequested = searchParams.get("invite") === "1";
+  useEffect(() => {
+    if (!inviteRequested) return;
+    if (admin) setDialog({ kind: "compose" });
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("invite");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [admin, inviteRequested, setSearchParams]);
 
   useEffect(() => {
     if (!admin || !wsKey) {
@@ -508,12 +386,41 @@ export function MembersSettings() {
 
   return (
     <>
+      <header className="members-page-head">
+        <div className="members-page-head-text">
+          <h1>メンバー</h1>
+          <p className="muted">{wsName}に参加している人と、招待中の人です。</p>
+          {!admin && <p className="muted">メンバーの招待は管理者が行います。</p>}
+        </div>
+        {admin && (
+          <Button type="button" variant="primary" icon={<UserPlus size={14} />} data-testid="invite-open" onClick={() => setDialog({ kind: "compose" })}>
+            メンバーを招待
+          </Button>
+        )}
+      </header>
       <MemberList />
-      {admin && <InviteForm key={wsKey} wsKey={wsKey} emailEnabled={emailEnabled} issued={issued} onIssued={setIssued} onDone={reload} />}
       {admin && (
-        <InvitationList wsKey={wsKey} invitations={invitations} loading={loading} loadError={loadError} onIssued={setIssued} onChange={reload} />
+        <InvitationList
+          wsKey={wsKey}
+          invitations={invitations}
+          loading={loading}
+          loadError={loadError}
+          onIssued={(results) => setDialog({ kind: "done", results, resent: true })}
+          onChange={reload}
+        />
       )}
       <AllowedDomains key={wsKey} onSaved={reload} />
+      {dialog && (
+        <InviteDialog
+          key={dialog.kind === "done" ? dialog.results.map((r) => r.link).join("\n") : "compose"}
+          wsKey={wsKey}
+          emailEnabled={emailEnabled}
+          invitations={invitations}
+          initial={dialog.kind === "done" ? { results: dialog.results, resent: dialog.resent } : null}
+          onClose={() => setDialog(null)}
+          onInvited={reload}
+        />
+      )}
     </>
   );
 }
