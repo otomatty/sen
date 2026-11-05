@@ -70,7 +70,7 @@ function InboxEmpty() {
       action={
         <>
           {solo && (
-            <Button variant="primary" icon={<UserPlus size={14} />} onClick={() => navigate(p("/settings/members"))} data-testid="inbox-invite">
+            <Button variant="primary" icon={<UserPlus size={14} />} onClick={() => navigate(p("/settings/members?invite=1"))} data-testid="inbox-invite">
               メンバーを招待
             </Button>
           )}

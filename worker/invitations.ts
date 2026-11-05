@@ -5,6 +5,7 @@ import {
   isEmailAllowed,
   isValidEmail,
   maskEmail,
+  MAX_INVITATIONS_PER_REQUEST,
   normalizeEmail,
   parseAllowedDomains,
 } from "../shared/domains";
@@ -28,8 +29,6 @@ import { hashToken, publicOrigin } from "./tokens";
 const DAY_MS = 86_400_000;
 /** 招待リンクの有効期限 */
 const INVITE_TTL = 7 * DAY_MS;
-/** 1 回の依頼で招待できる人数 */
-const MAX_EMAILS_PER_REQUEST = 20;
 /** ワークスペースの未承諾の招待の上限 */
 const MAX_PENDING = 200;
 
@@ -222,7 +221,7 @@ export async function createInvitations(c: Context<AppEnv>) {
     emails.push(email);
   }
   if (emails.length === 0) return err(c, "メールアドレスを指定してください");
-  if (emails.length > MAX_EMAILS_PER_REQUEST) return err(c, `一度に招待できるのは${MAX_EMAILS_PER_REQUEST}件までです`);
+  if (emails.length > MAX_INVITATIONS_PER_REQUEST) return err(c, `一度に招待できるのは${MAX_INVITATIONS_PER_REQUEST}件までです`);
   const role = body.role;
   if (role !== "admin" && role !== "member") return err(c, "権限が不正です");
 

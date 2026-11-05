@@ -367,6 +367,14 @@ select:focus {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
 }
+.pill.success {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.pill.danger {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
 .via-badge {
   display: inline-flex;
   align-items: center;

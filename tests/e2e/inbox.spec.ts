@@ -41,6 +41,7 @@ test("通知がないときは、通知が届く条件と次の操作を案内�
 
   await page.getByTestId("inbox-invite").click();
   await expect(page).toHaveURL(new RegExp(`/${ws}/settings/members$`));
+  await expect(page.getByTestId("invite-dialog")).toBeVisible();
   await expect(page.getByTestId("invite-emails")).toBeVisible();
 });
 
