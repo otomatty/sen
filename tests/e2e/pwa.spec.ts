@@ -378,7 +378,7 @@ test("送れない変更があるときは更新せず、操作できる状態�
   await expect(page.getByTestId("sync-status")).toContainText("同期済み", { timeout: 40_000 });
 });
 
-test("更新する前に、書きかけの説明文は保存し、作成中の課題は捨ててよいか確かめる", async ({ page }) => {
+test("更新する前に、書きかけの説明文は保存し、作成中の課題の下書きは読み込み直しても残る", async ({ page }) => {
   const ws = await openInstalledApp(page);
   await page.goto(`/${ws}/projects`);
   await page.getByTestId("project-row").first().click();
@@ -387,15 +387,8 @@ test("更新する前に、書きかけの説明文は保存し、作成中の�
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
 
-  // 作成中の課題は読み込み直すと消えるので、確かめる。やめれば何も起きない
   await page.getByTestId("sidebar-create").click();
   await page.getByTestId("create-title").fill("書きかけの課題");
-  await notice.getByRole("button", { name: "更新" }).click();
-  await expect(page.getByTestId("confirm-ok")).toBeVisible();
-  await page.getByRole("button", { name: "キャンセル" }).click();
-  await expect(page.getByTestId("create-title")).toHaveValue("書きかけの課題");
-  expect(await hasWaiting(page)).toBe(true);
-  await page.getByTestId("create-title").fill("");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("create-title")).toBeHidden();
 
@@ -411,4 +404,7 @@ test("更新する前に、書きかけの説明文は保存し、作成中の�
   await expect(page.getByTestId("project-page")).toBeVisible();
   await expect(description).toContainText("オフラインでも使える");
   expect(await hasWaiting(page)).toBe(false);
+
+  await page.getByTestId("sidebar-create").click();
+  await expect(page.getByTestId("create-title")).toHaveValue("書きかけの課題");
 });

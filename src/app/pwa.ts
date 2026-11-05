@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { useData } from "../store/data";
 import { dismissToast, toast } from "../store/ui";
 import { confirmDialog } from "../components/ConfirmDialog";
-import { hasIssueDraft } from "../features/issues/CreateIssueModal";
 import { hasCommentDraft } from "../features/issues/CommentComposer";
 
 // PWA（インストールできるアプリ）としての振る舞い
@@ -102,11 +101,11 @@ function waitForSync(timeout: number): Promise<boolean> {
 export async function applyUpdate() {
   const worker = waiting;
   if (!worker || updating) return;
-  // 読み込み直すと消える書きかけの内容は、確かめてから捨てる
-  if (hasIssueDraft() || hasCommentDraft()) {
+  // 読み込み直すと消える書きかけのコメントは、確かめてから捨てる
+  if (hasCommentDraft()) {
     const ok = await confirmDialog({
-      title: "書きかけの内容があります",
-      message: "作成中の課題や書きかけのコメントは、更新すると失われます。更新しますか？",
+      title: "書きかけのコメントがあります",
+      message: "書きかけのコメントは、更新すると失われます。更新しますか？",
       confirmLabel: "更新する",
       danger: true,
     });

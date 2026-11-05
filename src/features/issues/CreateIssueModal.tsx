@@ -1,41 +1,19 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router";
 import { CalendarDays, ChevronDown, CornerLeftUp, Hash, Tag, X, Box, UserCircle2 } from "lucide-react";
 import { priorityLabel } from "../../../shared/constants";
 import { createIssue, defaultStateFor } from "../../store/actions";
-import { useData } from "../../store/data";
+import { useData, type DataState } from "../../store/data";
 import { cycleName, useTeams } from "../../store/selectors";
-import { toast, useUI, type PickerKind } from "../../store/ui";
+import { toast, useUI, type CreateIssueDefaults, type PickerKind } from "../../store/ui";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
-import { cx, formatDate, identifier, isHtmlEmpty, MOD } from "../../lib/utils";
+import { cx, formatDate, identifier, MOD } from "../../lib/utils";
 import { Avatar, Button, Modal, Switch, Tooltip } from "../../components/ui";
 import { CycleIcon, LabelDot, PriorityIcon, ProjectIcon, TeamIcon } from "../../components/icons";
 import { PropertyPicker, StateIcon } from "../../components/pickers";
 import { Editor } from "../../components/Editor";
 import { useWsPath } from "../../app/hooks";
-
-interface Draft {
-  teamId: string;
-  title: string;
-  description: string;
-  stateId: string;
-  priority: number;
-  assigneeId: string | null;
-  labelIds: string[];
-  projectId: string | null;
-  cycleId: string | null;
-  estimate: number | null;
-  dueDate: string | null;
-  parentId: string | null;
-}
-
-// 閉じても下書きは残る（Linear と同じ）
-let savedDraft: Partial<Draft> | null = null;
-
-/** タイトルか説明を書きかけの課題があるか（読み込み直すと消えるので、新しいバージョンへ更新する前に確かめる） */
-export function hasIssueDraft() {
-  return Boolean(savedDraft?.title?.trim() || (savedDraft?.description && !isHtmlEmpty(savedDraft.description)));
-}
+import { clearIssueDraft, loadIssueDraft, saveIssueDraft, type Draft } from "./issueDraft";
 
 export function CreateIssueModal() {
   const open = useUI((s) => s.createOpen);
@@ -54,36 +32,23 @@ function CreateIssueDialog() {
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [picker, setPicker] = useState<{ kind: PickerKind; anchor: DOMRect } | null>(null);
 
-  const initTeam = defaults.teamId ?? savedDraft?.teamId ?? teams[0]?.id ?? "";
-  const [draft, setDraft] = useState<Draft>(() => {
-    const base: Draft = {
-      teamId: initTeam,
-      title: "",
-      description: "",
-      stateId: defaultStateFor(initTeam)?.id ?? "",
-      priority: 0,
-      assigneeId: null,
-      labelIds: [],
-      projectId: null,
-      cycleId: null,
-      estimate: null,
-      dueDate: null,
-      parentId: null,
-    };
-    // 初期値が明示されたときは下書きより優先
-    const hasDefaults = Object.keys(defaults).some((k) => k !== "teamId");
-    const merged = { ...base, ...(hasDefaults ? {} : savedDraft ?? {}), ...stripUndefined(defaults) } as Draft;
-    if (merged.stateId && d.states[merged.stateId]?.teamId !== merged.teamId) merged.stateId = base.stateId;
-    return merged;
-  });
+  const workspaceId = d.workspace?.id;
+  const userId = d.meId;
+  const [draft, setDraft] = useState<Draft>(() => initialDraft(defaults, teams, d));
+  // 開いた直後の初期値では保存しない。初期値つきで開いて何もせず閉じたとき、保存済みの下書きを書き換えない
+  const baseline = useRef(draft);
 
-  useEffect(() => {
-    savedDraft = draft;
-  }, [draft]);
+  // 閉じても、読み込み直しても下書きは残る（Linear と同じ）。
+  // 描画前に保存するので、入力の直後に閉じても最後の内容が残る。開いた直後の初期値では保存しない。
+  useLayoutEffect(() => {
+    if (draft === baseline.current) return;
+    if (!workspaceId || !userId) return;
+    saveIssueDraft(workspaceId, userId, draft);
+  }, [draft, workspaceId, userId]);
 
   const close = () => useUI.setState({ createOpen: false, createDefaults: {} });
 
-  const set = (patch: Partial<Draft>) => setDraft((x) => ({ ...x, ...patch }));
+  const set = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
 
   const changeTeam = (teamId: string) => {
     if (teamId === draft.teamId) return;
@@ -99,7 +64,7 @@ function CreateIssueDialog() {
       return;
     }
     const { id, identifier: ident } = createIssue({ ...draft, title });
-    savedDraft = null;
+    if (workspaceId && userId) clearIssueDraft(workspaceId, userId);
     toast(`${ident} を作成しました`, {
       kind: "success",
       action: {
@@ -255,4 +220,50 @@ function CreateIssueDialog() {
 
 function stripUndefined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
+function initialDraft(defaults: CreateIssueDefaults, teams: { id: string }[], data: DataState): Draft {
+  const workspaceId = data.workspace?.id;
+  const userId = data.meId;
+  const saved = workspaceId && userId ? loadIssueDraft(workspaceId, userId) : null;
+  const savedTeamId = saved?.teamId && data.teams[saved.teamId] ? saved.teamId : undefined;
+  const initTeam = defaults.teamId ?? savedTeamId ?? teams[0]?.id ?? "";
+  const base: Draft = {
+    teamId: initTeam,
+    title: "",
+    description: "",
+    stateId: defaultStateFor(initTeam)?.id ?? "",
+    priority: 0,
+    assigneeId: null,
+    labelIds: [],
+    projectId: null,
+    cycleId: null,
+    estimate: null,
+    dueDate: null,
+    parentId: null,
+  };
+  const merged = { ...base, ...(saved ?? {}), ...stripUndefined(defaults) } as Draft;
+  return normalizeDraft(merged, data, base.teamId);
+}
+
+/** 消えたチームや、別チームのステータス・サイクル・親課題が下書きに残らないようにする */
+function normalizeDraft(draft: Draft, data: DataState, baseTeamId: string): Draft {
+  const teamId = data.teams[draft.teamId] ? draft.teamId : baseTeamId;
+  const state = draft.stateId ? data.states[draft.stateId] : undefined;
+  const stateId =
+    state && state.teamId === teamId
+      ? draft.stateId
+      : (state ? defaultStateFor(teamId, state.type) : defaultStateFor(teamId))?.id ?? "";
+  const cycle = draft.cycleId ? data.cycles[draft.cycleId] : undefined;
+  const parent = draft.parentId ? data.issues[draft.parentId] : undefined;
+  return {
+    ...draft,
+    teamId,
+    stateId,
+    cycleId: cycle && cycle.teamId === teamId ? draft.cycleId : null,
+    parentId: parent && parent.teamId === teamId ? draft.parentId : null,
+    assigneeId: draft.assigneeId && data.users[draft.assigneeId] ? draft.assigneeId : null,
+    projectId: draft.projectId && data.projects[draft.projectId] ? draft.projectId : null,
+    labelIds: draft.labelIds.filter((id) => data.labels[id]),
+  };
 }

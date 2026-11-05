@@ -4,6 +4,7 @@ import { api, ApiError, setBearerToken } from "../lib/api";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
 import { clearSnapshots } from "../store/cache";
+import { clearAllIssueDrafts } from "../features/issues/issueDraft";
 
 interface SessionState {
   status: "unknown" | "authed" | "anon";
@@ -158,6 +159,8 @@ export async function signOut() {
   }
   engine.stop();
   await clearSnapshots();
+  // 共用のパソコンで、ログアウト後に書きかけの課題が残らないようにする
+  clearAllIssueDrafts();
   writeLocal(SESSION_CACHE, null);
   if (DEMO) {
     setBearerToken(null);

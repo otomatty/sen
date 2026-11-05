@@ -26,6 +26,42 @@ test.describe("課題の操作", () => {
     await expect(page.getByTestId("issue-row").filter({ hasText: "E2E で作った課題" })).toBeVisible();
   });
 
+  test("書きかけの課題は、グループの＋から開いても、読み込み直しても残る", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    const title = page.getByTestId("create-title");
+    await title.fill("下書きの課題");
+    await title.press("Enter");
+    await page.keyboard.type("説明の下書き");
+    // 説明欄の Escape は編集を終える。もう一度でダイアログを閉じる
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    const header = page.locator(".group-header").first();
+    const label = (await header.locator(".group-label").innerText()).trim();
+    await header.hover();
+    await header.locator(".group-add").click();
+    await expect(title).toHaveValue("下書きの課題");
+    await expect(page.getByTestId("create-status")).toContainText(label);
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.reload();
+    await expect(page.getByTestId("issue-list")).toBeVisible();
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("下書きの課題");
+    await expect(page.getByTestId("create-description")).toContainText("説明の下書き");
+    await page.keyboard.press("Control+Enter");
+    await expect(modal).toBeHidden();
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("");
+  });
+
   test("キーボードでフォーカスしてステータスと優先度を変更できる", async ({ page }) => {
     await row(page, "ENG-7").hover();
     await page.keyboard.press("s");
