@@ -41,8 +41,8 @@ test("Google の画面へ移り、キャンセルするとログイン画面に�
 
 test("ログアウトしてログインし直すと、同じワークスペースに戻れる", async ({ page }) => {
   const { email, ws } = await signupViaUi(page);
-  await page.getByTestId("workspace-menu").click();
-  await page.getByRole("button", { name: /ログアウト/ }).click();
+  await page.getByTestId("user-menu").click();
+  await page.getByTestId("user-menu-logout").click();
   await expect(page.getByTestId("login-form")).toBeVisible();
   await page.goto(`/${ws}/my-issues`);
   await expect(page.getByTestId("login-form")).toBeVisible();

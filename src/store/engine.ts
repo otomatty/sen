@@ -99,6 +99,8 @@ class SyncEngine {
   private timers: ReturnType<typeof setTimeout>[] = [];
   private intervals: ReturnType<typeof setInterval>[] = [];
   private generation = 0;
+  // 別タブでアカウントが替わっているあいだは送らない。未送信の変更は pending に残す
+  private paused = false;
   private errorListeners = new Set<Listener>();
   private unauthorizedListeners = new Set<() => void>();
   realtimeEnabled = true;
@@ -232,7 +234,20 @@ class SyncEngine {
     }
   };
 
+  /** 別タブでアカウントが替わったあいだ、未送信の変更を送らずに持っておく */
+  pause() {
+    this.paused = true;
+  }
+
+  /** 元のアカウントに戻したあと、止めていた送信と差分取得を再開する */
+  resume() {
+    this.paused = false;
+    this.flush();
+    this.pull();
+  }
+
   stop() {
+    this.paused = false;
     this.generation++;
     this.timers.forEach(clearTimeout);
     this.intervals.forEach(clearInterval);
@@ -370,6 +385,7 @@ class SyncEngine {
   }
 
   private async flush() {
+    if (this.paused) return;
     if (this.flushing || !this.wsKey) return;
     const batch = this.pending.filter((p) => p.state === "queued").slice(0, 100);
     if (!batch.length) return;
@@ -403,6 +419,11 @@ class SyncEngine {
       const status = e instanceof ApiError ? e.status : 0;
       if (status === 401) {
         this.unauthorizedListeners.forEach((f) => f());
+        return;
+      }
+      // 別のタブでアカウントが替わった。元のアカウントに戻せば送れるので、捨てずに残す
+      if (e instanceof ApiError && e.code === "account-switched") {
+        batch.forEach((p) => (p.state = "queued"));
         return;
       }
       if (status === 0 || status >= 500 || status === 429) {
@@ -443,6 +464,7 @@ class SyncEngine {
 
   // ---------------- 差分取得 ----------------
   async pull(): Promise<void> {
+    if (this.paused) return;
     if (!this.wsKey || useData.getState().status !== "ready") return;
     if (this.pulling) {
       this.pullAgain = true;
