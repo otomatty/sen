@@ -18,8 +18,8 @@ const SESSION_TTL = 60 * 60 * 24 * 30; // 秒
 export const MAX_ACCOUNTS = 5;
 /** DEV_TOOLS=1 の環境（ローカル開発・テスト・デモ）で BETTER_AUTH_SECRET が無いときだけ使う */
 const DEV_SECRET = "sen-local-development-only-secret-0000000000";
-/** 開発用ログインで使えるのは、実在しない予約済みドメインのアドレスだけ */
-const DEV_EMAIL = /^[^\s@]+@example\.com$/;
+/** 開発用ログインで使えるのは、実在しない予約済みドメイン（example.com とそのサブドメイン）だけ */
+const DEV_EMAIL = /^[^\s@]+@(?:[a-z0-9-]+\.)*example\.com$/;
 
 function b64url(bytes: Uint8Array): string {
   let s = "";
@@ -42,7 +42,7 @@ export function isGoogleConfigured(env: Env): boolean {
 
 /**
  * 開発・テスト・動画収録・ブラウザ内デモ用のログイン（DEV_TOOLS=1 のときだけ有効）。
- * Google を通さずに、@example.com のアドレスでログインする。
+ * Google を通さずに、@example.com（またはそのサブドメイン）のアドレスでログインする。
  */
 function devSignIn(env: Env): BetterAuthPlugin {
   return {
@@ -51,7 +51,9 @@ function devSignIn(env: Env): BetterAuthPlugin {
       devSignIn: createAuthEndpoint("/dev/sign-in", { method: "POST" }, async (ctx) => {
         const body = (ctx.body ?? {}) as { email?: unknown; name?: unknown };
         const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-        if (!DEV_EMAIL.test(email)) throw new APIError("BAD_REQUEST", { message: "開発用のログインには @example.com のアドレスを使ってください" });
+        if (!DEV_EMAIL.test(email)) {
+          throw new APIError("BAD_REQUEST", { message: "開発用のログインには @example.com（またはそのサブドメイン）のアドレスを使ってください" });
+        }
         const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : email.split("@")[0];
         const found = await ctx.context.internalAdapter.findUserByEmail(email);
         const user = found?.user ?? (await ctx.context.internalAdapter.createUser({ email, name, emailVerified: true }, { method: "dev-sign-in" }));
@@ -164,22 +166,25 @@ export function forwardCookies(c: Context<AppEnv>, headers: Headers) {
   for (const cookie of headers.getSetCookie()) c.header("set-cookie", cookie, { append: true });
 }
 
-/** ログイン中のユーザー。初めてログインしたときは、アプリのプロフィールを作る */
-export async function getSessionUser(c: Context<AppEnv>): Promise<Me | null> {
+/**
+ * ログイン中のユーザーと、メールアドレスが確認済みかどうか。
+ * 初めてログインしたときは、アプリのプロフィールを作る。
+ */
+export async function getSession(c: Context<AppEnv>): Promise<{ user: Me; emailVerified: boolean } | null> {
   const { headers, response } = await getAuth(c).api.getSession({ headers: c.req.raw.headers, returnHeaders: true });
   forwardCookies(c, headers);
   if (!response) return null;
-  const { user } = response;
-  const select = () => first<Record<string, unknown>>(c.env.DB, "SELECT * FROM users WHERE id = ?", user.id);
+  const authUser = response.user;
+  const select = () => first<Record<string, unknown>>(c.env.DB, "SELECT * FROM users WHERE id = ?", authUser.id);
   let row = await select();
   if (!row) {
     const now = Date.now();
     await run(
       c.env.DB,
       "INSERT OR IGNORE INTO users (id, email, name, avatar_color, settings, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)",
-      user.id,
-      user.email,
-      (user.name.trim() || user.email.split("@")[0]).slice(0, 40),
+      authUser.id,
+      authUser.email,
+      (authUser.name.trim() || authUser.email.split("@")[0]).slice(0, 40),
       AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
       now,
       now,
@@ -187,6 +192,12 @@ export async function getSessionUser(c: Context<AppEnv>): Promise<Me | null> {
     row = await select();
   }
   // 同じメールアドレスのプロフィールが別の ID で既にある（users と auth_users の ID がずれている）
-  if (!row) throw new Error(`ログイン中のユーザー（${user.email}）のプロフィールを作成できませんでした`);
-  return toMe(row);
+  if (!row) throw new Error(`ログイン中のユーザー（${authUser.email}）のプロフィールを作成できませんでした`);
+  return { user: toMe(row), emailVerified: authUser.emailVerified };
+}
+
+/** ログイン中のユーザー */
+export async function getSessionUser(c: Context<AppEnv>): Promise<Me | null> {
+  const session = await getSession(c);
+  return session?.user ?? null;
 }

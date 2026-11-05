@@ -119,7 +119,7 @@ export function overlayScript(opts: { accent: string }) {
       }
       keys.classList.add("show");
       if (keyTimer) clearTimeout(keyTimer);
-      keyTimer = setTimeout(() => keys.classList.remove("show"), 1400);
+      keyTimer = setTimeout(() => keys.classList.remove("show"), 2200);
     },
     caption(text: string, step: number | null) {
       mount();

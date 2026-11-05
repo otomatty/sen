@@ -14,20 +14,38 @@ import { useWsPath } from "../../app/hooks";
 // 課題どうしの関係（ブロック・関連・重複）。Linear と同じく「何に止められているか」を課題の中で見えるようにする。
 
 export const RELATION_ICON: Record<RelationKind, ReactNode> = {
-  blockedBy: <OctagonMinus size={14} />,
-  blocks: <Flag size={14} />,
+  blockedBy: <OctagonMinus size={14} className="rel-ic-blockedBy" />,
+  blocks: <Flag size={14} className="rel-ic-blocks" />,
   related: <Link2 size={14} />,
   duplicate: <Copy size={14} />,
   duplicatedBy: <Copy size={14} />,
 };
 
 /** 関係を追加する操作（メニュー・コマンドパレット・ショートカットで共通） */
-export const RELATION_ACTIONS: { kind: RelationKind; label: string; combo: string; keywords: string }[] = [
-  { kind: "blockedBy", label: "ブロックされている課題を指定…", combo: "m b", keywords: "blocked by depends 依存" },
-  { kind: "blocks", label: "ブロックしている課題を指定…", combo: "m x", keywords: "blocking blocks 依存" },
+export const RELATION_ACTIONS: { kind: RelationKind; label: string; combo: string; keywords: string; hint?: string }[] = [
+  {
+    kind: "blockedBy",
+    label: "先に終わらせる課題を指定…",
+    hint: "この課題をブロックしている課題",
+    combo: "m b",
+    keywords: "blocked by depends 依存 ブロック ブロックされている 先",
+  },
+  {
+    kind: "blocks",
+    label: "この課題を待つ課題を指定…",
+    hint: "この課題がブロックしている課題",
+    combo: "m x",
+    keywords: "blocking blocks 依存 ブロック ブロックしている 待つ 後",
+  },
   { kind: "related", label: "関連する課題を指定…", combo: "m r", keywords: "related relation 関連" },
   { kind: "duplicate", label: "重複としてマーク…", combo: "m m", keywords: "duplicate 重複" },
 ];
+
+/** 関係欄の見出しのうしろに添える、向きの補足（ブロックだけ） */
+const RELATION_ASIDE: Partial<Record<RelationKind, string>> = {
+  blockedBy: "この課題をブロックしている",
+  blocks: "この課題がブロックしている",
+};
 
 const ORDER: RelationKind[] = ["blockedBy", "blocks", "related", "duplicate", "duplicatedBy"];
 
@@ -43,6 +61,7 @@ export function RelationMenu({ issueIds, anchor, onClose }: { issueIds: string[]
       onClose={onClose}
       items={RELATION_ACTIONS.map((a) => ({
         label: a.label.replace("…", ""),
+        hint: a.hint,
         icon: RELATION_ICON[a.kind],
         combo: a.combo,
         onSelect: () => openRelationPicker(issueIds, a.kind, anchor),
@@ -102,6 +121,7 @@ export function Relations({ issue }: { issue: Issue }) {
           <div className={cx("relation-label", `rel-${g.kind}`)}>
             {RELATION_ICON[g.kind]}
             {RELATION_LABEL[g.kind]}
+            {RELATION_ASIDE[g.kind] && <span className="relation-aside">{RELATION_ASIDE[g.kind]}</span>}
           </div>
           {g.items.map(({ issue: other }) => {
             const id = identifier(other, teams);

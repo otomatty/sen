@@ -40,8 +40,8 @@ test("通知がないときは、通知が届く条件と次の操作を案内�
   await expect(page.getByTestId("inbox-mark-all")).toBeDisabled();
 
   await page.getByTestId("inbox-invite").click();
-  await expect(page).toHaveURL(new RegExp(`/${ws}/settings/workspace$`));
-  await expect(page.getByTestId("invite-link")).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/${ws}/settings/members$`));
+  await expect(page.getByTestId("invite-emails")).toBeVisible();
 });
 
 test("未読のみ表示で何もなければ、すべての通知の表示に戻せる", async ({ page }) => {

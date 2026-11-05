@@ -20,12 +20,12 @@ import {
 } from "lucide-react";
 import { useData } from "../store/data";
 import { useProjects, useTeams, useUnreadCount } from "../store/selectors";
-import { openCreateIssue, useUI } from "../store/ui";
+import { openCreateIssue, toast, useUI } from "../store/ui";
 import { cx } from "../lib/utils";
 import { Kbd, Menu, Tooltip } from "../components/ui";
 import { CycleIcon, ProjectIcon, TeamIcon } from "../components/icons";
 import { useCurrentTeamId, useWsPath } from "./hooks";
-import { refreshWorkspaces, useSession } from "./session";
+import { acceptPendingInvitation, refreshWorkspaces, useSession } from "./session";
 import type { Me } from "../../shared/types";
 import { UserMenu } from "./UserMenu";
 
@@ -34,6 +34,7 @@ export function Sidebar() {
   const navigate = useNavigate();
   const workspace = useData((s) => s.workspace);
   const workspaces = useSession((s) => s.workspaces);
+  const invitations = useSession((s) => s.invitations ?? []);
   const me = useData((s) => (s.meId ? (s.users[s.meId] as Me) : null));
   const teams = useTeams();
   const projects = useProjects();
@@ -166,6 +167,16 @@ export function Sidebar() {
             { label: "ワークスペースの設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings")) },
             { label: "メンバーを招待", icon: <UserPlus size={14} />, onSelect: () => navigate(p("/settings/members")) },
             "divider",
+            ...invitations.map((inv) => ({
+              label: `${inv.workspaceName} に参加（招待）`,
+              icon: <UserPlus size={14} />,
+              onSelect: () => {
+                void acceptPendingInvitation(inv.id)
+                  .then((key) => navigate(`/${key}/my-issues`))
+                  .catch((err: Error) => toast(err.message, { kind: "error" }));
+              },
+            })),
+            ...(invitations.length ? (["divider"] as const) : []),
             ...workspaces
               .filter((w) => w.id !== workspace?.id)
               .map((w) => ({ label: `${w.name} に切り替え`, icon: <RefreshCw size={14} />, onSelect: () => navigate(`/${w.urlKey}/my-issues`) })),

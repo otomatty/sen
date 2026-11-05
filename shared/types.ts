@@ -33,7 +33,8 @@ export interface Workspace {
   id: string;
   name: string;
   urlKey: string;
-  inviteCode: string;
+  /** 利用できるメールドメイン。空なら制限なし */
+  allowedDomains: string[];
   createdAt: number;
 }
 
@@ -335,8 +336,16 @@ export type Mutation =
     }
   | { type: "notification.markAllRead"; args: Record<string, never> }
   | { type: "workspace.update"; args: { name?: string } }
-  | { type: "workspace.regenerateInvite"; args: Record<string, never> }
+  | { type: "workspace.setAllowedDomains"; args: { domains: string[] } }
   | { type: "user.update"; args: { name?: string; avatarColor?: string; settings?: UserSettings } }
+  | {
+      type: "user.updateSettings";
+      args: {
+        set?: Partial<Omit<UserSettings, "favorites">>;
+        addFavorite?: Favorite;
+        removeFavorite?: Favorite;
+      };
+    }
   | { type: "member.update"; args: { userId: string; role: Role } }
   | { type: "member.remove"; args: { userId: string } };
 
@@ -349,6 +358,59 @@ export interface MutateRequest {
 export interface MutateResponse {
   results: { clientId: string; ok: boolean; error?: string }[];
   lastSyncId: number;
+}
+
+// ---- メール指定の招待 ----
+export interface InvitationSummary {
+  id: string;
+  email: string;
+  role: Role;
+  invitedBy: { id: string; name: string } | null;
+  createdAt: number;
+  expiresAt: number;
+  emailSentAt: number | null;
+  status: "pending" | "expired";
+}
+
+export interface InvitationListResponse {
+  invitations: InvitationSummary[];
+  emailEnabled: boolean;
+}
+
+export interface InvitationCreateRequest {
+  emails: string[];
+  role: Role;
+}
+
+export interface InvitationIssued {
+  invitation: InvitationSummary;
+  link: string;
+  emailSent: boolean;
+  emailError?: string;
+}
+
+export interface InvitationCreateResponse {
+  results: InvitationIssued[];
+}
+
+/** 招待リンクを開いた人に見せる内容（ログイン前でも見られるので最小限） */
+export interface InvitePreview {
+  workspaceName: string;
+  invitedByName: string | null;
+  maskedEmail: string;
+  role: Role;
+  expiresAt: number;
+  /** ログイン中なら、そのアカウントが招待先と一致するか。ログインしていなければ null */
+  forCurrentUser: boolean | null;
+}
+
+/** ログイン中の人あての招待（/api/me で返す） */
+export interface PendingInvitation {
+  id: string;
+  workspaceName: string;
+  invitedByName: string | null;
+  role: Role;
+  expiresAt: number;
 }
 
 // ---- AI ツール（MCP）の個人用トークン ----

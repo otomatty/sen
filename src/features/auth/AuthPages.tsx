@@ -3,7 +3,9 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { api } from "../../lib/api";
 import { Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
-import { devSignIn, lastWorkspaceKey, loadSession, logout, refreshAccounts, signInWithGoogle, useSession } from "../../app/session";
+import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, pickWorkspaceKey, refreshAccounts, signInWithGoogle, useSession } from "../../app/session";
+import { formatDateTime } from "../../lib/utils";
+import type { InvitePreview, PendingInvitation } from "../../../shared/types";
 
 const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 
@@ -40,7 +42,7 @@ function authErrorMessage(code: string | null): string | null {
   return AUTH_ERRORS[code] ?? `Google でログインできませんでした${detail}。もう一度お試しください。`;
 }
 
-// 招待ページから Google へ移る直前に、このタブへ残す印（値は招待コード）。
+// 招待ページから Google へ移る直前に、このタブへ残す印（値は招待トークン）。
 // 戻ってきたとき（?join=1）に印が一致した場合だけ自動で参加し、URL を開かせるだけでは参加させられないようにする
 const INVITE_JOIN_MARK = "sen:invite-join";
 
@@ -52,13 +54,23 @@ function readJoinMark(): string | null {
   }
 }
 
-function writeJoinMark(code: string | null) {
+function writeJoinMark(token: string | null) {
   try {
-    if (code) sessionStorage.setItem(INVITE_JOIN_MARK, code);
+    if (token) sessionStorage.setItem(INVITE_JOIN_MARK, token);
     else sessionStorage.removeItem(INVITE_JOIN_MARK);
   } catch {
     // 保存できなければ、戻ってきたあとに「参加する」を押してもらう
   }
+}
+
+function inviteSubtitle(invite: InvitePreview): string {
+  const until = formatDateTime(invite.expiresAt);
+  const who = invite.invitedByName ? `${invite.invitedByName} さんからの招待です` : "招待です";
+  return `${who}（${invite.maskedEmail} あて・${until}まで）`;
+}
+
+function pendingLabel(inv: PendingInvitation): string {
+  return inv.invitedByName ? `${inv.workspaceName}（${inv.invitedByName} さんから）` : inv.workspaceName;
 }
 
 /** アプリ内のパスだけを戻り先にする（外部サイトへのリダイレクトを防ぐ） */
@@ -123,7 +135,7 @@ export function LoginPage() {
     setError(null);
     try {
       const res = await devSignIn("taro@example.com", "山田 太郎");
-      const key = res?.workspaces[0]?.urlKey;
+      const key = res ? pickWorkspaceKey(res.workspaces, res.defaultWorkspaceId ?? null) : null;
       navigate(next ?? (key ? `/${key}/my-issues` : "/new-workspace"), { replace: true });
     } catch (err) {
       setError((err as Error).message);
@@ -157,42 +169,48 @@ export function LoginPage() {
   );
 }
 
-/** 招待リンク（/invite/:code）から参加する */
+/** 招待リンク（/invite/:token）から参加する */
 export function InvitePage() {
   const navigate = useNavigate();
-  const { code = "" } = useParams();
+  const { token = "" } = useParams();
   const [params] = useSearchParams();
-  const [invite, setInvite] = useState<{ name: string; memberCount: number } | null>(null);
+  const [invite, setInvite] = useState<InvitePreview | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const session = useSession();
 
   useEffect(() => {
-    api<{ name: string; memberCount: number }>(`/api/invite/${code}`)
+    api<InvitePreview>(`/api/invite/${token}`)
       .then(setInvite)
       .catch((e) => setInviteError((e as Error).message));
-  }, [code]);
+  }, [token]);
 
   const join = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<{ workspaceKey: string }>(`/api/invite/${code}/accept`, { body: {} });
+      const res = await api<{ workspaceKey: string }>(`/api/invite/${token}/accept`, { body: {} });
       await loadSession();
       navigate(`/${res.workspaceKey}/my-issues`, { replace: true });
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
     }
-  }, [code, navigate]);
+  }, [token, navigate]);
 
-  // 「Google でログインして参加」から戻ってきたときだけ、そのまま参加する
-  const autoJoin = params.get("join") === "1" && readJoinMark() === code;
+  // 「Google でログインして参加」から戻ってきたときだけ、そのまま参加する。
+  // 別のアカウントで戻ってきたときは参加せず、案内だけ出す
+  const autoJoin = params.get("join") === "1" && readJoinMark() === token;
   const authed = session.status === "authed";
+  const wrongAccount = authed && invite?.forCurrentUser === false;
   const autoJoined = useRef(false);
   useEffect(() => {
     if (!autoJoin || !authed || !invite || autoJoined.current) return;
+    if (invite.forCurrentUser === false) {
+      writeJoinMark(null);
+      return;
+    }
     autoJoined.current = true;
     writeJoinMark(null);
     join();
@@ -200,16 +218,24 @@ export function InvitePage() {
 
   if (inviteError) {
     return (
-      <AuthLayout title="招待リンクが無効です" subtitle="リンクが古いか、作り直された可能性があります。招待した人に確認してください。">
+      <AuthLayout title="招待リンクが無効です" subtitle="期限が切れたか、取り消された可能性があります。招待した人に、もう一度招待してもらってください。">
         <Link to="/login">ログイン画面へ</Link>
       </AuthLayout>
     );
   }
 
   return (
-    <AuthLayout title={invite ? `${invite.name} に参加` : "招待を確認中…"} subtitle={invite ? `${invite.memberCount}人のメンバーがいます` : undefined}>
+    <AuthLayout title={invite ? `${invite.workspaceName} に参加` : "招待を確認中…"} subtitle={invite ? inviteSubtitle(invite) : undefined}>
       <div className="auth-form">
-        {authed && (
+        {wrongAccount && invite && (
+          <>
+            <p className="invite-wrong-account" data-testid="invite-wrong-account">
+              {session.user?.email} でログイン中です。この招待は {invite.maskedEmail} あてです。
+            </p>
+            {error && <div className="form-error">{error}</div>}
+          </>
+        )}
+        {authed && invite && !wrongAccount && (
           <>
             <p className="muted small">
               {session.user?.name}（{session.user?.email}）としてログイン中です。
@@ -224,13 +250,13 @@ export function InvitePage() {
         {/* ログイン中かどうかでボタンが作り直されないよう、同じ位置に置く */}
         {session.status !== "unknown" && (
           <GoogleSignInButton
-            label={authed ? "別の Google アカウントで参加" : "Google でログインして参加"}
-            callbackURL={`/invite/${code}?join=1`}
-            errorCallbackURL={`/invite/${code}`}
+            label={authed ? (wrongAccount ? "別の Google アカウントでログインして参加" : "別の Google アカウントで参加") : "Google でログインして参加"}
+            callbackURL={`/invite/${token}?join=1`}
+            errorCallbackURL={`/invite/${token}`}
             error={authed ? null : authErrorMessage(params.get("error"))}
             disabled={busy || !invite}
             beforeSignIn={async () => {
-              writeJoinMark(code);
+              writeJoinMark(token);
               if (authed) await refreshAccounts();
             }}
           />
@@ -243,11 +269,14 @@ export function InvitePage() {
 export function NewWorkspacePage() {
   const navigate = useNavigate();
   const session = useSession();
+  const invitations = session.invitations ?? [];
   // 初めてログインした人（まだどのワークスペースにも入っていない）
   const firstTime = session.workspaces.length === 0;
   const [name, setName] = useState(firstTime && session.user ? `${session.user.name}のワークスペース` : "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -261,15 +290,53 @@ export function NewWorkspacePage() {
       setBusy(false);
     }
   };
+  const accept = async (id: string) => {
+    if (acceptingId) return;
+    setAcceptingId(id);
+    setAcceptErrors((cur) => {
+      const next = { ...cur };
+      delete next[id];
+      return next;
+    });
+    try {
+      const key = await acceptPendingInvitation(id);
+      navigate(`/${key}/my-issues`);
+    } catch (err) {
+      setAcceptErrors((cur) => ({ ...cur, [id]: (err as Error).message }));
+      setAcceptingId(null);
+    }
+  };
   return (
     <AuthLayout
       title={firstTime ? "ワークスペースを作成" : "新しいワークスペース"}
       subtitle={
         firstTime
-          ? "ワークスペースと、使い方を学べるサンプル課題が用意されます。チームに参加する場合は、招待リンクを開いてください。"
+          ? "ワークスペースと、使い方を学べるサンプル課題が用意されます。チームに参加する場合は、招待メールのリンクを開いてください。"
           : "チームや組織ごとにワークスペースを分けられます。課題の入っていないワークスペースが作られます。"
       }
     >
+      {invitations.length > 0 && (
+        <div className="pending-invitations">
+          <p className="pending-invitations-title">招待されているワークスペース</p>
+          {invitations.map((inv) => (
+            <div key={inv.id} className="pending-invitation" data-testid="pending-invitation">
+              <span className="pending-invitation-label">{pendingLabel(inv)}</span>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                data-testid="pending-invitation-accept"
+                disabled={acceptingId !== null}
+                icon={acceptingId === inv.id ? <Spinner size={14} /> : undefined}
+                onClick={() => void accept(inv.id)}
+              >
+                参加する
+              </Button>
+              {acceptErrors[inv.id] && <div className="form-error">{acceptErrors[inv.id]}</div>}
+            </div>
+          ))}
+        </div>
+      )}
       <form onSubmit={submit} className="auth-form" data-testid="new-workspace-form">
         <label>
           ワークスペース名
