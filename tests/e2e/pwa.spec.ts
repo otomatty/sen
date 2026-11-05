@@ -141,9 +141,10 @@ test.afterEach(() => {
 
 /**
  * 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする。
- * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする
+ * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする。
+ * hold を指定すると、キャッシュを作ったところでインストールを止めておく版にする（releaseInstall で再開する）
  */
-async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean }) {
+async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean; hold?: boolean }) {
   originalSw ??= readFileSync(SW_FILE, "utf8");
   let source = originalSw.replace(/const VERSION = "\w+";/, `const VERSION = "${opts.version}";`);
   if (opts.broken) source = source.replace("const PRECACHE = [", 'const PRECACHE = [\n  "/api/__missing",');
@@ -154,6 +155,14 @@ async function publishNextVersion(page: Page, opts: { version: string; drop?: "j
     }, opts.drop);
     expect(source).toContain(`"${file}",`);
     source = source.replace(`"${file}",`, "");
+  }
+  if (opts.hold) {
+    expect(source).toContain("await cache.addAll(");
+    source = source.replace("await cache.addAll(", "await installHeld;\n      await cache.addAll(");
+    source = `let releaseHeld;
+const installHeld = new Promise((resolve) => (releaseHeld = resolve));
+self.addEventListener("message", (event) => event.data?.type === "e2e-release-install" && releaseHeld());
+${source}`;
   }
   writeFileSync(SW_FILE, source);
   // vite preview は起動時の中身で ETag を返すので、ブラウザの HTTP キャッシュを消して書き換えた sw.js を取りに行かせる
@@ -181,6 +190,9 @@ const installedAndWaiting = (page: Page) =>
     const reg = await navigator.serviceWorker.getRegistration();
     return !reg?.installing && !!reg?.waiting;
   });
+/** hold で止めておいたインストールを再開する */
+const releaseInstall = (page: Page) =>
+  page.evaluate(async () => (await navigator.serviceWorker.getRegistration())!.installing!.postMessage({ type: "e2e-release-install" }));
 
 /** サービスワーカーが有効になった状態で、課題の一覧を開いておく */
 async function openInstalledApp(page: Page) {
@@ -275,14 +287,18 @@ test("さらに新しい版のインストール中に更新を押しても、�
   await openInstalledApp(page);
   const [original] = await cacheNames(page);
 
-  // 待機中の版（b）の案内が出ているところへ、さらに新しい版（c）を公開し、c のインストールが終わるのを待たずに押す
+  // 待機中の版（b）の案内が出ているところへ、さらに新しい版（c）を公開する。
+  // c はキャッシュを作ったところでインストールを止めておき、押した時点では確実にインストール中にする
   await publishNextVersion(page, { version: "b", drop: "js" });
   await expect.poll(() => hasWaiting(page)).toBe(true);
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
-  await publishNextVersion(page, { version: "c", drop: "js" });
+  await publishNextVersion(page, { version: "c", drop: "js", hold: true });
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
   const reloaded = page.waitForEvent("load");
   await notice.getByRole("button", { name: "更新" }).click();
+  // 押したあと、切り替え先を決める前（送信を待っている間）に c のインストールを終わらせる
+  await releaseInstall(page);
   // 置き換わって使われなくなった b ではなく、c に切り替わって読み込み直す（止まったまま失敗しない）
   await reloaded;
   await expect(page.getByTestId("app")).toBeVisible();
