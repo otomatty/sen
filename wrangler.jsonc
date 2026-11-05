@@ -5,7 +5,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // 毎日 3:17（日本時間）に古い同期ログと期限切れセッションを掃除する
+  // 毎日 3:17（日本時間）に古い同期ログ、期限切れセッション、7日より前の AI アシスタント利用回数を掃除する
   "triggers": { "crons": ["17 18 * * *"] },
   // SPA と静的ファイル（チュートリアル動画を含む）は Workers Static Assets で配信し、
   // /api/* だけ Worker を先に通す。
@@ -25,5 +25,7 @@
   "durable_objects": {
     "bindings": [{ "name": "REALTIME", "class_name": "WorkspaceRealtime" }]
   },
+  // 招待メールの送信に使う（Cloudflare Email Service）。送信元のドメインを Email Sending に登録し、INVITE_EMAIL_FROM を設定したときだけ送る
+  "send_email": [{ "name": "EMAIL" }],
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorkspaceRealtime"] }]
 }

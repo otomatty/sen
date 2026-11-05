@@ -39,11 +39,11 @@ export function Picker({
   onSelect: (opt: PickerOption) => void;
   onCreate?: (query: string) => void;
   createLabel?: (q: string) => string;
-  header?: ReactNode;
+  header?: ReactNode | ((active: PickerOption | undefined) => ReactNode);
   testId?: string;
   width?: number;
   emptyText?: string;
-  footer?: ReactNode;
+  footer?: ReactNode | ((active: PickerOption | undefined) => ReactNode);
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -87,10 +87,14 @@ export function Picker({
 
   useHotkeys("escape", () => onClose(), { allowInInput: true, scope: SCOPE.overlay + 20 });
 
+  const current = active < filtered.length ? filtered[active] : undefined;
+  const headerNode = typeof header === "function" ? header(current) : header;
+  const footerNode = typeof footer === "function" ? footer(current) : footer;
+
   let lastSection: string | undefined;
   return (
     <Popover anchor={anchor ?? null} onClose={onClose} className="picker" width={width} testId={testId}>
-      {header && <div className="picker-header">{header}</div>}
+      {headerNode && <div className="picker-header">{headerNode}</div>}
       <div className="picker-search">
         <input
           ref={inputRef}
@@ -163,7 +167,7 @@ export function Picker({
         )}
         {!total && <div className="picker-empty">{emptyText}</div>}
       </div>
-      {footer}
+      {footerNode}
     </Popover>
   );
 }

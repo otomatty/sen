@@ -1,12 +1,16 @@
 import { useMemo, useState } from "react";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router";
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Box, Plus } from "lucide-react";
-import type { Project, ProjectStatus } from "../../../shared/types";
+import type { Project, ProjectStatus, User } from "../../../shared/types";
 import { PALETTE, PROJECT_STATUSES, projectStatusLabel } from "../../../shared/constants";
 import { useData } from "../../store/data";
-import { createProject } from "../../store/actions";
+import { createProject, updateProject } from "../../store/actions";
 import { projectProgress, useActiveIssues, useMembers, useProjects, useTeamByKey, useTeams } from "../../store/selectors";
 import { useUI } from "../../store/ui";
+import { planProjectMove } from "../../lib/projectOrder";
 import { cx, dueStatus, formatDate } from "../../lib/utils";
 import { Avatar, Button, EmptyState, Modal } from "../../components/ui";
 import { ProgressRing, ProjectIcon, TeamIcon } from "../../components/icons";
@@ -82,6 +86,56 @@ function ProjectTabHints({
   );
 }
 
+/** 一覧の 1 行。少し動かしてからドラッグになり、クリックは詳細へ移る */
+function SortableProjectRow({
+  project,
+  lead,
+  progress,
+  onOpen,
+}: {
+  project: Project;
+  lead: User | null;
+  progress: { percent: number; done: number; total: number };
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: project.id,
+    attributes: { role: "row", tabIndex: -1 },
+  });
+  const due = project.status === "completed" ? null : dueStatus(project.targetDate);
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform ? { ...transform, x: 0 } : null), transition }}
+      className={cx("table-row", isDragging && "dragging")}
+      data-testid="project-row"
+      {...attributes}
+      {...listeners}
+      role="row"
+      onClick={onOpen}
+    >
+      <span className="cell-name">
+        <ProjectIcon color={project.color} status={project.status} size={16} />
+        <b>{project.name}</b>
+      </span>
+      <span>
+        <StatusChip status={project.status} />
+      </span>
+      <span>{lead ? <Avatar user={lead} size={20} /> : <span className="muted">—</span>}</span>
+      <span className={cx(due === "overdue" && "text-danger", due === "soon" && "text-warn")}>
+        {project.targetDate ? formatDate(project.targetDate) : <span className="muted">—</span>}
+      </span>
+      <span className="cell-progress">
+        <ProgressRing percent={progress.percent} color={project.color} />
+        <span>{progress.percent}%</span>
+        <span className="muted small">
+          {progress.done}/{progress.total}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export function ProjectsPage() {
   const { teamKey } = useParams();
   const [params, setParams] = useSearchParams();
@@ -95,6 +149,11 @@ export function ProjectsPage() {
   const p = useWsPath();
   const createOpen = useUI((s) => s.projectCreateOpen);
   useDocumentTitle(team ? `${team.name} のプロジェクト` : "プロジェクト");
+  // 指はすぐ動かすと一覧をスクロールしたいので、長押ししてからドラッグにする。マウスは少し動かしたらドラッグ。
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+  );
 
   const selectTab = (next: ProjectTab) => {
     setParams((prev) => {
@@ -120,6 +179,23 @@ export function ProjectsPage() {
   const list = useMemo(() => scoped.filter((pr) => projectInTab(pr.status, tab)), [scoped, tab]);
   const noProjects = counts.active + counts.planned + counts.done === 0;
   const tabMeta = PROJECT_TABS.find((t) => t.key === tab) ?? PROJECT_TABS[0];
+
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = list.findIndex((pr) => pr.id === active.id);
+    const newIndex = list.findIndex((pr) => pr.id === over.id);
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+    const moved = arrayMove(list, oldIndex, newIndex);
+    const nextRow = moved[newIndex + 1];
+    const prevRow = moved[newIndex - 1];
+    // 表示中の並びで、すぐ後ろがあればその直前、一番下ならすぐ前の直後に入れる
+    const anchor = nextRow ? { beforeId: nextRow.id } : prevRow ? { afterId: prevRow.id } : null;
+    if (!anchor) return;
+    for (const update of planProjectMove(projects, String(active.id), anchor)) {
+      updateProject(update.id, { sortOrder: update.sortOrder });
+    }
+  };
 
   return (
     <div className="page projects-page" data-testid="projects-page">
@@ -181,32 +257,19 @@ export function ProjectsPage() {
               <span>目標日</span>
               <span>進捗</span>
             </div>
-            {list.map((pr) => {
-              const prog = projectProgress(pr.id, issues, states);
-              const due = pr.status === "completed" ? null : dueStatus(pr.targetDate);
-              return (
-                <div key={pr.id} className="table-row" role="row" onClick={() => navigate(p(`/project/${pr.id}`))} data-testid="project-row">
-                  <span className="cell-name">
-                    <ProjectIcon color={pr.color} status={pr.status} size={16} />
-                    <b>{pr.name}</b>
-                  </span>
-                  <span>
-                    <StatusChip status={pr.status} />
-                  </span>
-                  <span>{pr.leadId ? <Avatar user={users[pr.leadId]} size={20} /> : <span className="muted">—</span>}</span>
-                  <span className={cx(due === "overdue" && "text-danger", due === "soon" && "text-warn")}>
-                    {pr.targetDate ? formatDate(pr.targetDate) : <span className="muted">—</span>}
-                  </span>
-                  <span className="cell-progress">
-                    <ProgressRing percent={prog.percent} color={pr.color} />
-                    <span>{prog.percent}%</span>
-                    <span className="muted small">
-                      {prog.done}/{prog.total}
-                    </span>
-                  </span>
-                </div>
-              );
-            })}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={list.map((pr) => pr.id)} strategy={verticalListSortingStrategy}>
+                {list.map((pr) => (
+                  <SortableProjectRow
+                    key={pr.id}
+                    project={pr}
+                    lead={pr.leadId ? users[pr.leadId] ?? null : null}
+                    progress={projectProgress(pr.id, issues, states)}
+                    onOpen={() => navigate(p(`/project/${pr.id}`))}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           </div>
         )}
       </div>

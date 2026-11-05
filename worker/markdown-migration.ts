@@ -5,8 +5,8 @@
 import { htmlToMarkdown } from "./markdown";
 
 const PENDING_LIMIT = 50;
-const SNAPSHOT = "0006_markdown_bodies:snapshot";
-const DONE = "0006_markdown_bodies";
+const SNAPSHOT = "0009_markdown_bodies:snapshot";
+const DONE = "0009_markdown_bodies";
 
 type PendingRow = { table_name: string; row_id: string };
 type FoundRow = { id: string; value: string | null };
@@ -46,7 +46,7 @@ async function snapshot(db: D1Database): Promise<void> {
       db.prepare(
         "CREATE TABLE IF NOT EXISTS markdown_pending (table_name TEXT NOT NULL, row_id TEXT NOT NULL, PRIMARY KEY (table_name, row_id))",
       ),
-      db.prepare("INSERT INTO d1_migrations (name) VALUES ('0006_markdown_bodies:snapshot')"),
+      db.prepare("INSERT INTO d1_migrations (name) VALUES ('0009_markdown_bodies:snapshot')"),
       db.prepare("INSERT INTO markdown_pending (table_name, row_id) SELECT 'issues', id FROM issues WHERE description <> ''"),
       db.prepare("INSERT INTO markdown_pending (table_name, row_id) SELECT 'projects', id FROM projects WHERE description <> ''"),
       db.prepare("INSERT INTO markdown_pending (table_name, row_id) SELECT 'comments', id FROM comments WHERE body <> ''"),

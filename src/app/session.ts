@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Me, WorkspaceSummary } from "../../shared/types";
+import type { Me, PendingInvitation, WorkspaceSummary } from "../../shared/types";
 import { api, ApiError, setBearerToken } from "../lib/api";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
@@ -9,61 +9,110 @@ interface SessionState {
   status: "unknown" | "authed" | "anon";
   user: Me | null;
   workspaces: WorkspaceSummary[];
+  /** ログイン中の人あての招待。古いキャッシュには無いので、無いときは [] */
+  invitations: PendingInvitation[];
+  defaultWorkspaceId: string | null;
 }
 
-export const useSession = create<SessionState>(() => ({ status: "unknown", user: null, workspaces: [] }));
+interface MeResponse {
+  user: Me | null;
+  workspaces: WorkspaceSummary[];
+  invitations?: PendingInvitation[];
+  defaultWorkspaceId?: string | null;
+}
+
+export const useSession = create<SessionState>(() => ({
+  status: "unknown",
+  user: null,
+  workspaces: [],
+  invitations: [],
+  defaultWorkspaceId: null,
+}));
+
+function pendingInvitations(list: PendingInvitation[] | undefined): PendingInvitation[] {
+  return Array.isArray(list) ? list : [];
+}
 
 const DEMO = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 
 const SESSION_CACHE = "sen:session";
 
-function writeSessionCache(user: { id: string; name: string }, workspaces: WorkspaceSummary[]) {
-  writeLocal(SESSION_CACHE, { user: { id: user.id, name: user.name }, workspaces });
+function writeSessionCache(
+  user: { id: string; name: string },
+  workspaces: WorkspaceSummary[],
+  defaultWorkspaceId: string | null,
+  invitations: PendingInvitation[],
+) {
+  writeLocal(SESSION_CACHE, { user: { id: user.id, name: user.name }, workspaces, defaultWorkspaceId, invitations });
 }
 
 export async function loadSession() {
   try {
-    const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me");
+    const res = await api<MeResponse>("/api/me");
     if (!res.user) {
       writeLocal(SESSION_CACHE, null);
-      useSession.setState({ status: "anon", user: null, workspaces: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null });
       return null;
     }
-    writeSessionCache(res.user, res.workspaces);
-    useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces });
-    return res;
+    const invitations = pendingInvitations(res.invitations);
+    const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
+    writeSessionCache(res.user, res.workspaces, defaultWorkspaceId, invitations);
+    useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces, invitations, defaultWorkspaceId });
+    return { ...res, invitations, defaultWorkspaceId };
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      useSession.setState({ status: "anon", user: null, workspaces: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null });
       return null;
     }
-    // オフライン：前回ログインしていた情報で起動し、手元のデータを表示する
-    const cached = readLocal<{ user: Me; workspaces: WorkspaceSummary[] } | null>(SESSION_CACHE, null);
+    // オフライン：前回ログインしていた情報で起動し、手元のデータを表示する。
+    // 古いキャッシュには招待が無いので、無ければ空にする
+    const cached = readLocal<{
+      user: Me;
+      workspaces: WorkspaceSummary[];
+      invitations?: PendingInvitation[];
+      defaultWorkspaceId?: string | null;
+    } | null>(SESSION_CACHE, null);
     if (e instanceof ApiError && e.status === 0 && cached) {
-      useSession.setState({ status: "authed", user: cached.user, workspaces: cached.workspaces });
-      return cached;
+      const invitations = pendingInvitations(cached.invitations);
+      const defaultWorkspaceId = cached.defaultWorkspaceId ?? null;
+      useSession.setState({ status: "authed", user: cached.user, workspaces: cached.workspaces, invitations, defaultWorkspaceId });
+      return { user: cached.user, workspaces: cached.workspaces, invitations, defaultWorkspaceId };
     }
     throw e;
   }
 }
 
+/** ログイン中の人あての招待を受け、参加したワークスペースのキーを返す */
+export async function acceptPendingInvitation(id: string): Promise<string> {
+  const res = await api<{ workspaceKey: string }>(`/api/me/invitations/${id}/accept`, { body: {} });
+  await loadSession();
+  return res.workspaceKey;
+}
+
 let workspacesRefresh: Promise<void> | null = null;
+// 既定の保存が始まった回数。遅れて届く取り直しが、その間に保存した値を上書きしないために数える。
+let defaultWorkspaceSaves = 0;
 
 // 参加一覧はワークスペースごとのスナップショットに入れず、ユーザー単位のこの一覧（/api/me）だけを正とする。
 // メニューを開いたときに取り直し、別のタブや端末であとから参加したワークスペースも反映する。
 export async function refreshWorkspaces(): Promise<void> {
   if (workspacesRefresh) return workspacesRefresh;
   workspacesRefresh = (async () => {
+    const savesAtStart = defaultWorkspaceSaves;
     try {
       // 応答が無いまま待ち続けると、使い回す Promise が終わらず次回も取り直せない。
-      const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me", {
+      const res = await api<MeResponse>("/api/me", {
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.user) return;
       const cur = useSession.getState();
       if (cur.status !== "authed" || cur.user?.id !== res.user.id) return;
-      writeSessionCache(res.user, res.workspaces);
-      useSession.setState({ workspaces: res.workspaces });
+      const invitations = pendingInvitations(res.invitations);
+      // 取り直しの途中で既定の保存が始まっていたら、応答は保存前の値なので使わない。
+      // 一覧だけ更新し、defaultWorkspaceId は今の値のまま残してキャッシュにも書く。
+      const defaultWorkspaceId = savesAtStart === defaultWorkspaceSaves ? (res.defaultWorkspaceId ?? null) : cur.defaultWorkspaceId;
+      writeSessionCache(res.user, res.workspaces, defaultWorkspaceId, invitations);
+      useSession.setState({ workspaces: res.workspaces, invitations, defaultWorkspaceId });
     } catch {
       // 通信エラー（オフライン含む）のときは今の一覧をそのまま使う
     } finally {
@@ -115,7 +164,7 @@ export async function signOut() {
     writeLocal("sen:demo-token", null);
     writeLocal("sen:demo-logged-out", true);
   }
-  useSession.setState({ status: "anon", user: null, workspaces: [] });
+  useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [], defaultWorkspaceId: null });
 }
 
 export async function logout() {
@@ -128,4 +177,24 @@ export function lastWorkspaceKey(): string | null {
 }
 export function setLastWorkspaceKey(key: string) {
   writeLocal("sen:last-ws", key);
+}
+
+/** 開くワークスペースの urlKey。既定（参加中のもの）→ 最後に開いたもの → 一覧の先頭 */
+export function pickWorkspaceKey(workspaces: WorkspaceSummary[], defaultWorkspaceId: string | null): string | null {
+  const preferred = defaultWorkspaceId ? workspaces.find((w) => w.id === defaultWorkspaceId) : undefined;
+  if (preferred) return preferred.urlKey;
+  const last = lastWorkspaceKey();
+  if (last && workspaces.some((w) => w.urlKey === last)) return last;
+  return workspaces[0]?.urlKey ?? null;
+}
+
+/** 最初に開くワークスペースを保存する。解除するときは null */
+export async function setDefaultWorkspace(workspaceId: string | null): Promise<void> {
+  defaultWorkspaceSaves += 1;
+  const res = await api<{ ok: true; defaultWorkspaceId: string | null }>("/api/me/default-workspace", { body: { workspaceId } });
+  const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
+  const cur = useSession.getState();
+  if (cur.status !== "authed" || !cur.user) return;
+  useSession.setState({ defaultWorkspaceId });
+  writeSessionCache(cur.user, cur.workspaces, defaultWorkspaceId, cur.invitations);
 }

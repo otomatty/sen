@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ApiTokenCreateRequest, ApiTokenCreateResponse } from "../../shared/types";
-import { devSignIn, dismissWelcome, seedDemo, signupViaUi } from "./helpers";
+import { inviteByEmail, joinByInvite, seedDemo, signupViaUi, uniqueEmail } from "./helpers";
 
 const PARENT = "決済画面の改善";
 const SUB1 = "決済の入力欄を短くする";
@@ -383,17 +383,10 @@ test("トークン以外では MCP に接続できず、トークンではトー
   });
   expect(minted.status()).toBe(401);
 
-  await page.goto(`/${ws}/settings/members`);
-  const invite = await page.getByTestId("invite-link").inputValue();
-  const code = invite.split("/invite/")[1];
-  const ctx2 = await browser.newContext();
-  const p2 = await ctx2.newPage();
+  const email = uniqueEmail("member");
+  const link = await inviteByEmail(page, ws, email);
+  const { context: ctx2, page: p2 } = await joinByInvite(browser, link, { email, name: "参加 次郎" });
   try {
-    await devSignIn(p2, { name: "参加 次郎" });
-    await p2.goto(`/invite/${code}`);
-    await p2.getByTestId("invite-accept").click();
-    await expect(p2.getByTestId("app")).toBeVisible();
-    await dismissWelcome(p2);
     const memberToken = await issueToken(p2, ws, { client: "cursor", scope: "write", expiresInDays: 30 });
 
     await page.goto(`/${ws}/settings/members`);

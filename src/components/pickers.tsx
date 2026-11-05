@@ -1,12 +1,12 @@
 import { useMemo, type ReactNode } from "react";
-import { Ban, CircleSlash, Hash } from "lucide-react";
+import { ArrowRight, Ban, CircleSlash, Hash } from "lucide-react";
 import type { Issue } from "../../shared/types";
 import { ESTIMATES, PALETTE, priorityLabel } from "../../shared/constants";
-import { createLabel, relateIssues, RELATION_LABEL, statesForTeam, updateIssues, type RelationKind } from "../store/actions";
+import { blockSentence, createLabel, relateIssues, RELATION_LABEL, statesForTeam, updateIssues, type RelationKind } from "../store/actions";
 import { useData } from "../store/data";
 import { computeRelations, cycleName, cycleStatus, useCycles, useLabels, useMembers, useProjects, useStates, useTeams } from "../store/selectors";
 import { toast, useUI, type PickerKind } from "../store/ui";
-import { formatDate, identifier, fuzzyMatch } from "../lib/utils";
+import { cx, formatDate, identifier, fuzzyMatch } from "../lib/utils";
 import { CycleIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon, TeamIcon, startedProgress } from "./icons";
 import { Picker, type PickerOption } from "./Picker";
 import { DatePicker } from "./DatePicker";
@@ -222,12 +222,79 @@ function ParentPicker({
 }
 
 const RELATION_PLACEHOLDER: Record<RelationKind, string> = {
-  blocks: "ブロックしている課題を検索...",
-  blockedBy: "この課題をブロックしている課題を検索...",
+  blocks: "この課題を待つ課題を検索...",
+  blockedBy: "先に終わらせる課題を検索...",
   related: "関連する課題を検索...",
   duplicate: "元の課題を検索...",
   duplicatedBy: "重複している課題を検索...",
 };
+
+function RelationSlot({
+  kicker,
+  pick,
+  id,
+  title,
+  placeholder,
+}: {
+  kicker: string;
+  pick?: boolean;
+  id?: string;
+  title?: string;
+  placeholder?: string;
+}) {
+  return (
+    <div className={cx("relation-slot", pick && "is-pick")}>
+      <div className="relation-slot-kicker">{kicker}</div>
+      {id || title ? (
+        <div className="relation-slot-line">
+          {id && <span className="relation-slot-id">{id}</span>}
+          {title && <span className="relation-slot-title">{title}</span>}
+        </div>
+      ) : (
+        <div className="relation-slot-empty">{placeholder}</div>
+      )}
+    </div>
+  );
+}
+
+/** ブロックの向き。左が先に終わる側、右が待つ側 */
+function RelationDirection({
+  kind,
+  selfId,
+  selfTitle,
+  pickedId,
+  pickedTitle,
+}: {
+  kind: "blockedBy" | "blocks";
+  selfId?: string;
+  selfTitle: string;
+  pickedId?: string;
+  pickedTitle?: string;
+}) {
+  const pick = (
+    <RelationSlot
+      pick
+      kicker={kind === "blockedBy" ? "先に終わらせる（選ぶ課題）" : "待つ（選ぶ課題）"}
+      id={pickedId}
+      title={pickedTitle}
+      placeholder="未選択"
+    />
+  );
+  const self = (
+    <RelationSlot
+      kicker={kind === "blockedBy" ? "待つ（この課題）" : "先に終わらせる（この課題）"}
+      id={selfId}
+      title={selfTitle}
+    />
+  );
+  return (
+    <div className="relation-direction" data-testid="relation-direction">
+      {kind === "blockedBy" ? pick : self}
+      <ArrowRight size={14} className="relation-arrow" />
+      {kind === "blockedBy" ? self : pick}
+    </div>
+  );
+}
 
 /** 関係（ブロック・関連・重複）の相手を選ぶ */
 function RelationPicker({
@@ -245,6 +312,24 @@ function RelationPicker({
 }) {
   const issues = useData((s) => s.issues);
   const teams = useData((s) => s.teams);
+  const states = useData((s) => s.states);
+  const directional = kind === "blockedBy" || kind === "blocks";
+  const selfIssue = issueIds.length === 1 ? issues[issueIds[0]] : undefined;
+  // 文の中の「この課題」。1 件なら identifier、複数なら件数
+  const selfName = selfIssue ? identifier(selfIssue, teams) : `選んだ ${issueIds.length} 件の課題`;
+  const finished = (issue: Issue | undefined) => {
+    const type = issue ? states[issue.stateId]?.type : undefined;
+    return type === "completed" || type === "canceled";
+  };
+  const blockResult = (picked: Issue) => {
+    const pickedName = identifier(picked, teams);
+    if (kind === "blockedBy") return blockSentence(pickedName, selfName, finished(picked));
+    return blockSentence(
+      selfName,
+      pickedName,
+      issueIds.length > 0 && issueIds.every((id) => finished(issues[id])),
+    );
+  };
   const options = useMemo(() => {
     const exclude = new Set(issueIds);
     // 1 件だけのときは、同じ種類の関係がすでにある課題を除く
@@ -266,7 +351,35 @@ function RelationPicker({
       anchor={anchor}
       onClose={onClose}
       options={options}
-      header={header}
+      header={
+        directional
+          ? (opt) => {
+              const picked = opt ? issues[opt.id] : undefined;
+              return (
+                <RelationDirection
+                  kind={kind}
+                  selfId={selfIssue ? identifier(selfIssue, teams) : undefined}
+                  selfTitle={selfIssue ? selfIssue.title : selfName}
+                  pickedId={picked ? identifier(picked, teams) : undefined}
+                  pickedTitle={picked?.title}
+                />
+              );
+            }
+          : header
+      }
+      footer={
+        directional
+          ? (opt) => {
+              const picked = opt ? issues[opt.id] : undefined;
+              const text = picked ? blockResult(picked) : null;
+              return (
+                <div className={cx("relation-preview", !text && "is-empty")} data-testid="relation-preview" aria-live="polite">
+                  {text ?? "課題を選ぶと、ここに結果が表示されます"}
+                </div>
+              );
+            }
+          : undefined
+      }
       placeholder={RELATION_PLACEHOLDER[kind]}
       width={400}
       testId="picker-relation"
@@ -276,6 +389,7 @@ function RelationPicker({
         if (!n || !other) return;
         const id = identifier(other, teams);
         if (kind === "duplicate") toast(`${id} の重複としてマークしました`);
+        else if (directional) toast(blockResult(other));
         else toast(`${id} を「${RELATION_LABEL[kind]}」に追加しました`);
       }}
     />

@@ -242,6 +242,8 @@ export function Modal({
 export interface MenuItem {
   label: string;
   icon?: ReactNode;
+  /** ラベルの下に出す補足 */
+  hint?: ReactNode;
   combo?: string;
   danger?: boolean;
   onSelect: () => void;
@@ -281,7 +283,7 @@ export function Menu({
         ) : (
           <button
             key={i}
-            className={cx("menu-item", item.danger && "danger", selectable[active] === item && "active")}
+            className={cx("menu-item", item.danger && "danger", !!item.hint && "has-hint", selectable[active] === item && "active")}
             disabled={item.disabled}
             onMouseEnter={() => setActive(selectable.indexOf(item))}
             onClick={() => {
@@ -290,7 +292,10 @@ export function Menu({
             }}
           >
             <span className="menu-item-icon">{item.icon}</span>
-            <span className="menu-item-label">{item.label}</span>
+            <span className={cx("menu-item-label", !!item.hint && "has-hint")}>
+              {item.label}
+              {item.hint && <span className="menu-item-hint">{item.hint}</span>}
+            </span>
             {item.combo && <Kbd combo={item.combo} />}
           </button>
         ),

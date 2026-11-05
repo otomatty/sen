@@ -138,6 +138,9 @@ const MIGRATION_FILES = [
   "0003_issue_relations.sql",
   "0004_google_auth.sql",
   "0005_ai_tokens.sql",
+  "0006_default_workspace.sql",
+  "0007_invitations.sql",
+  "0008_assistant_usage.sql",
 ];
 
 async function openDb(beforeBatch?: (n: number) => void) {
@@ -273,8 +276,8 @@ test("HTML の本文を Markdown にし、2 回目は何も変えない", async 
   expect(other?.updated_at).toBe(555);
 
   const recorded = await names(db);
-  expect(recorded).toContain("0006_markdown_bodies");
-  expect(recorded).toContain("0006_markdown_bodies:snapshot");
+  expect(recorded).toContain("0009_markdown_bodies");
+  expect(recorded).toContain("0009_markdown_bodies:snapshot");
   expect(await pendingCount(db)).toBe(0);
 
   for (const wsId of ["ws-a", "ws-b"]) {
@@ -342,8 +345,8 @@ test("同時に走らせても、途中で失敗しても、本文は 1 回し�
   expect(converted?.updated_at).toBe(1000);
   expect(waiting?.value).toBe(SENTINEL);
   expect(waiting?.updated_at).toBe(1050);
-  expect(await names(retry)).toContain("0006_markdown_bodies:snapshot");
-  expect(await names(retry)).not.toContain("0006_markdown_bodies");
+  expect(await names(retry)).toContain("0009_markdown_bodies:snapshot");
+  expect(await names(retry)).not.toContain("0009_markdown_bodies");
   expect(await pendingCount(retry)).toBe(1);
 
   failAt = 0;
@@ -356,7 +359,7 @@ test("同時に走らせても、途中で失敗しても、本文は 1 回し�
   const plain = await value(retry, "SELECT body AS value FROM comments WHERE id = ?", "c01");
   expect(plain?.value).toBe(htmlToMarkdown("<p>項目 1</p>"));
   expect(await pendingCount(retry)).toBe(0);
-  expect(await names(retry)).toContain("0006_markdown_bodies");
+  expect(await names(retry)).toContain("0009_markdown_bodies");
   expect((await retry.prepare("SELECT pruned_before FROM sync_meta WHERE workspace_id = ?").bind("ws").first<{ pruned_before: number }>())?.pruned_before).toBe(
     retryMarker.returned.get("ws"),
   );

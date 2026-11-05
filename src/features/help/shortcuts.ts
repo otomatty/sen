@@ -1,3 +1,5 @@
+import { navigationShortcutItems } from "../../../shared/navigation";
+
 export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
   {
     title: "全体",
@@ -12,18 +14,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
   },
   {
     title: "移動",
-    items: [
-      ["g i", "受信トレイ"],
-      ["g m", "自分の課題"],
-      ["g e", "チームのすべての課題"],
-      ["g a", "チームのアクティブな課題"],
-      ["g b", "チームのバックログ"],
-      ["g c", "サイクル"],
-      ["g p", "プロジェクト"],
-      ["g r", "進捗"],
-      ["g s", "設定"],
-      ["g h", "使い方動画"],
-    ],
+    items: navigationShortcutItems(),
   },
   {
     title: "一覧",
@@ -50,8 +41,8 @@ export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
       ["shift+c", "サイクルに追加"],
       ["shift+d", "期日を設定"],
       ["shift+e", "見積もりを設定"],
-      ["m b", "ブロックされている課題を指定"],
-      ["m x", "ブロックしている課題を指定"],
+      ["m b", "先に終わらせる課題を指定"],
+      ["m x", "この課題を待つ課題を指定"],
       ["m r", "関連する課題を指定"],
       ["m m", "重複としてマーク"],
       ["mod+.", "ID をコピー"],
