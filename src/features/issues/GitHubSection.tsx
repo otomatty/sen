@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GitHubLink } from "../../../shared/types";
+import type { GitHubLink, GitHubPull, GitHubPullState } from "../../../shared/types";
 import { ApiError, api } from "../../lib/api";
 import { formatDateTime } from "../../lib/utils";
 import { Button, Modal } from "../../components/ui";
@@ -7,14 +7,25 @@ import { useData } from "../../store/data";
 import { engine } from "../../store/engine";
 import { toast } from "../../store/ui";
 
-/** 課題の詳細の GitHub 区画。チームがリポジトリと連携しているときだけ出す */
+const PULL_LABEL: Record<GitHubPullState, string> = {
+  draft: "下書き",
+  open: "レビュー待ち",
+  merged: "マージ済み",
+  closed: "閉じた",
+};
+
+/** 課題の詳細の GitHub 区画。チームが連携しているか、プルリクエストの紐づけがあるとき出す */
 export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamId: string }) {
   const repo = useData((s) => s.githubRepos[teamId]);
   const link = useData((s) => s.githubLinks[issueId]);
+  const pullMap = useData((s) => s.githubPulls);
   const wsKey = useData((s) => s.workspace?.urlKey ?? "");
+  const pulls = Object.values(pullMap)
+    .filter((pull) => pull.issueId === issueId)
+    .sort((a, b) => a.number - b.number || (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0));
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(false);
-  if (!repo || !wsKey) return null;
+  if (!wsKey || (!repo && pulls.length === 0)) return null;
 
   const run = async (path: string, method: "POST" | "DELETE", body?: unknown) => {
     setBusy(true);
@@ -32,9 +43,9 @@ export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamI
   return (
     <section className="github-issue" data-testid="github-issue">
       <div className="section-title">GitHub</div>
-      {link ? (
+      {repo && link ? (
         <Linked link={link} busy={busy} onUnlink={() => void run(`/issues/${issueId}/link`, "DELETE")} />
-      ) : (
+      ) : repo ? (
         <div className="github-issue-actions">
           <button className="link-btn" type="button" data-testid="github-create" disabled={busy} onClick={() => void run(`/issues/${issueId}/link`, "POST", { mode: "create" })}>
             GitHub に Issue を作る
@@ -43,15 +54,39 @@ export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamI
             既存の Issue と紐づける
           </button>
         </div>
-      )}
-      {dialog && (
+      ) : null}
+      {dialog && repo && (
         <LinkDialog
           busy={busy}
           onClose={() => setDialog(false)}
           onSubmit={(ref, prefer) => void run(`/issues/${issueId}/link`, "POST", { mode: "link", ref, prefer })}
         />
       )}
+      <PullList pulls={pulls} />
     </section>
+  );
+}
+
+function PullList({ pulls }: { pulls: GitHubPull[] }) {
+  if (!pulls.length) return null;
+  return (
+    <ul className="github-pulls" data-testid="github-pulls">
+      {pulls.map((pull) => (
+        <li key={pull.id} className="github-pull" data-testid="github-pull">
+          <a href={pull.url} target="_blank" rel="noreferrer">
+            #{pull.number} {pull.title}
+          </a>
+          <span className={`pr-badge pr-badge-${pull.state}`} data-testid="github-pull-state">
+            {PULL_LABEL[pull.state]}
+          </span>
+          {pull.author && (
+            <span className="muted" data-testid="github-pull-author">
+              {pull.author}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 

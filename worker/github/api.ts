@@ -132,6 +132,43 @@ export function listComments(cfg: GitHubConfig, owner: string, repo: string, sin
   );
 }
 
+export interface GhPull {
+  number: number;
+  title?: string | null;
+  body?: string | null;
+  html_url?: string | null;
+  state?: string | null;
+  draft?: boolean;
+  merged?: boolean;
+  merged_at?: string | null;
+  user?: { login?: string | null } | null;
+  head?: { ref?: string | null } | null;
+  updated_at?: string;
+}
+
+/** 更新が新しい順。since より前の行に達したら、そこから先は取りに行かない */
+export async function listPullsSince(cfg: GitHubConfig, owner: string, repo: string, sinceIso: string): Promise<GhPull[]> {
+  const since = Date.parse(sinceIso);
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&sort=updated&direction=desc`;
+  const out: GhPull[] = [];
+  for (let page = 1; page <= 30; page++) {
+    const batch = await request<GhPull[]>(cfg, "GET", `${base}&per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    let stop = false;
+    for (const pull of batch) {
+      if (!pull || typeof pull !== "object") continue;
+      const updated = Date.parse(pull.updated_at ?? "");
+      if (Number.isFinite(since) && Number.isFinite(updated) && updated < since) {
+        stop = true;
+        break;
+      }
+      out.push(pull);
+    }
+    if (stop || batch.length < 100) break;
+  }
+  return out;
+}
+
 async function paginate<T>(cfg: GitHubConfig, path: string): Promise<T[]> {
   const out: T[] = [];
   for (let page = 1; page <= 30; page++) {

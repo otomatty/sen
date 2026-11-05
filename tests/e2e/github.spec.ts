@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import type { Activity, BootstrapPayload, Comment, GitHubLink, GitHubRepo, Issue, Mutation, StateType } from "../../shared/types";
 import {
+  advanceStateId,
   initialStateId,
   mergeLabels,
   mergeOpenClosed,
@@ -13,9 +14,10 @@ import {
   stateIdForGitHub,
   type WorkflowStateRef,
 } from "../../worker/github/merge";
+import { extractPullReferences, pullLinkState } from "../../worker/github/pulls";
 import { acceptGitHubWebhook, githubSignature, verifyGitHubSignature } from "../../worker/github/signature";
 import { devSignIn, dismissWelcome, signupViaUi } from "./helpers";
-import { GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock, type MockIssue } from "./github-mock";
+import { GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock, type MockIssue, type MockPull } from "./github-mock";
 
 const SECRET = "e2e-github-webhook-secret";
 
@@ -664,6 +666,243 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect.poll(async () => activityActions(page, ws, older.id)).toContain("unlinked");
     await expect(page.getByTestId("activity-line").filter({ hasText: "紐づけを外しました" })).toBeVisible();
   });
+
+  test("下書きの PR が課題を進め、レビュー待ちとマージでさらに進み、Issue を閉じる", async () => {
+    const created = await createSenIssue(page, ws, { title: "PR で進む課題", description: "進む" });
+    const remote = await waitMockIssue("PR で進む課題");
+    await waitLink(page, ws, created.id);
+    const data = await bootstrap(page, ws);
+    const doing = stateId(data, teamId, "started", "進行中");
+    const review = stateId(data, teamId, "started", "レビュー中");
+    const done = stateId(data, teamId, "completed", "完了");
+    const pull = pushMockPull({
+      title: "ログインを直す",
+      body: `Fixes DEF-${created.number}`,
+      headRef: "feature",
+      draft: true,
+      user: { login: "octocat" },
+    });
+
+    expect((await postPullWebhook(page, pull, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(doing);
+    await expect.poll(async () => (await pullOn(page, ws, created.id, pull.number))?.state ?? "", { timeout: 15_000 }).toBe("draft");
+
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    const card = page.getByTestId("github-pull").filter({ hasText: `#${pull.number} ログインを直す` });
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("github-pull-state")).toHaveText("下書き");
+    await expect(card.getByTestId("github-pull-author")).toHaveText("octocat");
+    await expect(card.locator("a")).toHaveAttribute("href", `https://github.com/acme/widgets/pull/${pull.number}`);
+    await expectBadgesReadable(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+    await page.setViewportSize({ width: 1360, height: 860 });
+
+    await page.goto(`/${ws}/search?q=${encodeURIComponent("PR で進む課題")}`);
+    const row = page.locator(`[data-testid="issue-row"][data-identifier="DEF-${created.number}"]`);
+    await expect(row.getByTestId("issue-pr-mark")).toHaveText("1");
+
+    pull.draft = false;
+    pull.state = "open";
+    pull.updated_at = new Date().toISOString();
+    expect((await postPullWebhook(page, pull, "ready_for_review")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(review);
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("github-pull").filter({ hasText: "ログインを直す" }).getByTestId("github-pull-state")).toHaveText("レビュー待ち");
+    await expectBadgesReadable(page);
+    await expect(page.getByTestId("activity-line").filter({ hasText: "ステータスを" }).filter({ hasText: "GitHub 経由" }).first()).toBeVisible();
+
+    pull.state = "closed";
+    pull.merged = true;
+    pull.updated_at = new Date().toISOString();
+    expect((await postPullWebhook(page, pull, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(done);
+    await expect.poll(() => mockIssue(remote.number)?.state ?? "", { timeout: 15_000 }).toBe("closed");
+    expect(mockIssue(remote.number)?.state_reason).toBe("completed");
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("github-pull").filter({ hasText: "ログインを直す" }).getByTestId("github-pull-state")).toHaveText("マージ済み");
+    await expectBadgesReadable(page);
+
+    const closed = pushMockPull({
+      title: "マージしない",
+      body: `DEF-${created.number}`,
+      headRef: "wip",
+      state: "closed",
+      user: { login: "octocat" },
+    });
+    expect((await postPullWebhook(page, closed, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await pullOn(page, ws, created.id, closed.number))?.state ?? "", { timeout: 15_000 }).toBe("closed");
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("github-pull").filter({ hasText: "マージしない" }).getByTestId("github-pull-state")).toHaveText("閉じた");
+    await expectBadgesReadable(page);
+    await page.goto(`/${ws}/search?q=${encodeURIComponent("PR で進む課題")}`);
+    await expect(page.locator(`[data-testid="issue-row"][data-identifier="DEF-${created.number}"]`).getByTestId("issue-pr-mark")).toHaveCount(0);
+  });
+
+  test("完了とキャンセルの課題は、新しい PR でもステータスが動かない", async () => {
+    const data = await bootstrap(page, ws);
+    const done = stateId(data, teamId, "completed", "完了");
+    const canceled = stateId(data, teamId, "canceled", "キャンセル");
+    const finished = await createSenIssue(page, ws, { title: "完了のままの課題", description: "" });
+    await waitLink(page, ws, finished.id);
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: finished.id, patch: { stateId: done } } })).ok).toBe(true);
+    await expect.poll(async () => (await senIssue(page, ws, finished.id)).stateId, { timeout: 15_000 }).toBe(done);
+    const again = pushMockPull({ title: "もう一つの PR", body: "", headRef: `def-${finished.number}-again`, draft: true, user: { login: "octocat" } });
+    expect((await postPullWebhook(page, again, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await pullOn(page, ws, finished.id, again.number))?.number ?? 0, { timeout: 15_000 }).toBe(again.number);
+    expect((await senIssue(page, ws, finished.id)).stateId).toBe(done);
+
+    const dropped = await createSenIssue(page, ws, { title: "キャンセルのままの課題", description: "" });
+    await waitLink(page, ws, dropped.id);
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: dropped.id, patch: { stateId: canceled } } })).ok).toBe(true);
+    await expect.poll(async () => (await senIssue(page, ws, dropped.id)).stateId, { timeout: 15_000 }).toBe(canceled);
+    const late = pushMockPull({ title: "キャンセル後の PR", body: `DEF-${dropped.number}`, headRef: "late", user: { login: "octocat" } });
+    expect((await postPullWebhook(page, late, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await pullOn(page, ws, dropped.id, late.number))?.number ?? 0, { timeout: 15_000 }).toBe(late.number);
+    expect((await senIssue(page, ws, dropped.id)).stateId).toBe(canceled);
+  });
+
+  test("PR の本文から参照を消すと紐づけが外れ、ブランチ名の参照は残る", async () => {
+    const kept = await createSenIssue(page, ws, { title: "ブランチに残る課題", description: "" });
+    const dropped = await createSenIssue(page, ws, { title: "本文だけで紐づく課題", description: "" });
+    await waitLink(page, ws, kept.id);
+    await waitLink(page, ws, dropped.id);
+    const pull = pushMockPull({
+      title: "両方を参照する",
+      body: `Fixes DEF-${dropped.number}`,
+      headRef: `taro/def-${kept.number}`,
+      user: { login: "octocat" },
+    });
+    expect((await postPullWebhook(page, pull, "opened")).status()).toBe(202);
+    await expect.poll(async () => `${Boolean(await pullOn(page, ws, kept.id, pull.number))}:${Boolean(await pullOn(page, ws, dropped.id, pull.number))}`, { timeout: 15_000 }).toBe("true:true");
+
+    pull.body = "参照を消した";
+    pull.updated_at = new Date().toISOString();
+    expect((await postPullWebhook(page, pull, "edited")).status()).toBe(202);
+    await expect.poll(async () => `${Boolean(await pullOn(page, ws, kept.id, pull.number))}:${Boolean(await pullOn(page, ws, dropped.id, pull.number))}`, { timeout: 15_000 }).toBe("true:false");
+  });
+
+  test("連携していないチームの課題は PR が見えるが、ステータスは動かない", async () => {
+    const data = await bootstrap(page, ws);
+    const other = data.teams.find((team) => team.key === "OTH");
+    expect(other).toBeTruthy();
+    const untouched = stateId(data, other!.id, "unstarted", "未着手");
+    const id = randomUUID();
+    expect((await postMutation(page, ws, { type: "issue.create", args: { id, teamId: other!.id, title: "連携していないチームの課題", description: "" } })).ok).toBe(true);
+    const created = await waitSenIssue(page, ws, id);
+    expect(created.stateId).toBe(untouched);
+    const pull = pushMockPull({
+      title: "他チームへの PR",
+      body: `OTH-${created.number}`,
+      headRef: "elsewhere",
+      user: { login: "octocat" },
+    });
+    expect((await postPullWebhook(page, pull, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await pullOn(page, ws, created.id, pull.number))?.title ?? "", { timeout: 15_000 }).toBe("他チームへの PR");
+    expect((await senIssue(page, ws, created.id)).stateId).toBe(untouched);
+    await page.goto(`/${ws}/issue/OTH-${created.number}`);
+    await expect(page.getByTestId("github-issue")).toBeVisible();
+    await expect(page.getByTestId("github-pull")).toContainText(`#${pull.number} 他チームへの PR`);
+    await expect(page.getByTestId("github-create")).toHaveCount(0);
+    await page.goto(`/${ws}/search?q=${encodeURIComponent("連携していないチームの課題")}`);
+    await expect(page.locator(`[data-testid="issue-row"][data-identifier="OTH-${created.number}"]`).getByTestId("issue-pr-mark")).toHaveText("1");
+  });
+
+  test("PR の作者が GitHub ユーザー名を登録したメンバーなら、その人の操作として履歴に残る", async ({ browser }) => {
+    await page.goto(`/${ws}/settings/members`);
+    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
+    const ctx = await browser.newContext();
+    const author = await ctx.newPage();
+    await devSignIn(author, { name: "PR 作者" });
+    await author.goto(`/invite/${code}`);
+    await author.getByTestId("invite-accept").click();
+    await expect(author.getByTestId("app")).toBeVisible();
+    await dismissWelcome(author);
+    await author.goto(`/${ws}/settings/profile`);
+    const input = author.getByTestId("profile-github-login");
+    await input.fill("Pull-Author");
+    await input.blur();
+    await expect.poll(async () => (await bootstrap(author, ws)).me.githubLogin).toBe("pull-author");
+    const authorId = (await bootstrap(author, ws)).me.id;
+    await ctx.close();
+
+    const created = await createSenIssue(page, ws, { title: "作者が残る課題", description: "" });
+    await waitLink(page, ws, created.id);
+    const pull = pushMockPull({
+      title: "作者の PR",
+      body: "",
+      headRef: `def-${created.number}-by-author`,
+      draft: true,
+      user: { login: "Pull-Author" },
+    });
+    expect((await postPullWebhook(page, pull, "opened")).status()).toBe(202);
+    await expect.poll(async () => {
+      const activity = (await threadOf(page, ws, created.id)).activities.find((item) => item.type === "state");
+      return activity ? `${activity.actorId}:${activity.via ?? ""}` : "";
+    }, { timeout: 15_000 }).toBe(`${authorId}:GitHub`);
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    const line = page.getByTestId("activity-line").filter({ hasText: "ステータスを" }).filter({ hasText: "PR 作者" });
+    await expect(line).toContainText("GitHub 経由");
+    await expect(page.getByTestId("github-pull-author")).toHaveText("Pull-Author");
+  });
+
+  test("自動の移動を「変えない」にするとステータスは動かない", async () => {
+    const before = await bootstrap(page, ws);
+    const draft = stateId(before, teamId, "started", "進行中");
+    const review = stateId(before, teamId, "started", "レビュー中");
+    const done = stateId(before, teamId, "completed", "完了");
+    const headers = { "x-sen-client": "1" };
+    try {
+      const cleared = await page.request.patch(`/api/github/repos/${teamId}?ws=${encodeURIComponent(ws)}`, {
+        headers,
+        data: { prDraftStateId: null, prOpenStateId: null, prMergedStateId: null },
+      });
+      expect(cleared.ok()).toBeTruthy();
+      const created = await createSenIssue(page, ws, { title: "動かさない課題", description: "" });
+      await waitLink(page, ws, created.id);
+      const start = (await senIssue(page, ws, created.id)).stateId;
+      const pull = pushMockPull({
+        title: "設定で止める",
+        body: `DEF-${created.number}`,
+        headRef: "hold",
+        draft: true,
+        user: { login: "octocat" },
+      });
+      expect((await postPullWebhook(page, pull, "opened")).status()).toBe(202);
+      await expect.poll(async () => (await pullOn(page, ws, created.id, pull.number))?.state ?? "", { timeout: 15_000 }).toBe("draft");
+      expect((await senIssue(page, ws, created.id)).stateId).toBe(start);
+      pull.draft = false;
+      pull.state = "closed";
+      pull.merged = true;
+      pull.updated_at = new Date().toISOString();
+      expect((await postPullWebhook(page, pull, "closed")).status()).toBe(202);
+      await expect.poll(async () => (await pullOn(page, ws, created.id, pull.number))?.state ?? "", { timeout: 15_000 }).toBe("merged");
+      expect((await senIssue(page, ws, created.id)).stateId).toBe(start);
+    } finally {
+      const restored = await page.request.patch(`/api/github/repos/${teamId}?ws=${encodeURIComponent(ws)}`, {
+        headers,
+        data: { prDraftStateId: draft, prOpenStateId: review, prMergedStateId: done },
+      });
+      expect(restored.ok()).toBeTruthy();
+    }
+  });
+
+  test("Webhook を送らなくても突き合わせで PR の紐づけが反映される", async () => {
+    const created = await createSenIssue(page, ws, { title: "突き合わせで紐づく課題", description: "" });
+    await waitLink(page, ws, created.id);
+    const pull = pushMockPull({
+      title: "Webhook なしの PR",
+      body: `Fixes DEF-${created.number}`,
+      headRef: "reconcile-me",
+      draft: true,
+      user: { login: "octocat" },
+    });
+    const res = await page.request.post(`/api/dev/github/reconcile?ws=${encodeURIComponent(ws)}`, { headers: { "x-sen-client": "1" } });
+    expect(res.ok()).toBeTruthy();
+    await expect.poll(async () => (await pullOn(page, ws, created.id, pull.number))?.title ?? "", { timeout: 15_000 }).toBe("Webhook なしの PR");
+    const data = await bootstrap(page, ws);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(stateId(data, teamId, "started", "進行中"));
+  });
 });
 
 test("課題の 3-way 比較はブラウザを使わない", () => {
@@ -717,6 +956,49 @@ test("課題の 3-way 比較はブラウザを使わない", () => {
   expect(parseIssueRef("acme/widgets#34", "other/repo")).toEqual({ fullName: "acme/widgets", number: 34 });
   expect(parseIssueRef("https://github.com/acme/widgets/issues/7", "other/repo")).toEqual({ fullName: "acme/widgets", number: 7 });
   expect(parseIssueRef("not a ref", "acme/widgets")).toBeNull();
+
+  expect(extractPullReferences({ branch: "taro/eng-12", title: "", body: "" }, ["ENG"]).issues).toEqual([{ key: "ENG", number: 12 }]);
+  expect(extractPullReferences({ branch: "eng-12-fix-login", title: "", body: "" }, ["eng"]).issues).toEqual([{ key: "ENG", number: 12 }]);
+  expect(extractPullReferences({ branch: "", title: "[ENG-12]", body: "" }, ["ENG"]).issues).toEqual([{ key: "ENG", number: 12 }]);
+  expect(extractPullReferences({ branch: "", title: "", body: "Fixes ENG-12, closes #34" }, ["ENG"])).toEqual({
+    issues: [{ key: "ENG", number: 12 }],
+    github: [{ repo: null, number: 34 }],
+  });
+  expect(extractPullReferences({ branch: "", title: "Resolves owner/repo#34", body: "" }, ["ENG"]).github).toEqual([{ repo: "owner/repo", number: 34 }]);
+  expect(extractPullReferences({ branch: "utf-8-docs", title: "UTF-8", body: "Fixes UTF-8" }, ["ENG"]).issues).toEqual([]);
+  const coded = "見える ENG-12 と #1\n```\nENG-99\n#99\nowner/repo#99\n```\n`ENG-98` と `#98`";
+  expect(extractPullReferences({ branch: "", title: "", body: coded }, ["ENG"])).toEqual({
+    issues: [{ key: "ENG", number: 12 }],
+    github: [{ repo: null, number: 1 }],
+  });
+  expect(extractPullReferences({ branch: "eng-12", title: "ENG-12", body: "eng-12 closes #7。もう一度 #7 と owner/repo#7" }, ["ENG"])).toEqual({
+    issues: [{ key: "ENG", number: 12 }],
+    github: [
+      { repo: null, number: 7 },
+      { repo: "owner/repo", number: 7 },
+    ],
+  });
+
+  const flow: WorkflowStateRef[] = [
+    { id: "backlog", name: "バックログ", type: "backlog", position: 0 },
+    { id: "todo", name: "未着手", type: "unstarted", position: 1 },
+    { id: "doing", name: "進行中", type: "started", position: 2 },
+    { id: "review", name: "レビュー中", type: "started", position: 3 },
+    { id: "done", name: "完了", type: "completed", position: 4 },
+    { id: "cancel", name: "キャンセル", type: "canceled", position: 5 },
+  ];
+  expect(advanceStateId(flow, "todo", "doing")).toBe("doing");
+  expect(advanceStateId(flow, "doing", "review")).toBe("review");
+  expect(advanceStateId(flow, "review", "doing")).toBeNull();
+  expect(advanceStateId(flow, "review", "done")).toBe("done");
+  expect(advanceStateId(flow, "done", "doing")).toBeNull();
+  expect(advanceStateId(flow, "cancel", "done")).toBeNull();
+  expect(advanceStateId(flow, "doing", "doing")).toBeNull();
+  expect(advanceStateId(flow, "doing", null)).toBeNull();
+  expect(pullLinkState({ state: "open", draft: true, merged: false })).toBe("draft");
+  expect(pullLinkState({ state: "open", draft: false, merged: false })).toBe("open");
+  expect(pullLinkState({ state: "closed", draft: false, merged: true })).toBe("merged");
+  expect(pullLinkState({ state: "closed", draft: true, merged: false })).toBe("closed");
 });
 
 async function postWebhook(
@@ -849,6 +1131,111 @@ function mockComment(number: number, body: string, login: string) {
     updated_at: new Date().toISOString(),
   };
   return comment;
+}
+
+async function pullOn(page: Page, ws: string, issueId: string, number: number) {
+  const data = await bootstrap(page, ws);
+  return data.githubPulls.find((pull) => pull.issueId === issueId && pull.number === number);
+}
+
+async function postPullWebhook(page: Page, pull: MockPull, action: string) {
+  const repo = widgets();
+  return postWebhook(page.request, {
+    event: "pull_request",
+    body: JSON.stringify({
+      action,
+      pull_request: {
+        number: pull.number,
+        title: pull.title,
+        body: pull.body,
+        html_url: `https://github.com/${pull.fullName}/pull/${pull.number}`,
+        state: pull.state,
+        draft: pull.draft,
+        merged: pull.merged,
+        user: pull.user,
+        head: { ref: pull.headRef },
+      },
+      repository: { id: repo.id, full_name: repo.full_name },
+      sender: { login: "webhook-sender" },
+    }),
+  });
+}
+
+function pushMockPull(input: {
+  title: string;
+  body?: string | null;
+  headRef: string;
+  draft?: boolean;
+  state?: "open" | "closed";
+  merged?: boolean;
+  user?: { login: string } | null;
+  fullName?: string;
+}): MockPull {
+  const fullName = input.fullName ?? "acme/widgets";
+  const number = githubMock.pulls.filter((pull) => pull.fullName.toLowerCase() === fullName.toLowerCase()).reduce((max, pull) => Math.max(max, pull.number), 0) + 1;
+  const pull: MockPull = {
+    id: githubMock.nextPullId++,
+    number,
+    fullName,
+    title: input.title,
+    body: input.body ?? "",
+    state: input.state ?? "open",
+    draft: input.draft === true,
+    merged: input.merged === true,
+    user: input.user === undefined ? { login: "octocat" } : input.user,
+    headRef: input.headRef,
+    updated_at: new Date().toISOString(),
+  };
+  githubMock.pulls.push(pull);
+  return pull;
+}
+
+async function expectBadgesReadable(page: Page) {
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((value) => {
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    const ratios = await page.evaluate(() => {
+      const parse = (color: string) => {
+        const match = color.match(/rgba?\(([^)]+)\)/);
+        if (!match) return null;
+        const parts = match[1].split(",").map((part) => Number(part.trim()));
+        if (parts.length < 3 || parts.some((part) => !Number.isFinite(part))) return null;
+        return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1] as [number, number, number, number];
+      };
+      const channel = (value: number) => {
+        const s = value / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      const rel = (rgb: [number, number, number]) => 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+      const over = (fg: [number, number, number, number], bg: [number, number, number]) =>
+        [fg[0] * fg[3] + bg[0] * (1 - fg[3]), fg[1] * fg[3] + bg[1] * (1 - fg[3]), fg[2] * fg[3] + bg[2] * (1 - fg[3])] as [number, number, number];
+      const backdrop = (el: Element) => {
+        const layers: [number, number, number, number][] = [];
+        let node: Element | null = el;
+        while (node) {
+          const bg = parse(getComputedStyle(node).backgroundColor);
+          if (bg && bg[3] > 0) layers.push(bg);
+          if (bg && bg[3] >= 1) break;
+          node = node.parentElement;
+        }
+        let acc: [number, number, number] = [255, 255, 255];
+        for (let i = layers.length - 1; i >= 0; i--) acc = over(layers[i], acc);
+        return acc;
+      };
+      return [...document.querySelectorAll("[data-testid='github-pull-state']")].map((el) => {
+        const fg = parse(getComputedStyle(el).color);
+        const bg = backdrop(el);
+        if (!fg) return 0;
+        const color = over(fg, bg);
+        const lighter = Math.max(rel(color), rel(bg));
+        const darker = Math.min(rel(color), rel(bg));
+        return (lighter + 0.05) / (darker + 0.05);
+      });
+    });
+    expect(ratios.length, theme).toBeGreaterThan(0);
+    for (const ratio of ratios) expect(ratio, theme).toBeGreaterThanOrEqual(4.5);
+  }
 }
 
 async function postIssueWebhook(page: Page, number: number, action: string) {

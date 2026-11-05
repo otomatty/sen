@@ -18,6 +18,8 @@ export interface GitHubProcessorContext {
   /** 1 回の drain() のあいだ、リポジトリのラベル一覧を覚えておく */
   labelCache: Map<string, GhLabel[]>;
   enqueueComment: (commentId: string) => Promise<void>;
+  /** 完了・キャンセルにした課題を、Sen 側の変更として突き合わせに戻す */
+  enqueueIssue: (issueId: string) => Promise<void>;
   scheduleSheets?: () => Promise<void>;
 }
 
@@ -27,9 +29,10 @@ export interface GitHubProcessorJob {
 }
 
 /**
- * 出来事の種類ごとの処理。pull は次の段階まで何もしない。
+ * 出来事の種類ごとの処理。
  * issue: Sen で変わった課題。githubIssue: GitHub で変わった Issue。
  * comment: Sen で追加されたコメント。githubComment: GitHub で追加されたコメント。
+ * pull: プルリクエストの紐づけと、ステータスの自動の移動。
  */
 export const processors: Record<"issue" | "githubIssue" | "comment" | "githubComment" | "pull", (ctx: GitHubProcessorContext, job: GitHubProcessorJob) => Promise<void>> = {
   issue: async (ctx, job) => {
@@ -49,7 +52,10 @@ export const processors: Record<"issue" | "githubIssue" | "comment" | "githubCom
     const { pullComment } = await import("./sync");
     await pullComment(ctx, job.payload as GitHubCommentEvent);
   },
-  pull: async () => {},
+  pull: async (ctx, job) => {
+    const { syncPull } = await import("./pull-sync");
+    await syncPull(ctx, job.payload as GitHubPullEvent);
+  },
 };
 
 interface QueueItem {
@@ -396,12 +402,20 @@ export class GitHubSyncRunner {
       workspaceId,
       labelCache: this.labels,
       enqueueComment: (commentId) => this.enqueueComment(commentId),
+      enqueueIssue: (issueId) => this.enqueueIssue(issueId),
       scheduleSheets: this.localSheets ? () => this.localSheets!(origin) : undefined,
     };
   }
 
   private async enqueueComment(commentId: string): Promise<void> {
     await this.putItem(`gh:dirty:comment:${commentId}`, Date.now());
+    await this.recomputeNext();
+  }
+
+  /** via: "GitHub" の書き込みは scheduleGitHubSync が無視するので、完了・キャンセルだけここから印を付ける */
+  private async enqueueIssue(issueId: string): Promise<void> {
+    if (!issueId) return;
+    await this.putItem(`gh:dirty:issue:${issueId}`, Date.now());
     await this.recomputeNext();
   }
 
@@ -495,6 +509,9 @@ export class GitHubSyncRunner {
           },
           comment: async (payload) => {
             await this.putItem(`gh:event:comment:${payload.comment.id}`, Date.now(), payload);
+          },
+          pull: async (payload) => {
+            await this.putItem(`gh:event:pull:${payload.repository.id}:${payload.pull_request.number}`, Date.now(), payload);
           },
         },
       );

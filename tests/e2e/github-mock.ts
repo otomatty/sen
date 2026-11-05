@@ -47,6 +47,20 @@ export interface MockComment {
   updated_at: string;
 }
 
+export interface MockPull {
+  id: number;
+  number: number;
+  fullName: string;
+  title: string;
+  body: string | null;
+  state: "open" | "closed";
+  draft: boolean;
+  merged: boolean;
+  user: { login: string } | null;
+  headRef: string;
+  updated_at: string;
+}
+
 export interface RecordedRequest {
   method: string;
   path: string;
@@ -58,6 +72,7 @@ export const githubMock = {
   repos: new Map<string, MockRepo>(),
   hooks: [] as MockHook[],
   issues: [] as MockIssue[],
+  pulls: [] as MockPull[],
   comments: [] as MockComment[],
   labels: new Map<string, { name: string }[]>(),
   requests: [] as RecordedRequest[],
@@ -68,6 +83,7 @@ export const githubMock = {
   nextRepoId: 1000,
   nextHookId: 1,
   nextIssueId: 1,
+  nextPullId: 1,
   nextCommentId: 1,
 };
 
@@ -76,6 +92,7 @@ export function resetGitHubMock() {
   githubMock.repos.clear();
   githubMock.hooks = [];
   githubMock.issues = [];
+  githubMock.pulls = [];
   githubMock.comments = [];
   githubMock.labels.clear();
   githubMock.requests = [];
@@ -84,6 +101,7 @@ export function resetGitHubMock() {
   githubMock.nextRepoId = 1000;
   githubMock.nextHookId = 1;
   githubMock.nextIssueId = 1;
+  githubMock.nextPullId = 1;
   githubMock.nextCommentId = 1;
   addGitHubRepo("acme/widgets");
 }
@@ -289,6 +307,18 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
+  if (rest === "pulls" && req.method === "GET") {
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const list =
+      page > 1
+        ? []
+        : githubMock.pulls
+            .filter((pull) => pull.fullName.toLowerCase() === fullName.toLowerCase())
+            .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.number - a.number));
+    sendJson(res, 200, list.map(pullJson));
+    return;
+  }
+
   if (rest === "issues/comments" && req.method === "GET") {
     const page = Number(url.searchParams.get("page") ?? "1");
     const since = url.searchParams.get("since");
@@ -338,6 +368,22 @@ function commentJson(comment: MockComment) {
     ...comment,
     html_url: `https://github.com/${comment.fullName}/issues/${comment.number}#issuecomment-${comment.id}`,
     issue_url: `https://api.github.com/repos/${comment.fullName}/issues/${comment.number}`,
+  };
+}
+
+function pullJson(pull: MockPull) {
+  return {
+    number: pull.number,
+    title: pull.title,
+    body: pull.body,
+    html_url: `https://github.com/${pull.fullName}/pull/${pull.number}`,
+    state: pull.state,
+    draft: pull.draft,
+    merged: pull.merged,
+    merged_at: pull.merged ? pull.updated_at : null,
+    user: pull.user,
+    head: { ref: pull.headRef },
+    updated_at: pull.updated_at,
   };
 }
 

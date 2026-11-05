@@ -16,13 +16,16 @@ import {
   listComments,
   listIssues,
   listLabels,
+  listPullsSince,
   updateIssue,
   type GhIssue,
   type GhIssueWrite,
   type GhLabel,
 } from "./api";
 import { githubConfig } from "./config";
-import type { GitHubCommentEvent } from "./events";
+import type { GitHubCommentEvent, GitHubPullEvent } from "./events";
+import { pullLockKeys } from "./pull-sync";
+import { toPullEvent } from "./pulls";
 import {
   BODY_CONFLICT_NOTE,
   formatOutboundComment,
@@ -276,7 +279,11 @@ export async function scanUpdates(
   env: Env,
   workspaceId: string,
   storage: { get(key: string): Promise<string | undefined>; put(key: string, value: string): Promise<void> },
-  enqueue: { issue(repoId: number, number: number): Promise<void>; comment(payload: GitHubCommentEvent): Promise<void> },
+  enqueue: {
+    issue(repoId: number, number: number): Promise<void>;
+    comment(payload: GitHubCommentEvent): Promise<void>;
+    pull(payload: GitHubPullEvent): Promise<void>;
+  },
 ): Promise<void> {
   await ensureMigrated(env.DB);
   const cfg = githubConfig(env);
@@ -316,6 +323,11 @@ export async function scanUpdates(
         sender: comment.user?.login ? { login: comment.user.login } : null,
       });
     }
+    const pulls = await listPullsSince(cfg, parts.owner, parts.repo, since);
+    for (const pull of pulls) {
+      const payload = toPullEvent({ id: repo.repo_id, full_name: repo.full_name }, pull);
+      if (payload) await enqueue.pull(payload);
+    }
     await storage.put(sinceKey(repo.repo_id), nowIso);
   }
 }
@@ -353,6 +365,8 @@ export async function lockKeysForJob(db: D1Database, workspaceId: string, key: s
       const link = await linkByNumber(db, workspaceId, repoId, number);
       if (link) keys.push(`issue:${link.issue_id}`);
     }
+  } else if (key.startsWith("gh:event:pull:")) {
+    keys.push(...(await pullLockKeys(db, workspaceId, payload)));
   }
   return keys;
 }

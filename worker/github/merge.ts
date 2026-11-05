@@ -211,6 +211,32 @@ function unite(a: Set<string>, b: Set<string>): Set<string> {
   return out;
 }
 
+const FORWARD_RANK: Record<StateType, number | null> = {
+  backlog: 0,
+  unstarted: 1,
+  started: 2,
+  completed: 3,
+  canceled: null,
+};
+
+/**
+ * 前にしか進めない。バックログ < 未着手 < 進行中（同じ種類の中は position）< 完了。
+ * 今のステータスが対象と同じか、それより後ろなら null。キャンセルの課題は動かさない。
+ * 移動先がキャンセル（この並びに無い）のときも null。
+ */
+export function advanceStateId(states: WorkflowStateRef[], currentId: string, targetId: string | null): string | null {
+  if (!targetId || targetId === currentId) return null;
+  const current = states.find((state) => state.id === currentId);
+  const target = states.find((state) => state.id === targetId);
+  if (!current || !target) return null;
+  const currentRank = FORWARD_RANK[current.type];
+  const targetRank = FORWARD_RANK[target.type];
+  if (currentRank == null || targetRank == null) return null;
+  if (targetRank > currentRank) return targetId;
+  if (targetRank < currentRank) return null;
+  return target.position > current.position ? targetId : null;
+}
+
 function sortStates(states: WorkflowStateRef[]): WorkflowStateRef[] {
   return [...states].sort((a, b) => a.position - b.position || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
