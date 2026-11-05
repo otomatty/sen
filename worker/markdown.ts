@@ -611,8 +611,9 @@ function linkPieces(el: El): Piece[] {
   const text = piecesToString(inner);
   const plain = rawText(el).replace(/\s+/g, " ").trim();
   if (!href) return inner;
-  // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
-  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return [{ text: `<${href}>`, fromText: false }];
+  // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す。
+  // 自動リンクにするかは、エスケープ前の文字と URL で決める。
+  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return [{ text: `<${escapeLinkEntities(href)}>`, fromText: false }];
   return [{ text: "[", fromText: false }, ...inner, { text: `](${linkDestination(href)})`, fromText: false }];
 }
 
@@ -750,10 +751,20 @@ function renderList(el: El): string {
   return lines.join("\n");
 }
 
+/**
+ * 文字参照に見える並びの先頭の `&` だけを `&amp;` にする。
+ * 属性を 1 回戻した `&copy;` や `&#169;` をそのまま出すと、表示側でもう一度戻って URL が変わる。
+ * `?a=1&b=2` のように参照の形でない `&` はそのまま残す。
+ */
+function escapeLinkEntities(href: string): string {
+  return href.replace(/&(#(?:[xX][0-9a-fA-F]+|\d+)|[A-Za-z][A-Za-z0-9]*);/g, "&amp;$1;");
+}
+
 /** `( )` 空白 `<` `>` を含むリンク先は `<href>` で囲む。中の `<` `>` は先にパーセントにする */
 function linkDestination(href: string): string {
-  if (!/[()\s<>]/.test(href)) return href;
-  return `<${href.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
+  const safe = escapeLinkEntities(href);
+  if (!/[()\s<>]/.test(href)) return safe;
+  return `<${safe.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
 }
 
 /** 末尾の「空白 + #」は ATX 見出しの閉じ記号になるので、その # をエスケープする */
