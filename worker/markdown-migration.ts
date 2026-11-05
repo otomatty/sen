@@ -2,7 +2,7 @@
 // テストから直接呼ぶため、このファイルは ./markdown 以外の Sen のモジュールを import しない。
 // db.prepare / bind / first / all / run と db.batch だけを使う。
 
-import { htmlToMarkdown } from "./markdown";
+import { htmlToMarkdownChecked } from "./markdown";
 
 const PENDING_LIMIT = 50;
 const SNAPSHOT = "0009_markdown_bodies:snapshot";
@@ -65,7 +65,7 @@ async function convertPending(db: D1Database): Promise<void> {
       .bind(PENDING_LIMIT)
       .all<PendingRow>();
     const rows = listed.results ?? [];
-    if (!rows.length) return;
+    if (!rows.length) break;
     // 1 行ずつ first() すると、batch の前に D1 のクエリ上限（Free は 50）を超える。
     // 表ごとに IN で読むので、1 ページは一覧・表の読み取り・batch で最大 5 回。
     const idsByTable = new Map<string, string[]>();
@@ -82,6 +82,7 @@ async function convertPending(db: D1Database): Promise<void> {
       foundByTable.set(table, byId);
     }
     const statements: D1PreparedStatement[] = [];
+    const stripped: string[] = [];
     for (const row of rows) {
       const table = row.table_name;
       const id = row.row_id;
@@ -91,7 +92,9 @@ async function convertPending(db: D1Database): Promise<void> {
         continue;
       }
       // updated_at は変えない。人の編集ではないので、並び順やスプレッドシートの日付に影響させない。
-      const markdown = htmlToMarkdown(byId.get(id) ?? "");
+      const converted = htmlToMarkdownChecked(byId.get(id) ?? "");
+      if (converted.fallback) stripped.push(`${table} ${id}`);
+      const markdown = converted.markdown;
       statements.push(
         db.prepare(updateSql(table)).bind(markdown, id, table, id),
         db.prepare("DELETE FROM markdown_pending WHERE table_name = ? AND row_id = ?").bind(table, id),
@@ -99,6 +102,9 @@ async function convertPending(db: D1Database): Promise<void> {
     }
     // 既存の batch() ヘルパーは 80 文で分割してしまう。50 行分は 1 つのトランザクションで流す。
     await db.batch(statements);
+    if (stripped.length) {
+      console.warn(`移行で書式を外した本文: ${stripped.length}件 ${stripped.join(" ")}`);
+    }
   }
 }
 

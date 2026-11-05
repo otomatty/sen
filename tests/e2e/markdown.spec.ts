@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { markdownToHtml, markdownToText } from "../../shared/markdown";
-import { htmlToMarkdown } from "../../worker/markdown";
+import { htmlToMarkdown, htmlToMarkdownChecked } from "../../worker/markdown";
 
 test("見出し・装飾・リスト・リンクを HTML にする", () => {
   expect(markdownToHtml("# 見出し1\n## 見出し2\n### 見出し3")).toBe("<h1>見出し1</h1>\n<h2>見出し2</h2>\n<h3>見出し3</h3>");
@@ -341,5 +341,37 @@ test("文字だったものは、変換後も同じ文字のまま残る", () =>
     expect(tagCount(back, /<h[1-6]\b/gi), html).toBe(tagCount(html, /<h[1-6]\b/gi));
     expect(tagCount(back, /<(?:ul|ol)\b/gi), html).toBe(tagCount(html, /<(?:ul|ol)\b/gi));
     expect(tagCount(back, /<blockquote\b/gi), html).toBe(tagCount(html, /<blockquote\b/gi));
+    const checked = htmlToMarkdownChecked(html);
+    expect(checked.fallback, html).toBe(false);
+    expect(checked.markdown, html).toBe(md);
   }
+});
+
+test("隣り合う同じ書式は1つにまとまり、表示の文字と書式が残る", () => {
+  const cases = [
+    { html: "<p><strong>a</strong><strong>b</strong></p>", tag: "<strong>" },
+    { html: "<p><em>a</em><em>b</em></p>", tag: "<em>" },
+    { html: "<p><code>a</code><code>b</code></p>", tag: "<code>" },
+    { html: "<p><s>a</s><del>b</del></p>", tag: "<s>" },
+    { html: "<p><strong>a</strong><b>b</b></p>", tag: "<strong>" },
+  ];
+  for (const { html, tag } of cases) {
+    const back = markdownToHtml(htmlToMarkdown(html));
+    expect(htmlVisibleText(back), html).toBe("ab");
+    expect(back, html).toContain(tag);
+  }
+  const mixed = markdownToHtml(htmlToMarkdown("<p><em>a</em><strong>b</strong></p>"));
+  expect(htmlVisibleText(mixed)).toBe("ab");
+  expect(mixed).toContain("<em>");
+  expect(mixed).toContain("<strong>");
+});
+
+test("直らない行内の入れ子は書式を外し、見える文字だけ残す", () => {
+  const html = "<p><strong>a<code>c</code></strong>です</p>";
+  const checked = htmlToMarkdownChecked(html);
+  expect(checked.fallback).toBe(true);
+  expect(checked.markdown).not.toContain("*");
+  const back = markdownToHtml(checked.markdown);
+  expect(htmlVisibleText(back)).toBe("acです");
+  expect(back).not.toContain("*");
 });
