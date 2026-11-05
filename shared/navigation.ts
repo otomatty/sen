@@ -567,6 +567,14 @@ export const COMMANDS = [
     screen: "help",
   },
   {
+    id: "open-assistant",
+    label: "AI アシスタントを開く",
+    group: "ヘルプ",
+    description: "Sen の使い方を質問する AI アシスタントを開きます。課題などの内容は送りません。",
+    keywords: "ai assistant chat 質問",
+    availability: "AI アシスタントが使えるとき",
+  },
+  {
     id: "shortcuts",
     label: "キーボードショートカット一覧",
     group: "ヘルプ",

@@ -20,11 +20,11 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
   const [rate, setRate] = useState(1);
   // ブラウザが音声付きの自動再生を拒否したときだけ出す
   const [needsUnmute, setNeedsUnmute] = useState(false);
-  const close = () => useUI.setState({ videoId: null });
+  const close = () => useUI.setState({ videoId: null, videoStart: null });
   const idx = list.findIndex((x) => x.id === t.id);
   const goto = (d: number) => {
     const n = list[idx + d];
-    if (n) useUI.setState({ videoId: n.id });
+    if (n) useUI.setState({ videoId: n.id, videoStart: null });
   };
   useEffect(() => {
     if (ref.current) ref.current.playbackRate = rate;
@@ -33,21 +33,61 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
     const video = ref.current;
     if (!video) return;
     let alive = true;
+    let onMeta: (() => void) | null = null;
+    const clearMeta = () => {
+      if (!onMeta) return;
+      video.removeEventListener("loadedmetadata", onMeta);
+      onMeta = null;
+    };
     // ナレーション付きは音声ありで再生する。拒否されたら無音で再生し直し、ボタンで解除できるようにする。
-    if (t.narration) {
-      video.muted = false;
-      video.play().catch(() => {
-        if (!alive) return;
+    const startPlayback = () => {
+      if (!alive) return;
+      if (t.narration) {
+        video.muted = false;
+        video.play().catch(() => {
+          if (!alive) return;
+          video.muted = true;
+          void video.play().catch(() => {});
+          setNeedsUnmute(true);
+        });
+      } else {
         video.muted = true;
         void video.play().catch(() => {});
-        setNeedsUnmute(true);
-      });
-    } else {
-      video.muted = true;
-      void video.play().catch(() => {});
-    }
+      }
+    };
+    // videoStart があるときだけ、メタデータのあと（読み込み済みならすぐ）その秒数へ移してから再生する。
+    const arm = (start: number | null, fresh: boolean) => {
+      clearMeta();
+      const go = () => {
+        clearMeta();
+        if (!alive || useUI.getState().videoId !== t.id) return;
+        if (start != null) {
+          try {
+            video.currentTime = start;
+          } catch {
+            // まだシークできない
+          }
+          if (useUI.getState().videoStart === start) useUI.setState({ videoStart: null });
+        }
+        if (fresh) startPlayback();
+        else void video.play().catch(() => {});
+      };
+      if (start != null && video.readyState < HTMLMediaElement.HAVE_METADATA) {
+        onMeta = go;
+        video.addEventListener("loadedmetadata", onMeta);
+        return;
+      }
+      go();
+    };
+    arm(useUI.getState().videoStart, true);
+    const unsub = useUI.subscribe((state, prev) => {
+      if (!alive || state.videoId !== t.id || state.videoStart == null || state.videoStart === prev.videoStart) return;
+      arm(state.videoStart, false);
+    });
     return () => {
       alive = false;
+      unsub();
+      clearMeta();
     };
   }, [t.narration]);
   const unmute = () => {
@@ -131,7 +171,7 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
             {list
               .filter((x) => x.id !== t.id)
               .map((x) => (
-                <button key={x.id} className="other-video" onClick={() => useUI.setState({ videoId: x.id })}>
+                <button key={x.id} className="other-video" onClick={() => useUI.setState({ videoId: x.id, videoStart: null })}>
                   <img src={tutorialAsset(x.poster)} alt="" loading="lazy" />
                   <span>
                     <b>{x.title}</b>

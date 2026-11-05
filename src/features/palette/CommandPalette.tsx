@@ -26,6 +26,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Tag,
   Trash2,
@@ -50,6 +51,7 @@ import { applyUpdate, installApp, usePWA } from "../../app/pwa";
 import { openRelationPicker, RELATION_ACTIONS, RELATION_ICON } from "../issues/Relations";
 import type { Issue, Team } from "../../../shared/types";
 import { COMMANDS, presentCommand, resolveScreenPath, type CommandDef, type CommandId } from "../../../shared/navigation";
+import { openAssistant, useAssistant } from "../../store/assistant";
 
 interface Command {
   id: string;
@@ -58,6 +60,8 @@ interface Command {
   icon?: ReactNode;
   combo?: string;
   keywords?: string;
+  /** テスト用。ask-ai の項目だけ付ける */
+  command?: string;
   perform: () => void;
 }
 
@@ -156,6 +160,7 @@ const COMMAND_RUNTIME = {
   "go-search": { icon: () => <Search size={15} />, perform: (ctx) => goTo("search", ctx) },
   "go-settings": { icon: () => <Settings size={15} />, perform: (ctx) => goTo("settings", ctx) },
   "go-help": { icon: () => <PlayCircle size={15} />, perform: (ctx) => goTo("help", ctx) },
+  "open-assistant": { icon: () => <Sparkles size={15} />, perform: () => openAssistant() },
   shortcuts: { icon: () => <Keyboard size={15} />, perform: () => useUI.setState({ shortcutsOpen: true }) },
   "toggle-layout": {
     icon: () => <Columns3 size={15} />,
@@ -185,6 +190,8 @@ function Palette() {
   const meId = useData((s) => s.meId);
   const canInstall = usePWA((s) => !!s.installPrompt);
   const updateReady = usePWA((s) => s.updateReady);
+  const assistantEnabled = useAssistant((s) => s.status?.enabled === true);
+  const assistantOn = !(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) && assistantEnabled;
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -203,6 +210,7 @@ function Palette() {
       if (def.context === "single-issue" && targets.length !== 1) return false;
       if (raw.id === "install-app" && !canInstall) return false;
       if (raw.id === "update-app" && !updateReady) return false;
+      if (raw.id === "open-assistant" && !assistantOn) return false;
       return true;
     };
     const push = (raw: (typeof COMMANDS)[number], team?: Team) => {
@@ -257,7 +265,7 @@ function Palette() {
       i++;
     }
     return list;
-  }, [targets, issues, teamsMap, teams, meId, ws, canInstall, updateReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [targets, issues, teamsMap, teams, meId, ws, canInstall, updateReady, assistantOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => {
     const cmds = commands.filter((c) => fuzzyMatch(`${c.label} ${c.keywords ?? ""} ${c.group}`, q));
@@ -288,8 +296,19 @@ function Palette() {
         keywords: identifier(i, teamsMap),
         perform: () => go(`/issue/${identifier(i, teamsMap)}`),
       }));
-    return [...cmds, ...issueHits];
-  }, [commands, q, issues, teamsMap]); // eslint-disable-line react-hooks/exhaustive-deps
+    const list = [...cmds, ...issueHits];
+    if (q.trim() && assistantOn) {
+      list.push({
+        id: "ask-ai",
+        label: `AI に聞く：「${q}」`,
+        group: "ヘルプ",
+        icon: <Sparkles size={15} />,
+        command: "ask-ai",
+        perform: () => openAssistant(q),
+      });
+    }
+    return list;
+  }, [commands, q, issues, teamsMap, assistantOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setActive(0), [q]);
   useEffect(() => {
@@ -352,6 +371,7 @@ function Palette() {
                 onMouseMove={() => setActive(i)}
                 onClick={() => run(c)}
                 data-testid="palette-item"
+                data-command={c.command}
               >
                 <span className="palette-icon">{c.icon}</span>
                 <span className="palette-label">{c.label}</span>

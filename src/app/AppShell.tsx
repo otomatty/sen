@@ -17,6 +17,8 @@ import { ShortcutsHelp } from "../features/help/ShortcutsHelp";
 import { VideoModal } from "../features/help/VideoModal";
 import { WelcomeModal } from "../features/help/WelcomeModal";
 import { Sidebar } from "./Sidebar";
+import { AssistantPanel } from "../features/assistant/AssistantPanel";
+import { loadAssistantStatus } from "../store/assistant";
 import { preloadEditor } from "../components/Editor";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useCurrentTeamId } from "./hooks";
@@ -161,6 +163,12 @@ export function AppShell() {
   }, [ws]);
 
   useEffect(() => {
+    if (typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) return;
+    if (!ws) return;
+    void loadAssistantStatus(ws);
+  }, [ws]);
+
+  useEffect(() => {
     const off1 = engine.onError((msg) => toast(msg, { kind: "error" }));
     const off2 = engine.onUnauthorized(() => {
       useSession.setState({ status: "anon" });
@@ -243,6 +251,7 @@ export function AppShell() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      {!(typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__) && <AssistantPanel />}
       <GlobalShortcuts />
       <SelectionBar />
       <PickerHost />

@@ -54,6 +54,8 @@ interface UIState {
   shortcutsOpen: boolean;
   picker: PickerRequest | null;
   videoId: string | null;
+  /** 使い方動画を、この秒数から再生する。再生を始めたら null に戻す */
+  videoStart: number | null;
   focusedIssueId: string | null;
   selectedIssueIds: string[];
   listIds: string[];
@@ -75,6 +77,7 @@ export const useUI = create<UIState>(() => ({
   shortcutsOpen: false,
   picker: null,
   videoId: null,
+  videoStart: null,
   focusedIssueId: null,
   selectedIssueIds: [],
   listIds: [],
