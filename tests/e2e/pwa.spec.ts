@@ -175,6 +175,12 @@ const settled = (page: Page) =>
     const reg = await navigator.serviceWorker.getRegistration();
     return !reg?.installing && !reg?.waiting && reg?.active?.state === "activated";
   });
+/** インストールが終わり、待機中の版がある */
+const installedAndWaiting = (page: Page) =>
+  page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return !reg?.installing && !!reg?.waiting;
+  });
 
 /** サービスワーカーが有効になった状態で、課題の一覧を開いておく */
 async function openInstalledApp(page: Page) {
@@ -247,6 +253,9 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => hasWaiting(page)).toBe(true);
   await publishNextVersion(page, { version: "c", drop: "js" });
   await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
+  // sen-c のキャッシュはインストールの始めに作られるので、この時点ではまだ b の案内が出ている。
+  // そのまま押すと b に切り替えを頼んでしまうため、c が待機中になるまで待つ
+  await expect.poll(() => installedAndWaiting(page)).toBe(true);
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
   const reloaded = page.waitForEvent("load");

@@ -17,6 +17,10 @@ const DEMO = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 
 const SESSION_CACHE = "sen:session";
 
+function writeSessionCache(user: { id: string; name: string }, workspaces: WorkspaceSummary[]) {
+  writeLocal(SESSION_CACHE, { user: { id: user.id, name: user.name }, workspaces });
+}
+
 export async function loadSession() {
   try {
     const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me");
@@ -25,7 +29,7 @@ export async function loadSession() {
       useSession.setState({ status: "anon", user: null, workspaces: [] });
       return null;
     }
-    writeLocal(SESSION_CACHE, { user: { id: res.user.id, name: res.user.name }, workspaces: res.workspaces });
+    writeSessionCache(res.user, res.workspaces);
     useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces });
     return res;
   } catch (e) {
@@ -41,6 +45,32 @@ export async function loadSession() {
     }
     throw e;
   }
+}
+
+let workspacesRefresh: Promise<void> | null = null;
+
+// 参加一覧はワークスペースごとのスナップショットに入れず、ユーザー単位のこの一覧（/api/me）だけを正とする。
+// メニューを開いたときに取り直し、別のタブや端末であとから参加したワークスペースも反映する。
+export async function refreshWorkspaces(): Promise<void> {
+  if (workspacesRefresh) return workspacesRefresh;
+  workspacesRefresh = (async () => {
+    try {
+      // 応答が無いまま待ち続けると、使い回す Promise が終わらず次回も取り直せない。
+      const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me", {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.user) return;
+      const cur = useSession.getState();
+      if (cur.status !== "authed" || cur.user?.id !== res.user.id) return;
+      writeSessionCache(res.user, res.workspaces);
+      useSession.setState({ workspaces: res.workspaces });
+    } catch {
+      // 通信エラー（オフライン含む）のときは今の一覧をそのまま使う
+    } finally {
+      workspacesRefresh = null;
+    }
+  })();
+  return workspacesRefresh;
 }
 
 function rememberToken(token?: string) {

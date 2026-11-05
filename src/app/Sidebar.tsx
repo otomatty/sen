@@ -29,7 +29,7 @@ import { cx } from "../lib/utils";
 import { Kbd, Menu, Tooltip } from "../components/ui";
 import { CycleIcon, ProjectIcon, TeamIcon } from "../components/icons";
 import { useCurrentTeamId, useWsPath } from "./hooks";
-import { logout } from "./session";
+import { logout, refreshWorkspaces, useSession } from "./session";
 import { applyUpdate, installApp, usePWA } from "./pwa";
 import type { Me } from "../../shared/types";
 
@@ -37,7 +37,7 @@ export function Sidebar() {
   const p = useWsPath();
   const navigate = useNavigate();
   const workspace = useData((s) => s.workspace);
-  const workspaces = useData((s) => s.workspaces);
+  const workspaces = useSession((s) => s.workspaces);
   const me = useData((s) => (s.meId ? (s.users[s.meId] as Me) : null));
   const teams = useTeams();
   const projects = useProjects();
@@ -69,7 +69,15 @@ export function Sidebar() {
           className="ws-switcher"
           data-popover-anchor
           data-testid="workspace-menu"
-          onClick={(e) => setMenu(menu ? null : e.currentTarget.getBoundingClientRect())}
+          onClick={(e) => {
+            if (menu) {
+              setMenu(null);
+              return;
+            }
+            // 開いたときに参加一覧を取り直す（別の場所であとから参加した分も出す）
+            void refreshWorkspaces();
+            setMenu(e.currentTarget.getBoundingClientRect());
+          }}
         >
           <span className="ws-avatar">{workspace?.name.slice(0, 1)}</span>
           <span className="ws-name">{workspace?.name}</span>
