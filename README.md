@@ -435,6 +435,15 @@ Google ログインは、ダミーの認証情報で「Google の画面へ移る
 
 Windows / Linux では `⌘` の代わりに `Ctrl` を使います。
 
+## 利用者向けガイド
+
+利用者向けの説明は `docs/guide/` にあります。AI アシスタントの知識は、このガイドと、画面・コマンドの一覧から、ビルド時に作られます。画面や操作を変えたら、同じ変更でガイドも直してください。
+
+```bash
+bun run assistant:check      # ガイドと画面の一覧がずれていないか確認する
+bun run assistant:knowledge  # 確認に加えて、作った知識を .tmp/assistant-knowledge.md に書き出す
+```
+
 ## ディレクトリ構成
 
 ```

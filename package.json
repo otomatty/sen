@@ -11,6 +11,8 @@
     "test:e2e": "playwright test",
     "tutorials": "tsx tutorials/run.ts",
     "tutorials:check": "tsx tutorials/check.ts",
+    "assistant:check": "tsx scripts/assistant-check.ts",
+    "assistant:knowledge": "tsx scripts/assistant-check.ts --write",
     "cf:setup": "node scripts/cf-setup.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "diagrams": "node scripts/render-diagrams.mjs",

@@ -16,7 +16,7 @@ export const SCREENS = [
     id: "inbox",
     title: "受信トレイ",
     description:
-      "自分宛ての通知を確認する画面です。担当になったとき、メンションされたとき、購読中の課題にコメントが付いたときやステータスが変わったときに届きます。",
+      "自分宛ての通知を、課題ごとにまとめて確認する画面です。課題の担当者になったとき、コメントでメンションされたとき、購読中の課題にコメントがついたとき、購読中の課題のステータスが変わったときに届きます。",
     path: "/inbox",
     where: "サイドバーの「受信トレイ」",
     combo: "g i",
@@ -54,7 +54,8 @@ export const SCREENS = [
   {
     id: "team-active",
     title: "チームのアクティブな課題",
-    description: "チームの未着手と進行中の課題だけを一覧する画面です。",
+    description:
+      "チームの「アクティブ」タブです。種類が未着手と進行中の課題を一覧します。レビュー中は進行中の種類なので、ここにも入ります。",
     path: "/team/:team/active",
     where: "チームの課題画面の「アクティブ」タブ",
     combo: "g a",
@@ -70,7 +71,8 @@ export const SCREENS = [
   {
     id: "team-cycles",
     title: "サイクル",
-    description: "チームのサイクル（期間ごとの計画）を一覧する画面です。進行中、これから、過去のサイクルと、それぞれの進捗を確認できます。",
+    description:
+      "チームのサイクル（期間ごとの計画）を一覧する画面です。現在のサイクル、今後のサイクル、過去のサイクルと、それぞれの進み具合を確認できます。",
     path: "/team/:team/cycles",
     where: "サイドバーでチームを開き、「サイクル」を選ぶ",
     combo: "g c",
@@ -78,14 +80,16 @@ export const SCREENS = [
   {
     id: "team-projects",
     title: "チームのプロジェクト",
-    description: "そのチームに紐づくプロジェクトを、進行中・計画中・完了に分けて一覧する画面です。",
+    description:
+      "そのチームに紐づくプロジェクトを、進行中・計画中・完了のタブに分けて一覧する画面です。進行中には一時停止、計画中にはバックログ、完了にはキャンセルも入ります。",
     path: "/team/:team/projects",
     where: "サイドバーでチームを開き、「プロジェクト」を選ぶ",
   },
   {
     id: "projects",
     title: "プロジェクト",
-    description: "ワークスペースのプロジェクトを、進行中・計画中・完了に分けて一覧する画面です。",
+    description:
+      "ワークスペースのプロジェクトを、進行中・計画中・完了のタブに分けて一覧する画面です。進行中には一時停止、計画中にはバックログ、完了にはキャンセルも入ります。",
     path: "/projects",
     where: "サイドバーの「プロジェクト」",
     combo: "g p",
@@ -93,7 +97,7 @@ export const SCREENS = [
   {
     id: "progress",
     title: "進捗",
-    description: "プロジェクトの活動を一覧し、期限や進み具合を確認する画面です。",
+    description: "進捗の「活動一覧」です。プロジェクトごとの完了率、直近期限、活動状況を確認します。数え方はスプレッドシート連携と同じです。",
     path: "/progress",
     where: "サイドバーの「進捗」",
     combo: "g r",
@@ -101,14 +105,14 @@ export const SCREENS = [
   {
     id: "progress-wbs",
     title: "WBS",
-    description: "活動の中の作業を、WBS（作業の階層）で見る画面です。",
+    description: "進捗の「WBS」タブです。活動ごとの作業を、担当・期限・状態つきで見ます。",
     path: "/progress/wbs",
     where: "進捗画面の「WBS」タブ",
   },
   {
     id: "progress-timeline",
     title: "タイムライン",
-    description: "活動と作業を、週・月・四半期の時間軸で見る画面です。",
+    description: "進捗の「タイムライン」タブです。活動と作業を、週・月・四半期の時間軸で見ます。",
     path: "/progress/timeline",
     where: "進捗画面の「タイムライン」タブ",
   },
@@ -123,7 +127,8 @@ export const SCREENS = [
   {
     id: "settings",
     title: "設定",
-    description: "設定の入り口です。プロフィール、ワークスペース、メンバー、ラベル、チーム、削除した課題をここから開きます。開いた直後は「全般」が表示されます。",
+    description:
+      "設定の入り口です。開いた直後は「全般」が表示されます。プロフィールと表示、AI 連携、メンバー、ラベル、チーム、削除した課題、各チームの設定をここから開きます。",
     path: "/settings",
     where: "サイドバー上部のワークスペース名メニューの「設定」",
     combo: "g s",
@@ -131,28 +136,30 @@ export const SCREENS = [
   {
     id: "settings-profile",
     title: "プロフィールと表示",
-    description: "表示名、アバターの色、テーマを変更する画面です。メールアドレスの確認と、アプリのインストールもここからできます。",
+    description:
+      "名前、アバターの色、テーマ（システム・ライト・ダーク）を変える画面です。メールアドレスは表示されます。アプリのインストールと、新しいバージョンへの更新もここからできます。",
     path: "/settings/profile",
     where: "設定の「プロフィールと表示」",
   },
   {
     id: "settings-ai",
     title: "AI 連携",
-    description: "Claude Code や Cursor などから Sen を操作するための接続トークンを発行する画面です。デモ版ではメニューに出ません。",
+    description: "Claude Code や Cursor などから Sen を操作するための接続トークンを発行する画面です。できることと有効期限を選べます。",
     path: "/settings/ai",
     where: "設定の「AI 連携」",
   },
   {
     id: "settings-workspace",
     title: "全般",
-    description: "ワークスペースの名前と URL、招待リンク、スプレッドシート連携を変更する画面です。",
+    description:
+      "ワークスペースの名前と URL を見る画面です。URL は表示されるだけで、変更できません。名前を変えられるのは管理者だけです。招待リンクと、設定されていればスプレッドシート連携の区画も、この画面にあります。",
     path: "/settings/workspace",
     where: "設定の「全般」",
   },
   {
     id: "settings-members",
     title: "メンバー",
-    description: "メンバーの一覧と権限を管理し、招待リンクを共有する画面です。",
+    description: "メンバーの一覧を見る画面です。管理者は、権限の変更とメンバーを外すことができます。招待リンクの共有もここからできます。",
     path: "/settings/members",
     where: "設定の「メンバー」。ワークスペース名メニューの「メンバーを招待」からも開けます",
   },
@@ -180,7 +187,7 @@ export const SCREENS = [
   {
     id: "settings-team",
     title: "チームの設定",
-    description: "チームの名前と識別子、サイクルのオンオフ、課題のステータス（ワークフロー）を変更する画面です。",
+    description: "チームの名前、識別子、色を変える画面です。サイクルを使うかどうかとその期間、ワークフロー（ステータス）もここで変えます。",
     path: "/settings/team/:teamId",
     where: "設定の「チームの設定」からチームを選ぶ",
   },
@@ -416,7 +423,7 @@ export const COMMANDS = [
     id: "copy-id",
     label: "ID をコピー",
     group: "課題",
-    description: "課題の ID（ENG-1 のような識別子）をコピーします。",
+    description: "課題の ID（例：DEF-12）をコピーします。",
     combo: "mod+.",
     context: "single-issue",
   },
@@ -571,7 +578,7 @@ export const COMMANDS = [
     id: "toggle-layout",
     label: "リスト / ボード表示を切り替え",
     group: "表示",
-    description: "課題一覧のリスト表示とボード表示を切り替えます。",
+    description: "課題の一覧を開いているとき、リスト表示とボード表示を切り替えます。",
     combo: "mod+b",
     keywords: "board list kanban layout",
   },
