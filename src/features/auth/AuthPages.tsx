@@ -267,7 +267,7 @@ export function NewWorkspacePage() {
       subtitle={
         firstTime
           ? "ワークスペースと、使い方を学べるサンプル課題が用意されます。チームに参加する場合は、招待リンクを開いてください。"
-          : "チームや組織ごとにワークスペースを分けられます。"
+          : "チームや組織ごとにワークスペースを分けられます。課題の入っていないワークスペースが作られます。"
       }
     >
       <form onSubmit={submit} className="auth-form" data-testid="new-workspace-form">

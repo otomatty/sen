@@ -55,7 +55,7 @@ test("インストールに必要なマニフェストとアイコンがそろ�
 
 test("遅れて読み込む画面も保存されるので、初めて開く画面もオフラインで開ける", async ({ page, context }) => {
   const { ws } = await signupViaUi(page);
-  await page.goto(`/${ws}/team/ENG/all`);
+  await page.goto(`/${ws}/team/DEF/all`);
   await expect(page.getByTestId("issue-row").first()).toBeVisible();
 
   // エディタ・ボードの JS とフォントも、インストールの時点でまとめて保存される
@@ -73,7 +73,7 @@ test("遅れて読み込む画面も保存されるので、初めて開く画�
 
   await context.setOffline(true);
   // まだ開いていない画面へ、URL を直接開いて移動する
-  await page.goto(`/${ws}/issue/ENG-2`);
+  await page.goto(`/${ws}/issue/DEF-2`);
   await expect(page.getByTestId("issue-detail")).toBeVisible();
   await expect(page.getByTestId("issue-description")).toBeVisible();
   await expect(page.getByTestId("sync-status")).toContainText("オフライン", { timeout: 20_000 });
@@ -313,7 +313,7 @@ test("以前のサービスワーカー（sen-shell-v1）の保存内容は、�
 
 test("送れない変更があるときは更新せず、操作できる状態に戻す", async ({ page, context }) => {
   const ws = await openInstalledApp(page);
-  await page.goto(`/${ws}/issue/ENG-2`);
+  await page.goto(`/${ws}/issue/DEF-2`);
   await expect(page.getByTestId("issue-detail")).toBeVisible();
   await waitForSynced(page);
   await publishNextVersion(page, { version: "next", drop: "js" });

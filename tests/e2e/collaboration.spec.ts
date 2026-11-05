@@ -17,11 +17,11 @@ test("招待リンクで参加したメンバーに、変更がリアルタイ�
   await expect(p2.getByTestId("app")).toBeVisible();
   await dismissWelcome(p2);
   await expect(p2).toHaveURL(new RegExp(`/${ws}/`));
-  await p2.goto(`/${ws}/team/ENG/all`);
+  await p2.goto(`/${ws}/team/DEF/all`);
   await expect(p2.getByTestId("sync-status")).toHaveAttribute("data-realtime", "on", { timeout: 15_000 });
 
   // 1人目が課題のタイトルを変えると、2人目の画面に反映される
-  await page.goto(`/${ws}/issue/ENG-1`);
+  await page.goto(`/${ws}/issue/DEF-1`);
   const title = page.getByTestId("issue-title");
   await title.fill("リアルタイム同期のテスト");
   await title.press("Enter");
@@ -37,7 +37,7 @@ test("招待リンクで参加したメンバーに、変更がリアルタイ�
 
 test("オフラインの間の変更は保持され、復帰後に送信される", async ({ page, context }) => {
   const { ws } = await signupViaUi(page);
-  await page.goto(`/${ws}/issue/ENG-2`);
+  await page.goto(`/${ws}/issue/DEF-2`);
   await expect(page.getByTestId("issue-detail")).toBeVisible();
   await waitForSynced(page);
   await context.setOffline(true);
@@ -53,7 +53,7 @@ test("オフラインの間の変更は保持され、復帰後に送信され�
 
 test("一度開いた後は、オフラインでも起動して手元のデータを表示できる", async ({ page, context }) => {
   const { ws } = await signupViaUi(page);
-  await page.goto(`/${ws}/team/ENG/all`);
+  await page.goto(`/${ws}/team/DEF/all`);
   await expect(page.getByTestId("issue-row")).toHaveCount(9);
   // サービスワーカーがアプリ本体を保存し、データのキャッシュが書き込まれるのを待つ
   await page.evaluate(async () => {
