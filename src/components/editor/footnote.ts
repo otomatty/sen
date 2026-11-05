@@ -2,6 +2,7 @@ import { InputRule, Node, type JSONContent } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { matchFootnoteDefinition, matchFootnoteReference } from "../../../shared/markdown";
+import { readBlockTokens } from "./tokens";
 
 function labelOf(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -125,7 +126,7 @@ export const FootnoteDefinition = Node.create({
         type: "footnoteDefinition",
         raw: match.raw,
         label: match.label,
-        tokens: lexer.blockTokens(match.body),
+        tokens: readBlockTokens(lexer, match.body),
       };
     },
   },
