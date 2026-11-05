@@ -228,7 +228,16 @@ export class Narrator {
 
   private cachePath(speech: string): string {
     const key = createHash("sha256")
-      .update(JSON.stringify({ v: 1, model: this.model, voice: this.voice, style: this.style, speech }))
+      .update(
+        JSON.stringify({
+          v: 2,
+          baseUrl: this.baseUrl,
+          model: this.model,
+          voice: this.voice,
+          style: this.style,
+          speech,
+        }),
+      )
       .digest("hex");
     return path.join(this.cacheDir, `${key}.pcm`);
   }
