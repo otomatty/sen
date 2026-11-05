@@ -12,12 +12,27 @@ import type { ProgressModel } from "./useProgress";
 import { ActivityBadge, CompletionRate, NextDue, isTaskOverdue, slashDate } from "./parts";
 
 type AssigneeFilter = "all" | "me" | "none" | string;
+/** 工程名そのもの（「all」「none」など）と、「すべて」「工程なし」を区別する */
+type ProcessFilter = { kind: "all" } | { kind: "none" } | { kind: "process"; name: string };
+
+/** メニューの選択肢 ID。工程名の前に付け、予約値とぶつからないようにする */
+const PROCESS_OPTION_PREFIX = "process:";
+
+function processOptionId(name: string): string {
+  return `${PROCESS_OPTION_PREFIX}${name}`;
+}
+
+function processFilterFromOption(id: string): ProcessFilter {
+  if (id.startsWith(PROCESS_OPTION_PREFIX)) return { kind: "process", name: id.slice(PROCESS_OPTION_PREFIX.length) };
+  if (id === "none") return { kind: "none" };
+  return { kind: "all" };
+}
 
 export function WbsTab({ model }: { model: ProgressModel }) {
   const { activities, today, members, meId, assigneeIdByIssue } = model;
   const wsKey = useData((s) => s.workspace?.urlKey ?? "");
   const [assignee, setAssignee] = useState<AssigneeFilter>("all");
-  const [process, setProcess] = useState("all");
+  const [process, setProcess] = useState<ProcessFilter>({ kind: "all" });
   const [showDone, setShowDone] = useState(true);
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [collapsed, setCollapsed] = useCollapsed(wsKey);
@@ -29,7 +44,7 @@ export function WbsTab({ model }: { model: ProgressModel }) {
 
   const assigneeLabel =
     assignee === "all" ? "すべて" : assignee === "me" ? "自分" : assignee === "none" ? "未割り当て" : (members.find((member) => member.id === assignee)?.name ?? "すべて");
-  const processLabel = process === "all" ? "すべて" : process === "none" ? "工程なし" : process;
+  const processLabel = process.kind === "all" ? "すべて" : process.kind === "none" ? "工程なし" : process.name;
   const toggle = (projectId: string) => {
     const next = new Set(collapsed);
     if (next.has(projectId)) next.delete(projectId);
@@ -57,8 +72,12 @@ export function WbsTab({ model }: { model: ProgressModel }) {
           testId="wbs-filter-process"
           label="工程"
           value={processLabel}
-          options={[{ id: "all", label: "すべて" }, { id: "none", label: "工程なし" }, ...processes.map((name) => ({ id: name, label: name }))]}
-          onChange={setProcess}
+          options={[
+            { id: "all", label: "すべて" },
+            { id: "none", label: "工程なし" },
+            ...processes.map((name) => ({ id: processOptionId(name), label: name })),
+          ]}
+          onChange={(id) => setProcess(processFilterFromOption(id))}
         />
         <span className="wbs-toggle">
           <Switch id="wbs-done-switch" checked={showDone} onChange={setShowDone} label="完了も表示" testId="wbs-toggle-done" />
@@ -109,7 +128,7 @@ function matches(
   task: ProgressTask,
   opts: {
     assignee: AssigneeFilter;
-    process: string;
+    process: ProcessFilter;
     showDone: boolean;
     overdueOnly: boolean;
     today: string;
@@ -119,9 +138,9 @@ function matches(
 ): boolean {
   if (!opts.showDone && task.stateType === "completed") return false;
   if (opts.overdueOnly && !isTaskOverdue(task, opts.today)) return false;
-  if (opts.process === "none") {
+  if (opts.process.kind === "none") {
     if (task.processes.length > 0) return false;
-  } else if (opts.process !== "all" && !task.processes.includes(opts.process)) return false;
+  } else if (opts.process.kind === "process" && !task.processes.includes(opts.process.name)) return false;
   const assigneeId = opts.assigneeIdByIssue.get(task.id) ?? null;
   if (opts.assignee === "none") return assigneeId == null;
   if (opts.assignee === "me") return assigneeId != null && assigneeId === opts.meId;
