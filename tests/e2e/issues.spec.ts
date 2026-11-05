@@ -62,6 +62,40 @@ test.describe("課題の操作", () => {
     await expect(title).toHaveValue("");
   });
 
+  test("下書きを保存できなくなっても、閉じて開き直すと最新の内容が出る", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    const title = page.getByTestId("create-title");
+    await title.fill("最初の下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key.startsWith("sen:issue-draft:")) {
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        return original.call(this, key, value);
+      };
+    });
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("最初の下書き");
+    await title.fill("書き直した下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("書き直した下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+  });
+
   test("キーボードでフォーカスしてステータスと優先度を変更できる", async ({ page }) => {
     await row(page, "ENG-7").hover();
     await page.keyboard.press("s");

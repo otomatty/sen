@@ -1,4 +1,4 @@
-import { isHtmlEmpty, readLocal, writeLocal } from "../../lib/utils";
+import { isHtmlEmpty, readLocal } from "../../lib/utils";
 
 // 課題作成の下書き。ワークスペースとユーザーごとに、読み込み直しても残す。
 // localStorage が使えない環境でも、閉じて開き直すだけなら残るよう、メモリにも控えを置く。
@@ -91,7 +91,16 @@ export function saveIssueDraft(workspaceId: string, userId: string, draft: Draft
     return;
   }
   memory.set(key, draft);
-  writeLocal(key, { v: DRAFT_VERSION, draft });
+  try {
+    localStorage.setItem(key, JSON.stringify({ v: DRAFT_VERSION, draft }));
+  } catch {
+    // 書き込めないと古い値が残り、読み込みがメモリの最新を隠す。消してメモリを使わせる
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // 消せなくても動作は続ける
+    }
+  }
 }
 
 export function clearIssueDraft(workspaceId: string, userId: string): void {
