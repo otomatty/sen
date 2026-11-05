@@ -52,7 +52,7 @@ function decodeEntities(s: string): string {
       if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
       return String.fromCodePoint(cp);
     }
-    const named = HTML4_NAMED_ENTITIES[ent];
+    const named = Object.hasOwn(HTML4_NAMED_ENTITIES, ent) ? HTML4_NAMED_ENTITIES[ent] : undefined;
     if (named !== undefined) return named;
     switch (ent.toLowerCase()) {
       case "amp":
@@ -139,11 +139,20 @@ function slicePieces(pieces: Piece[], start: number, end: number): Piece[] {
   return out;
 }
 
-function trimPieces(pieces: Piece[]): Piece[] {
+/**
+ * 端の空白を、中身から切り離す。全部空白なら lead に残し、中身は空。
+ * 中身の範囲は String.prototype.trim と同じ。切り離した空白は、呼び出し側が記法の外へ出す。
+ */
+function splitTrimmedPieces(pieces: Piece[]): { lead: Piece[]; core: Piece[]; trail: Piece[] } {
   const raw = piecesToString(pieces);
+  if (!raw.trim()) return { lead: pieces, core: [], trail: [] };
   const [start, end] = trimOffsets(raw);
-  if (start === 0 && end === raw.length) return pieces;
-  return slicePieces(pieces, start, end);
+  if (start === 0 && end === raw.length) return { lead: [], core: pieces, trail: [] };
+  return {
+    lead: slicePieces(pieces, 0, start),
+    core: slicePieces(pieces, start, end),
+    trail: slicePieces(pieces, end, raw.length),
+  };
 }
 
 /**
@@ -549,14 +558,16 @@ function singleLink(children: Node[]): { link: El; leading: Node[]; trailing: No
 
 function markedLink(el: El, marker: string): Piece[] {
   const href = (el.attrs.href ?? "").trim();
-  const inner = trimPieces(renderPieces(el.children));
-  if (!piecesToString(inner)) return [{ text: `[](${linkDestination(href)})`, fromText: false }];
+  const { lead, core, trail } = splitTrimmedPieces(renderPieces(el.children));
+  if (!piecesToString(core)) return [...lead, { text: `[](${linkDestination(href)})`, fromText: false }, ...trail];
   return [
+    ...lead,
     { text: "[", fromText: false },
     { text: marker, fromText: false },
-    ...inner,
+    ...core,
     { text: marker, fromText: false },
     { text: `](${linkDestination(href)})`, fromText: false },
+    ...trail,
   ];
 }
 
@@ -607,14 +618,18 @@ function wrapMarked(marker: string, el: El, before: string | null, after: string
 
 function linkPieces(el: El): Piece[] {
   const href = (el.attrs.href ?? "").trim();
-  const inner = trimPieces(renderPieces(el.children));
-  const text = piecesToString(inner);
+  const { lead, core, trail } = splitTrimmedPieces(renderPieces(el.children));
+  const text = piecesToString(core);
   const plain = rawText(el).replace(/\s+/g, " ").trim();
-  if (!href) return inner;
+  if (!href) return [...lead, ...core, ...trail];
+  // 端の空白はリンクの外へ出す。自動リンクは < の前と > の後、それ以外は [ の前と ) の後。
+  // 中の文字は、これまで通り端を除いて整える。強調が先に外へ出した空白と重なっても、ここでは切り離すだけで増やさない。
   // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す。
   // 自動リンクにするかは、エスケープ前の文字と URL で決める。
-  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return [{ text: `<${escapeLinkEntities(href)}>`, fromText: false }];
-  return [{ text: "[", fromText: false }, ...inner, { text: `](${linkDestination(href)})`, fromText: false }];
+  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) {
+    return [...lead, { text: `<${escapeLinkEntities(href)}>`, fromText: false }, ...trail];
+  }
+  return [...lead, { text: "[", fromText: false }, ...core, { text: `](${linkDestination(href)})`, fromText: false }, ...trail];
 }
 
 /** インライン要素を、テキストと変換が作った記法に分けて返す。ブロックなら null */

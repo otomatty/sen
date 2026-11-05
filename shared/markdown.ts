@@ -712,7 +712,7 @@ function decodePlainText(s: string): string {
   return s
     .replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]{1,31});/gi, (all, ent: string) => {
       const decoded = decodeBasicEntity(ent, " ");
-      if (decoded === null) return HTML4_NAMED_ENTITIES[ent] ?? all;
+      if (decoded === null) return Object.hasOwn(HTML4_NAMED_ENTITIES, ent) ? HTML4_NAMED_ENTITIES[ent] : all;
       return decoded;
     })
     .replace(/[\n\r]/g, " ");

@@ -206,6 +206,10 @@ test("名前付き文字参照は、表示では参照のまま、平文では H
   expect(alt).toContain('alt="&copy;"');
   expect(alt).not.toContain("&amp;copy;");
 
+  expect(markdownToText("&constructor; &toString; &valueOf; &hasOwnProperty; &copy;")).toBe("&constructor; &toString; &valueOf; &hasOwnProperty; ©");
+  const inherited = markdownToHtml("&constructor; &toString; &valueOf; &hasOwnProperty; &copy;");
+  expect(inherited).not.toContain("function");
+
   const script = markdownToHtml("&lt;script&gt;alert(1)&lt;/script&gt;");
   expect(script).not.toContain("<script");
   expect(script).toContain("&lt;script&gt;");
