@@ -4,7 +4,8 @@
 // 参加一覧 workspaces をスナップショットから外した。古い版のクライアントが新しい形を読んで落ちないよう、版を分ける。
 // 本文を Markdown で保存するようにしたため、HTML のままのキャッシュは捨てる。
 // GitHub 連携のエンティティとユーザーの githubLogin を足した。
-export const CACHE_VERSION = 6;
+// 本文の Markdown（5）と GitHub 連携（6）の両方を含むので、どちらより大きい版にする。
+export const CACHE_VERSION = 7;
 
 export interface Snapshot {
   v: number;

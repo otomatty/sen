@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { titleNarration, type NarrationClip, type Narrator } from "./narration";
 import type { ScreenRecorder } from "./recorder";
 
 // シナリオから使う操作 API。人が操作しているように見えるよう、
@@ -32,6 +33,8 @@ export const PARK = { x: 110, y: 540 };
 
 export class Director {
   chapters: Chapter[] = [];
+  /** 読み上げの開始時刻（動画上の秒）と PCM */
+  narrationCues: { t: number; clip: NarrationClip }[] = [];
   /** t.poster() で撮ったサムネイルの保存先（run.ts が設定する） */
   posterFile: string | null = null;
   posterTaken = false;
@@ -40,13 +43,18 @@ export class Director {
   /** 今の字幕が出た時刻と、最低限表示しておく時間（読み終わるまで） */
   private captionAt = 0;
   private captionMin = 0;
+  private speed: number;
+  private narrator: Narrator | null;
 
   constructor(
     public page: Page,
     public ws: string,
     private recorder: ScreenRecorder | null,
-    private speed = 1,
-  ) {}
+    opts: { speed?: number; narrator?: Narrator | null } = {},
+  ) {
+    this.speed = opts.speed ?? 1;
+    this.narrator = opts.narrator ?? null;
+  }
 
   setMouse(x: number, y: number) {
     this.mouse = { x, y };
@@ -68,24 +76,29 @@ export class Director {
   async goto(path: string) {
     await this.page.goto(`/${this.ws}${path}`);
     await this.page.waitForSelector("[data-testid=app]");
-    await this.wait(600);
+    await this.wait(1000);
   }
 
-  /** 冒頭のタイトルカード */
-  async title(badge: string, heading: string, sub: string, ms = 2600) {
+  /** 冒頭のタイトルカード。ナレーションがあれば、読み終わるまで出す */
+  async title(badge: string, heading: string, sub: string, ms = 3200) {
+    const clip = await this.takeNarration(titleNarration(heading, sub));
     await this.page.evaluate(([b, h, s]) => (window as never as { __tutor: { title: Function } }).__tutor.title(b, h, s), [badge, heading, sub]);
-    await this.wait(ms);
+    if (clip) this.narrationCues.push({ t: this.recorder?.elapsed() ?? 0, clip });
+    const spoken = clip ? (clip.duration + 0.6) * 1000 : 0;
+    await this.page.waitForTimeout(Math.max(this.ms(ms), spoken));
     await this.page.evaluate(() => (window as never as { __tutor: { hideTitle: Function } }).__tutor.hideTitle());
-    await this.wait(500);
+    await this.wait(700);
   }
 
   /**
    * 字幕を出してチャプターとして記録する。
    * 字幕を出したら少しだけ待って操作を始め、操作の結果が字幕と一緒に映るようにする。
    * 読み終わるまでの時間は「次の字幕を出す前」に確保する（結果が画面に残った状態で待つ）。
+   * say があれば、画面の文字ではなくそちらを読み上げる。
    */
-  async caption(text: string, opts: { hold?: number; chapter?: boolean } = {}) {
+  async caption(text: string, opts: { hold?: number; chapter?: boolean; say?: string } = {}) {
     await this.settle();
+    const clip = await this.takeNarration(opts.say ?? text);
     if (opts.chapter !== false) {
       this.step++;
       this.chapters.push({ t: Math.max(0, (this.recorder?.elapsed() ?? 0) - 0.2), title: text });
@@ -94,11 +107,30 @@ export class Director {
       ([t, s]) => (window as never as { __tutor: { caption: Function } }).__tutor.caption(t, s),
       [text, opts.chapter === false ? null : this.step] as const,
     );
+    if (clip) this.narrationCues.push({ t: this.recorder?.elapsed() ?? 0, clip });
     const chars = [...text].length;
     this.captionAt = Date.now();
-    this.captionMin = this.ms(opts.hold ?? 1000 + chars * 70);
+    const readFor = this.ms(opts.hold ?? 1400 + chars * 90);
+    // 読み上げの長さは speed で縮めない（聞き終わる前に次へ進まないため）
+    const spokenFor = clip ? (clip.duration + 0.5) * 1000 : 0;
+    this.captionMin = Math.max(readFor, spokenFor);
     // 読み始める時間だけ待ってから操作に移る
-    await this.wait(Math.min(1300, 550 + chars * 18));
+    await this.wait(Math.min(2000, 900 + chars * 25));
+  }
+
+  /**
+   * 読み上げを用意する。キャッシュが無いときだけ収録を止め、
+   * API の待ち時間が動画に入らないようにする。
+   */
+  private async takeNarration(text: string): Promise<NarrationClip | null> {
+    if (!this.narrator) return null;
+    const cached = this.narrator.has(text);
+    if (!cached) this.recorder?.pause();
+    try {
+      return await this.narrator.clip(text);
+    } finally {
+      if (!cached) this.recorder?.resume();
+    }
   }
 
   /** 今の字幕を読み終えられるまで待つ（次の字幕の前・収録の終わりに呼ばれる） */
@@ -111,7 +143,7 @@ export class Director {
   /** 収録の締めくくり：最後の字幕を読み終えるまで待ち、余韻を残す */
   async finish() {
     await this.settle();
-    await this.wait(900);
+    await this.wait(1500);
   }
 
   /**
@@ -176,7 +208,7 @@ export class Director {
   }
 
   /** 要素を光らせて注目させる */
-  async highlight(target: Target, ms = 1400) {
+  async highlight(target: Target, ms = 1800) {
     const box = await this.locator(target).boundingBox();
     if (!box) return;
     await this.page.evaluate((r) => (window as never as { __tutor: { highlight: Function } }).__tutor.highlight(r), box);
@@ -198,28 +230,28 @@ export class Director {
 
   async moveToPoint(x: number, y: number, steps?: number) {
     const dist = Math.hypot(x - this.mouse.x, y - this.mouse.y);
-    const n = steps ?? Math.max(12, Math.min(40, Math.round(dist / 18)));
+    const n = steps ?? Math.max(18, Math.min(60, Math.round(dist / 12)));
     // ease-in-out で動かす
     const from = { ...this.mouse };
     for (let i = 1; i <= n; i++) {
       const p = i / n;
       const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
       await this.page.mouse.move(from.x + (x - from.x) * e, from.y + (y - from.y) * e);
-      await this.page.waitForTimeout(this.ms(12));
+      await this.page.waitForTimeout(this.ms(16));
     }
     this.mouse = { x, y };
   }
 
   async click(target: Target, opts: { offsetX?: number; offsetY?: number; pause?: number } = {}) {
     await this.moveTo(target, opts);
-    await this.wait(180);
+    await this.wait(420);
     await this.page.mouse.down();
-    await this.page.waitForTimeout(70);
+    await this.page.waitForTimeout(this.ms(90));
     await this.page.mouse.up();
-    await this.wait(opts.pause ?? 450);
+    await this.wait(opts.pause ?? 800);
   }
 
-  async hover(target: Target, ms = 500) {
+  async hover(target: Target, ms = 800) {
     await this.moveTo(target);
     await this.wait(ms);
   }
@@ -228,9 +260,9 @@ export class Director {
   async type(text: string, opts: { delay?: number } = {}) {
     for (const ch of text) {
       await this.page.keyboard.type(ch);
-      await this.page.waitForTimeout(this.ms(opts.delay ?? (/[\x00-\x7F]/.test(ch) ? 45 : 85)));
+      await this.page.waitForTimeout(this.ms(opts.delay ?? (/[\x00-\x7F]/.test(ch) ? 75 : 130)));
     }
-    await this.wait(250);
+    await this.wait(450);
   }
 
   /** キーを押す。画面下に押したキーを大きく表示する（"Meta+k" / "g i" のようなシーケンスにも対応） */
@@ -246,36 +278,36 @@ export class Director {
     if (opts.label) labels.splice(0, labels.length, ...opts.label);
     if (opts.show !== false) {
       await this.page.evaluate((parts) => (window as never as { __tutor: { keys: Function } }).__tutor.keys(parts), labels);
-      await this.wait(260);
+      await this.wait(550);
     }
     for (const part of seq) {
       await this.page.keyboard.press(part);
-      await this.wait(120);
+      await this.wait(380);
     }
-    await this.wait(opts.pause ?? 650);
+    await this.wait(opts.pause ?? 1000);
   }
 
   async drag(from: Target, to: Target, opts: { offsetY?: number } = {}) {
     await this.moveTo(from);
-    await this.wait(200);
+    await this.wait(400);
     await this.page.mouse.down();
-    await this.wait(150);
+    await this.wait(250);
     // 少し動かしてドラッグを開始させる
     await this.moveToPoint(this.mouse.x + 8, this.mouse.y + 6, 4);
-    await this.moveTo(to, { offsetY: opts.offsetY, steps: 40 });
-    await this.wait(300);
+    await this.moveTo(to, { offsetY: opts.offsetY, steps: 60 });
+    await this.wait(500);
     await this.page.mouse.up();
-    await this.wait(600);
+    await this.wait(900);
   }
 
   async scroll(target: Target, dy: number) {
     await this.moveTo(target);
-    const steps = 12;
+    const steps = 20;
     for (let i = 0; i < steps; i++) {
       await this.page.mouse.wheel(0, dy / steps);
-      await this.page.waitForTimeout(this.ms(25));
+      await this.page.waitForTimeout(this.ms(30));
     }
-    await this.wait(400);
+    await this.wait(700);
   }
 
   locate(selector: string) {

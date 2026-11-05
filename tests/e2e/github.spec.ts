@@ -16,7 +16,7 @@ import {
 } from "../../worker/github/merge";
 import { extractPullReferences, pullLinkState } from "../../worker/github/pulls";
 import { acceptGitHubWebhook, githubSignature, verifyGitHubSignature } from "../../worker/github/signature";
-import { devSignIn, dismissWelcome, signupViaUi } from "./helpers";
+import { inviteByEmail, joinByInvite, signupViaUi, uniqueEmail } from "./helpers";
 import { GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock, type MockIssue, type MockPull } from "./github-mock";
 
 const SECRET = "e2e-github-webhook-secret";
@@ -226,26 +226,24 @@ test.describe.serial("GitHub 連携の設定", () => {
   });
 
   test("管理者でないメンバーは連携できない", async ({ browser }) => {
-    await page.goto(`/${ws}/settings/members`);
-    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
-    const ctx = await browser.newContext();
-    const member = await ctx.newPage();
-    await devSignIn(member, { name: "参加 次郎" });
-    await member.goto(`/invite/${code}`);
-    await member.getByTestId("invite-accept").click();
-    await expect(member.getByTestId("app")).toBeVisible();
-    await dismissWelcome(member);
-    await member.goto(`/${ws}/settings/workspace`);
-    await expect(member.getByTestId("github-section")).toBeVisible();
-    await expect(member.getByTestId("github-link-DEF")).toHaveCount(0);
-    await expect(member.getByTestId("github-unlink-DEF")).toHaveCount(0);
-    await expect(member.getByTestId("github-link-OTH")).toHaveCount(0);
-    const denied = await member.request.post(`/api/github/repos?ws=${encodeURIComponent(ws)}`, {
-      headers: { "x-sen-client": "1" },
-      data: { teamId: randomUUID(), repo: "acme/widgets" },
-    });
-    expect(denied.status()).toBe(403);
-    await ctx.close();
+    const email = uniqueEmail("member");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "参加 次郎" });
+    const member = joined.page;
+    try {
+      await member.goto(`/${ws}/settings/workspace`);
+      await expect(member.getByTestId("github-section")).toBeVisible();
+      await expect(member.getByTestId("github-link-DEF")).toHaveCount(0);
+      await expect(member.getByTestId("github-unlink-DEF")).toHaveCount(0);
+      await expect(member.getByTestId("github-link-OTH")).toHaveCount(0);
+      const denied = await member.request.post(`/api/github/repos?ws=${encodeURIComponent(ws)}`, {
+        headers: { "x-sen-client": "1" },
+        data: { teamId: randomUUID(), repo: "acme/widgets" },
+      });
+      expect(denied.status()).toBe(403);
+    } finally {
+      await joined.context.close();
+    }
   });
 
   test("プロフィールの GitHub ユーザー名は小文字で保存し、不正・重複は拒否し、空で消せる", async ({ browser }) => {
@@ -261,22 +259,20 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect(page.getByText("GitHub のユーザー名の形式が正しくありません")).toBeVisible();
     await expect.poll(async () => (await bootstrap(page, ws)).me.githubLogin).toBe("octocat");
 
-    await page.goto(`/${ws}/settings/members`);
-    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
-    const ctx = await browser.newContext();
-    const other = await ctx.newPage();
-    await devSignIn(other, { name: "重複 花子" });
-    await other.goto(`/invite/${code}`);
-    await other.getByTestId("invite-accept").click();
-    await expect(other.getByTestId("app")).toBeVisible();
-    await dismissWelcome(other);
+    const email = uniqueEmail("dup");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "重複 花子" });
+    const other = joined.page;
+    try {
     await other.goto(`/${ws}/settings/profile`);
     const otherInput = other.getByTestId("profile-github-login");
     await otherInput.fill("OctoCat");
     await otherInput.blur();
     await expect(other.getByText("この GitHub ユーザー名は、ほかの人が登録しています")).toBeVisible();
     await expect.poll(async () => (await bootstrap(other, ws)).me.githubLogin).toBeNull();
-    await ctx.close();
+    } finally {
+      await joined.context.close();
+    }
 
     await page.goto(`/${ws}/settings/profile`);
     await input.fill("");
@@ -354,22 +350,21 @@ test.describe.serial("GitHub 連携の設定", () => {
   });
 
   test("GitHub でタイトルを変えた人は、登録があればそのメンバー、無ければ連携した管理者として履歴に残る", async ({ browser }) => {
-    await page.goto(`/${ws}/settings/members`);
-    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
-    const ctx = await browser.newContext();
-    const editor = await ctx.newPage();
-    await devSignIn(editor, { name: "編集 花子" });
-    await editor.goto(`/invite/${code}`);
-    await editor.getByTestId("invite-accept").click();
-    await expect(editor.getByTestId("app")).toBeVisible();
-    await dismissWelcome(editor);
-    await editor.goto(`/${ws}/settings/profile`);
-    const input = editor.getByTestId("profile-github-login");
-    await input.fill("Title-Editor");
-    await input.blur();
-    await expect.poll(async () => (await bootstrap(editor, ws)).me.githubLogin).toBe("title-editor");
-    const editorId = (await bootstrap(editor, ws)).me.id;
-    await ctx.close();
+    const email = uniqueEmail("editor");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "編集 花子" });
+    const editor = joined.page;
+    let editorId = "";
+    try {
+      await editor.goto(`/${ws}/settings/profile`);
+      const input = editor.getByTestId("profile-github-login");
+      await input.fill("Title-Editor");
+      await input.blur();
+      await expect.poll(async () => (await bootstrap(editor, ws)).me.githubLogin).toBe("title-editor");
+      editorId = (await bootstrap(editor, ws)).me.id;
+    } finally {
+      await joined.context.close();
+    }
 
     const created = await createSenIssue(page, ws, { title: "行為者を記録する課題", description: "本文" });
     const remote = await waitMockIssue("行為者を記録する課題");
@@ -556,22 +551,17 @@ test.describe.serial("GitHub 連携の設定", () => {
     expect((await postCommentWebhook(page, remote.number, githubMock.comments[member]!)).status()).toBe(202);
     await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.body === "メンバーが書きました" && comment.userId === meId && !comment.githubAuthor), { timeout: 15_000 }).toBe(true);
 
-    await page.goto(`/${ws}/settings/members`);
-    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
-    const ctx = await browser.newContext();
-    const mentioned = await ctx.newPage();
-    await devSignIn(mentioned, { name: "言及 三郎" });
-    await mentioned.goto(`/invite/${code}`);
-    await mentioned.getByTestId("invite-accept").click();
-    await expect(mentioned.getByTestId("app")).toBeVisible();
-    await dismissWelcome(mentioned);
+    const email = uniqueEmail("mention");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "言及 三郎" });
+    const mentioned = joined.page;
 
     const outsider = githubMock.comments.length;
     githubMock.comments.push(mockComment(remote.number, "外部です @言及 三郎", "ghost"));
     expect((await postCommentWebhook(page, remote.number, githubMock.comments[outsider]!)).status()).toBe(202);
     await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.githubAuthor === "ghost"), { timeout: 15_000 }).toBe(true);
     await expect.poll(async () => (await bootstrap(mentioned, ws)).notifications.some((item) => item.type === "mention"), { timeout: 3_000 }).toBe(false);
-    await ctx.close();
+    await joined.context.close();
 
     const spoofId = randomUUID();
     expect((await postMutation(page, ws, { type: "comment.create", args: { id: spoofId, issueId: created.id, body: "成り済まし", githubAuthor: "ghost" } })).ok).toBe(true);
@@ -852,22 +842,21 @@ test.describe.serial("GitHub 連携の設定", () => {
   });
 
   test("PR の作者が GitHub ユーザー名を登録したメンバーなら、その人の操作として履歴に残る", async ({ browser }) => {
-    await page.goto(`/${ws}/settings/members`);
-    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
-    const ctx = await browser.newContext();
-    const author = await ctx.newPage();
-    await devSignIn(author, { name: "PR 作者" });
-    await author.goto(`/invite/${code}`);
-    await author.getByTestId("invite-accept").click();
-    await expect(author.getByTestId("app")).toBeVisible();
-    await dismissWelcome(author);
-    await author.goto(`/${ws}/settings/profile`);
-    const input = author.getByTestId("profile-github-login");
-    await input.fill("Pull-Author");
-    await input.blur();
-    await expect.poll(async () => (await bootstrap(author, ws)).me.githubLogin).toBe("pull-author");
-    const authorId = (await bootstrap(author, ws)).me.id;
-    await ctx.close();
+    const email = uniqueEmail("author");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "PR 作者" });
+    const author = joined.page;
+    let authorId = "";
+    try {
+      await author.goto(`/${ws}/settings/profile`);
+      const input = author.getByTestId("profile-github-login");
+      await input.fill("Pull-Author");
+      await input.blur();
+      await expect.poll(async () => (await bootstrap(author, ws)).me.githubLogin).toBe("pull-author");
+      authorId = (await bootstrap(author, ws)).me.id;
+    } finally {
+      await joined.context.close();
+    }
 
     const created = await createSenIssue(page, ws, { title: "作者が残る課題", description: "" });
     await waitLink(page, ws, created.id);

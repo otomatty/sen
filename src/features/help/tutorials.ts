@@ -17,6 +17,7 @@ export interface Tutorial {
   video: string;
   poster: string;
   chapters: TutorialChapter[];
+  narration?: boolean; // ナレーション（音声）が入っているか
   recordedAt?: string;
 }
 

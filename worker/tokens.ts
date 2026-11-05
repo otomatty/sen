@@ -3,6 +3,7 @@
 
 import type { Context } from "hono";
 import { apiTokenClientLabel } from "../shared/constants";
+import { isEmailAllowed, parseAllowedDomains } from "../shared/domains";
 import type { ApiTokenClient, ApiTokenCreateRequest, ApiTokenScope, ApiTokenSummary, Me, Role } from "../shared/types";
 import { randomToken } from "./auth";
 import { all, first, run } from "./db";
@@ -179,7 +180,7 @@ interface AuthRow {
   ws_id: string;
   ws_name: string;
   url_key: string;
-  invite_code: string;
+  allowed_domains: string;
   ws_created_at: number;
   ws_updated_at: number;
   user_id: string;
@@ -193,7 +194,7 @@ interface AuthRow {
 
 /**
  * Authorization: Bearer の API トークンを照合する。
- * 形式が違う、メンバーでない、期限切れのときは null（Cookie のログインとは別経路）。
+ * 形式が違う、メンバーでない、期限切れ、許可されたドメイン以外のときは null（Cookie のログインとは別経路）。
  */
 export async function authenticateApiToken(
   db: D1Database,
@@ -216,7 +217,7 @@ export async function authenticateApiToken(
        w.id AS ws_id,
        w.name AS ws_name,
        w.url_key AS url_key,
-       w.invite_code AS invite_code,
+       w.allowed_domains AS allowed_domains,
        w.created_at AS ws_created_at,
        w.updated_at AS ws_updated_at,
        u.id AS user_id,
@@ -237,6 +238,7 @@ export async function authenticateApiToken(
   if (row.expires_at != null && row.expires_at <= now) return null;
   if (row.scope !== "read" && row.scope !== "write") return null;
   if (row.role !== "admin" && row.role !== "member") return null;
+  if (!isEmailAllowed(row.email, parseAllowedDomains(row.allowed_domains))) return null;
   if (row.last_used_at == null || now - row.last_used_at >= LAST_USED_INTERVAL) {
     await run(db, "UPDATE api_tokens SET last_used_at = ? WHERE id = ?", now, row.token_id);
   }
@@ -244,7 +246,7 @@ export async function authenticateApiToken(
     id: row.ws_id,
     name: row.ws_name,
     url_key: row.url_key,
-    invite_code: row.invite_code,
+    allowed_domains: row.allowed_domains,
     created_at: row.ws_created_at,
     updated_at: row.ws_updated_at,
   };

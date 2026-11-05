@@ -3,7 +3,10 @@ import syncMetaSql from "../migrations/0002_sync_meta.sql?raw";
 import relationsSql from "../migrations/0003_issue_relations.sql?raw";
 import googleAuthSql from "../migrations/0004_google_auth.sql?raw";
 import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
-import githubSql from "../migrations/0007_github.sql?raw";
+import defaultWorkspaceSql from "../migrations/0006_default_workspace.sql?raw";
+import invitationsSql from "../migrations/0007_invitations.sql?raw";
+import assistantUsageSql from "../migrations/0008_assistant_usage.sql?raw";
+import githubSql from "../migrations/0010_github.sql?raw";
 // sync.ts は db.ts を import する。writeChanges は移行の関数の中でしか呼ばないので、循環しても読み込み時には問題にならない。
 import { migrateBodiesToMarkdown } from "./markdown-migration";
 import { writeChanges } from "./sync";
@@ -38,7 +41,7 @@ export async function batch(db: D1Database, statements: D1PreparedStatement[]): 
 // ---- 自動マイグレーション ----
 // wrangler の `d1 migrations apply` と同じ d1_migrations テーブルを使うので、
 // どちらの方法で適用しても二重に実行されない。
-// 0006 は SQL ファイルを置かない。`wrangler d1 migrations apply` は migrations/ の SQL だけを流すので、
+// 0009 は SQL ファイルを置かない。`wrangler d1 migrations apply` は migrations/ の SQL だけを流すので、
 // 本文の HTML → Markdown は新しい Worker が最初のリクエストで行う。
 type Migration = { name: string; sql: string } | { name: string; run: (db: D1Database) => Promise<void> };
 
@@ -48,14 +51,17 @@ const MIGRATIONS: Migration[] = [
   { name: "0003_issue_relations.sql", sql: relationsSql },
   { name: "0004_google_auth.sql", sql: googleAuthSql },
   { name: "0005_ai_tokens.sql", sql: aiTokensSql },
+  { name: "0006_default_workspace.sql", sql: defaultWorkspaceSql },
+  { name: "0007_invitations.sql", sql: invitationsSql },
+  { name: "0008_assistant_usage.sql", sql: assistantUsageSql },
   {
-    name: "0006_markdown_bodies",
+    name: "0009_markdown_bodies",
     run: (db) =>
       migrateBodiesToMarkdown(db, (wsId) =>
         writeChanges(db, wsId, [{ entity: "workspace", entityId: wsId, op: "upsert" }]),
       ),
   },
-  { name: "0007_github.sql", sql: githubSql },
+  { name: "0010_github.sql", sql: githubSql },
 ];
 
 export function splitSql(sql: string): string[] {

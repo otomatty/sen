@@ -19,6 +19,7 @@ import type {
   WorkflowState,
   Workspace,
 } from "../shared/types";
+import { parseAllowedDomains } from "../shared/domains";
 import type { WorkspaceRow } from "./env";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -37,7 +38,7 @@ export const toWorkspace = (r: WorkspaceRow): Workspace => ({
   id: r.id,
   name: r.name,
   urlKey: r.url_key,
-  inviteCode: r.invite_code,
+  allowedDomains: parseAllowedDomains(r.allowed_domains),
   createdAt: r.created_at,
 });
 

@@ -17,7 +17,9 @@ export default defineScenario({
     await t.expect("[data-testid=prop-status]", { text: "進行中" });
     await t.click("[data-testid=prop-due]");
     await t.click("[data-testid=date-picker] .datepicker-quick button:has-text('明日')", { pause: 600 });
-    await t.caption("説明は Markdown で書けます。## で見出し、- で箇条書き");
+    await t.caption("説明は Markdown で書けます。## で見出し、- で箇条書き", {
+      say: "説明は Markdown で書けます。シャープ 2 つで見出し、ハイフンで箇条書き",
+    });
     await t.click("[data-testid=issue-description]");
     await t.type("## 調査メモ");
     await t.press("Enter", { show: false, pause: 200 });

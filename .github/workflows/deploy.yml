@@ -26,6 +26,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run assistant:check
       - name: 使い方動画が最新の画面で撮られているか確認
         run: bun run tutorials:check || echo "::warning::画面が変わった使い方動画があります。workflow_dispatch の record_tutorials で撮り直してください"
       - name: Playwright と日本語フォントを準備
@@ -53,6 +54,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: 操作説明動画を再収録（AI がヘッドレスブラウザで操作）
         if: ${{ inputs.record_tutorials }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           bunx playwright install --with-deps chromium
           sudo apt-get update && sudo apt-get install -y fonts-noto-cjk ffmpeg

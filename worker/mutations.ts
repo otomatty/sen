@@ -1,10 +1,17 @@
 import { AVATAR_COLORS, DEFAULT_STATES, ISSUE_TITLE_MAX_LENGTH, MARKDOWN_MAX_LENGTH, PALETTE } from "../shared/constants";
 import { isMarkdownBlank, markdownToText } from "../shared/markdown";
 import { addDays, isValidYmd, mondayOf, todayYmd } from "../shared/dates";
+import {
+  emailDomain,
+  isEmailAllowed,
+  isValidDomain,
+  MAX_ALLOWED_DOMAINS,
+  normalizeDomain,
+  normalizeEmail,
+} from "../shared/domains";
 import type { ActivityType, IssueRelation, Me, Mutation, NotificationType, RelationType, Role, StateType } from "../shared/types";
 import { all, first, run, stmt, batch } from "./db";
 import type { WorkspaceRow } from "./env";
-import { randomToken } from "./auth";
 import type { Change } from "./sync";
 
 export class MutationError extends Error {
@@ -261,6 +268,61 @@ async function addNotifications(
 
 function touch(ctx: MutationCtx, entity: Change["entity"], entityId: string) {
   ctx.changes.push({ entity, entityId, op: "upsert" });
+}
+
+/** user.update と同じ形で、本人にだけ設定を含むユーザー行を知らせる */
+function notifyUser(
+  ctx: MutationCtx,
+  cur: Row,
+  name: string,
+  avatarColor: string,
+  settings: string,
+  githubLogin: string | null,
+) {
+  const user = ctx.user;
+  touch(ctx, "user", user.id);
+  ctx.changes.push({
+    entity: "user",
+    entityId: user.id,
+    op: "upsert",
+    userId: user.id,
+    data: {
+      id: user.id,
+      name,
+      email: cur.email,
+      avatarColor,
+      role: ctx.role,
+      githubLogin,
+      createdAt: cur.created_at,
+      settings: JSON.parse(settings || "{}"),
+    },
+  });
+}
+
+const FAVORITE_TYPES = new Set(["project", "issue", "cycle", "view"]);
+
+function readUserSettings(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || !raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function readFavorite(v: unknown): { type: string; id: string } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) fail("お気に入りが不正です");
+  const type = (v as { type?: unknown }).type;
+  const id = (v as { id?: unknown }).id;
+  if (typeof type !== "string" || !FAVORITE_TYPES.has(type)) fail("お気に入りが不正です");
+  if (typeof id !== "string" || id.length < 1 || id.length > 100) fail("お気に入りが不正です");
+  return { type, id };
+}
+
+function sameFavorite(f: unknown, fav: { type: string; id: string }) {
+  return !!f && typeof f === "object" && (f as { type?: unknown }).type === fav.type && (f as { id?: unknown }).id === fav.id;
 }
 
 function stateTimestamps(type: StateType, row: Row, now: number) {
@@ -1018,10 +1080,40 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       return;
     }
 
-    case "workspace.regenerateInvite": {
+    case "workspace.setAllowedDomains": {
       assertAdmin(ctx);
-      await run(db, "UPDATE workspaces SET invite_code = ?, updated_at = ? WHERE id = ?", randomToken(12), now, ws.id);
+      if (!Array.isArray(a.domains)) fail("ドメインの指定が不正です");
+      const domains: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of a.domains) {
+        if (typeof raw !== "string") fail("ドメインの指定が不正です");
+        const domain = normalizeDomain(raw);
+        if (!domain || seen.has(domain)) continue;
+        if (!isValidDomain(domain)) fail(`ドメインの形式が正しくありません：${domain}`);
+        seen.add(domain);
+        domains.push(domain);
+      }
+      if (domains.length > MAX_ALLOWED_DOMAINS) fail(`利用できるドメインは${MAX_ALLOWED_DOMAINS}個までです`);
+      if (domains.length > 0) {
+        const mine = emailDomain(user.email);
+        if (!domains.includes(mine)) fail(`あなたのメールアドレスのドメイン（${mine}）を含めてください`);
+      }
+      await run(db, "UPDATE workspaces SET allowed_domains = ?, updated_at = ? WHERE id = ?", JSON.stringify(domains), now, ws.id);
+      ws.allowed_domains = JSON.stringify(domains);
       touch(ctx, "workspace", ws.id);
+      // 許可外になった宛先の、まだ使われていない招待は取り消す。メンバーは残す（許可に戻せば再び使える）
+      if (domains.length > 0) {
+        const pending = await all<{ id: string; email: string }>(
+          db,
+          "SELECT id, email FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+          ws.id,
+        );
+        for (const inv of pending) {
+          if (!isEmailAllowed(inv.email, domains)) {
+            await run(db, "UPDATE invitations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", now, inv.id);
+          }
+        }
+      }
       return;
     }
 
@@ -1051,23 +1143,43 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         now,
         user.id,
       );
-      touch(ctx, "user", user.id);
-      ctx.changes.push({
-        entity: "user",
-        entityId: user.id,
-        op: "upsert",
-        userId: user.id,
-        data: {
-          id: user.id,
-          name,
-          email: cur.email,
-          avatarColor: color,
-          role: ctx.role,
-          githubLogin,
-          createdAt: cur.created_at,
-          settings: JSON.parse(settings || "{}"),
-        },
-      });
+      notifyUser(ctx, cur, name, color, settings, githubLogin);
+      return;
+    }
+
+    case "user.updateSettings": {
+      const cur = await first<Row>(db, "SELECT * FROM users WHERE id = ?", user.id);
+      if (!cur) fail("ユーザーが見つかりません", 404);
+      const settings = readUserSettings(cur.settings);
+      if (a.set !== undefined) {
+        if (!a.set || typeof a.set !== "object" || Array.isArray(a.set)) fail("設定が不正です");
+        const patch: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(a.set as Record<string, unknown>)) {
+          if (key === "welcomeDismissed") {
+            if (typeof value !== "boolean") fail("設定が不正です");
+          } else if (key === "theme") {
+            if (value !== "system" && value !== "light" && value !== "dark") fail("設定が不正です");
+          } else fail("設定が不正です");
+          patch[key] = value;
+        }
+        Object.assign(settings, patch);
+      }
+      if (a.addFavorite !== undefined) {
+        const fav = readFavorite(a.addFavorite);
+        const favorites = Array.isArray(settings.favorites) ? [...settings.favorites] : [];
+        if (!favorites.some((f) => sameFavorite(f, fav))) favorites.push(fav);
+        settings.favorites = favorites;
+      }
+      if (a.removeFavorite !== undefined) {
+        const fav = readFavorite(a.removeFavorite);
+        const favorites = Array.isArray(settings.favorites) ? settings.favorites : [];
+        settings.favorites = favorites.filter((f) => !sameFavorite(f, fav));
+      }
+      const serialized = JSON.stringify(settings);
+      if (serialized.length > 20_000) fail("設定が大きすぎます");
+      await run(db, "UPDATE users SET settings = ?, updated_at = ? WHERE id = ?", serialized, now, user.id);
+      const githubLogin = typeof cur.github_login === "string" && cur.github_login ? cur.github_login : null;
+      notifyUser(ctx, cur, cur.name, cur.avatar_color, serialized, githubLogin);
       return;
     }
 
@@ -1092,9 +1204,20 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       assertAdmin(ctx);
       const uid = await assertMember(ctx, a.userId);
       if (uid === user.id) fail("自分自身は削除できません");
+      const removed = await first<{ email: string }>(db, "SELECT email FROM users WHERE id = ?", uid);
       await run(db, "DELETE FROM members WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
       // このワークスペースで発行した AI 連携トークンも無効にする
       await run(db, "DELETE FROM api_tokens WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
+      if (removed) {
+        // 外した人あての、まだ使われていない招待も取り消す
+        await run(
+          db,
+          "UPDATE invitations SET revoked_at = ? WHERE workspace_id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+          now,
+          ws.id,
+          normalizeEmail(removed.email),
+        );
+      }
       const assigned = await all<Row>(
         db,
         "SELECT id FROM issues WHERE workspace_id = ? AND assignee_id = ?",
