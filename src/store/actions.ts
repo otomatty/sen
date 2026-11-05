@@ -275,12 +275,19 @@ export type RelationKind = "blocks" | "blockedBy" | "related" | "duplicate" | "d
 
 /** 課題から見た関係の見出し */
 export const RELATION_LABEL: Record<RelationKind, string> = {
-  blockedBy: "ブロックされている",
-  blocks: "ブロックしている",
+  blockedBy: "先に終わらせる課題",
+  blocks: "この課題を待っている課題",
   related: "関連",
   duplicate: "重複元",
   duplicatedBy: "重複",
 };
+
+/** ブロック関係の結果を 1 文で言う。blocker が終わっていれば、この関係では止めないと言う */
+export function blockSentence(blocker: string, blocked: string, blockerDone: boolean): string {
+  return blockerDone
+    ? `${blocker} はもう終わっているので、${blocked} を止めません`
+    : `${blocker} が終わるまで、${blocked} は進められません`;
+}
 
 interface StoredRelation {
   id: string;
