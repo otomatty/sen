@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { htmlToMarkdown, markdownToHtml } from "../../worker/markdown";
+import { markdownToHtml, markdownToText } from "../../shared/markdown";
+import { htmlToMarkdown } from "../../worker/markdown";
 
 test("見出し・装飾・リスト・リンクを HTML にする", () => {
   expect(markdownToHtml("# 見出し1\n## 見出し2\n### 見出し3")).toBe("<h1>見出し1</h1>\n<h2>見出し2</h2>\n<h3>見出し3</h3>");
@@ -12,6 +13,7 @@ test("見出し・装飾・リスト・リンクを HTML にする", () => {
   expect(markdownToHtml("- 親\n  - 子\n- 次")).toBe("<ul>\n<li>親<ul>\n<li>子</li>\n</ul></li>\n<li>次</li>\n</ul>");
   expect(markdownToHtml("1. 一\n2. 二")).toBe("<ol>\n<li>一</li>\n<li>二</li>\n</ol>");
   expect(markdownToHtml("[Sen](https://example.com)")).toBe('<p><a href="https://example.com">Sen</a></p>');
+  expect(markdownToHtml("a\nb")).toBe("<p>a<br>b</p>");
 });
 
 test("項目がすべてチェックのリストはチェックリストになる", () => {
@@ -40,9 +42,11 @@ test("スクリプトや危険なリンクはタグにならない", () => {
   expect(js).toContain("x");
 });
 
-test("見出しは h3 まで、表はコード、空文字はそのまま", () => {
-  expect(markdownToHtml("##### 深い")).toBe("<h3>深い</h3>");
-  expect(markdownToHtml("| a | b |\n| --- | --- |\n| 1 | 2 |")).toBe("<pre><code>| a | b |\n| --- | --- |\n| 1 | 2 |</code></pre>");
+test("見出しは h6 まで、表は table、空文字はそのまま", () => {
+  expect(markdownToHtml("##### 深い")).toBe("<h5>深い</h5>");
+  expect(markdownToHtml("| a | b |\n| --- | --- |\n| 1 | 2 |")).toBe(
+    "<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>",
+  );
   expect(markdownToHtml("")).toBe("");
   expect(markdownToHtml("   \n")).toBe("");
 });
@@ -76,7 +80,7 @@ test("詰まったリストのインラインは 1 行のまま往復する", ()
 test("リンク先の文字参照は一度だけエスケープする", () => {
   expect(markdownToHtml("[検索](/search?a=1&amp;b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">検索</a></p>');
   expect(markdownToHtml("[検索](/search?a=1&b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">検索</a></p>');
-  expect(markdownToHtml("![図](/search?a=1&amp;b=2)")).toBe('<p><a href="/search?a=1&amp;b=2">図</a></p>');
+  expect(markdownToHtml("![図](/search?a=1&amp;b=2)")).toBe("<p>図</p>");
 });
 
 test("括弧を含むリンク先は往復しても切れない", () => {
@@ -97,4 +101,98 @@ test("Tiptap の HTML を Markdown にでき、壊れた HTML でも例外にな
   expect(htmlToMarkdown("<p><b>unterminated")).toBe("**unterminated**");
   expect(() => htmlToMarkdown("<<not a tag")).not.toThrow();
   expect(() => htmlToMarkdown("<div><p>閉じない")).not.toThrow();
+});
+
+/** タグを除き、文字参照を1回だけ戻し、空白をまとめる。以前の htmlToText と同じ考え方 */
+function htmlVisibleText(html: string): string {
+  const stripped = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|li|h\d|blockquote|pre|div)>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+  const decoded = stripped.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, ent: string) => {
+    const e = ent.toLowerCase();
+    switch (e) {
+      case "amp":
+        return "&";
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "quot":
+        return '"';
+      case "apos":
+        return "'";
+      case "nbsp":
+        return " ";
+      default: {
+        const hex = e.startsWith("#x");
+        const cp = hex ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
+        if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
+        return String.fromCodePoint(cp);
+      }
+    }
+  });
+  return decoded.replace(/\s+/g, " ").trim();
+}
+
+function tagCount(html: string, re: RegExp): number {
+  return html.match(re)?.length ?? 0;
+}
+
+test("文字だったものは、変換後も同じ文字のまま残る", () => {
+  const samples = [
+    "<p>&lt;div&gt; と a_b</p>",
+    "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>",
+    "<p>1. 番号ではない</p>",
+    "<p>1) 番号ではない</p>",
+    "<p>&amp;amp;</p>",
+    "<p>a | b<br>--- | ---</p>",
+    "<p># 見出しではない</p>",
+    "<p>- リストではない</p>",
+    "<p>+ 項目ではない</p>",
+    "<p>* 項目ではない</p>",
+    "<p>&gt; 引用ではない</p>",
+    "<p>```</p>",
+    "<p>~~~</p>",
+    "<p>---</p>",
+    "<p>===</p>",
+    "<p>題<br>===</p>",
+    "<p>題<br>---</p>",
+    "<p>[^1]</p>",
+    "<blockquote><p>[!NOTE]</p></blockquote>",
+    "<p>    字下げ</p>",
+    "<p>a\nb</p>",
+    '<a href="/a?x=1&amp;y=2">x</a>',
+    "<pre><code>&lt;div&gt;</code></pre>",
+    '<pre><code class="language-html">&lt;div class="x"&gt;a&lt;/div&gt;</code></pre>',
+    "<p><code>&lt;div&gt;</code></p>",
+    // Tiptap（StarterKit・TaskList）が出す形
+    "<p>段落です</p>",
+    "<p>1行目<br>2行目</p>",
+    "<h1>見出し1</h1>",
+    "<h2>見出し2</h2>",
+    "<h3>見出し3</h3>",
+    "<p><strong>太字</strong> と <em>斜体</em> と <s>取消</s> と <code>code</code></p>",
+    '<pre><code class="language-ts">const a = 1;</code></pre>',
+    "<blockquote><p>引用です</p></blockquote>",
+    "<ul><li><p>項目</p></li><li><p>次</p></li></ul>",
+    "<ul><li><p>親</p><ul><li><p>子</p></li></ul></li></ul>",
+    "<ol><li><p>いち</p></li><li><p>に</p></li></ol>",
+    '<ul data-type="taskList"><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"><span></span></label><div><p>済み</p></div></li><li data-checked="false" data-type="taskItem"><label><input type="checkbox"><span></span></label><div><p>未</p></div></li></ul>',
+    '<p><a href="https://example.com" rel="noopener noreferrer" target="_blank">リンク</a></p>',
+    "<hr>",
+    "<p></p>",
+    '<h2>見出し</h2><p>これは <strong>太字</strong> と <code>code</code> です</p><ul><li><p>項目</p></li></ul><ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label><input type="checkbox" checked></label><div><p>済み</p></div></li><li data-type="taskItem" data-checked="false"><label><input type="checkbox"></label><div><p>未</p></div></li></ul><blockquote><p>引用</p></blockquote><p><a href="https://example.com">Sen</a></p>',
+  ];
+
+  for (const html of samples) {
+    const md = htmlToMarkdown(html);
+    const back = markdownToHtml(md);
+    expect(markdownToText(md), html).toBe(htmlVisibleText(html));
+    expect(back, html).not.toContain("md-raw-html");
+    if (!/<table\b/i.test(html)) expect(back, html).not.toContain("<table");
+    expect(tagCount(back, /<h[1-6]\b/gi), html).toBe(tagCount(html, /<h[1-6]\b/gi));
+    expect(tagCount(back, /<(?:ul|ol)\b/gi), html).toBe(tagCount(html, /<(?:ul|ol)\b/gi));
+    expect(tagCount(back, /<blockquote\b/gi), html).toBe(tagCount(html, /<blockquote\b/gi));
+  }
 });

@@ -1,17 +1,9 @@
 // 課題の説明・プロジェクトの説明・コメントを、GitHub 互換の Markdown（GFM）の文字列で保存するための共通処理。
+// GitHub の Issue・コメントと同じく、1 回の改行は改行のまま表示する（リポジトリの .md ファイルとは違う）。
 // 検索・メンション・通知の抜粋に使う平文、空かどうかの判定、エディタを使わないときの表示用 HTML を作る。
 // Worker とブラウザの両方で動くよう、DOM も Node の API も cloudflare:workers も使わず、marked だけを使う。
 
 import { Marked, type RendererObject, type Token, type Tokens, type TokenizerThis } from "marked";
-
-// marked 17 の型には autolink が無い。実行時は未定義で、worker/markdown.ts は偽として扱う。
-declare module "marked" {
-  namespace Tokens {
-    interface Link {
-      autolink?: boolean;
-    }
-  }
-}
 
 export const ALERT_TYPES = ["note", "tip", "important", "warning", "caution"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
@@ -42,6 +34,9 @@ function escapeHtml(s: string): string {
     }
   });
 }
+
+/** `\&` の &。文字参照を戻す処理が、続く `amp;` などまで一緒に戻さないようにする */
+const ESCAPED_AMP = "\uE000";
 
 /** 文字参照を1回だけ戻す。nbsp は呼び出し側が空白か NBSP かを決める */
 function decodeEntities(s: string, nbsp: string): string {
@@ -446,7 +441,7 @@ function cellHtml(parser: { parseInline(tokens: Token[]): string }, tag: "th" | 
 const renderer: RendererObject = {
   html(token) {
     const raw = token.raw || token.text || "";
-    if (token.block) return `<pre class="md-raw-html"><code>${escapeHtml(raw.replace(/\r?\n$/, ""))}</code></pre>\n`;
+    if (token.block) return `<pre class="md-raw-html"><code>${escapeHtml(raw.replace(/(?:\r?\n)+$/, ""))}</code></pre>\n`;
     return `<code class="md-raw-html">${escapeHtml(raw)}</code>`;
   },
   heading({ tokens, depth }) {
@@ -488,7 +483,8 @@ const renderer: RendererObject = {
     return `<a href="${escapeHtml(href)}">${text}</a>`;
   },
   image(token) {
-    const alt = token.tokens?.length ? inlinePlain(token.tokens) : token.text;
+    // 平文抽出は \& を印に置く。代替テキストでは、今まで通り & に戻してから文字参照を処理する。
+    const alt = (token.tokens?.length ? inlinePlain(token.tokens) : token.text).replaceAll(ESCAPED_AMP, "&");
     const src = decodeEntities(token.href, "\u00A0");
     if (!isSafeImageSrc(src)) return escapeText(alt);
     const title = token.title ? ` title="${escapeHtml(decodeEntities(token.title, "\u00A0"))}"` : "";
@@ -542,14 +538,15 @@ const renderer: RendererObject = {
 };
 
 function buildMarked(): Marked {
-  const marked = new Marked({ gfm: true, breaks: false });
+  // GitHub の Issue・コメントと同じく、1 回の改行を <br> にする（.md ファイルのように 1 行にはまとめない）。
+  const marked = new Marked({ gfm: true, breaks: true });
   marked.use({ extensions: extensions(), renderer });
   return marked;
 }
 
 let shared: Marked | undefined;
 
-/** GFM（改行は <br> にしない）。注記・脚注・行内 HTML を組み込みの規則より先に試す */
+/** GFM。改行は GitHub の Issue・コメントと同じく <br>。注記・脚注・行内 HTML を組み込みの規則より先に試す */
 export function createMarked(): Marked {
   if (!shared) shared = buildMarked();
   return shared;
@@ -565,9 +562,10 @@ function inlinePlain(tokens: Token[] | undefined): string {
 function inlinePiece(token: Token): string {
   switch (token.type) {
     case "text":
-    case "escape":
     case "codespan":
       return token.text;
+    case "escape":
+      return token.text === "&" ? ESCAPED_AMP : token.text;
     case "br":
       return "\n";
     case "image":
@@ -707,18 +705,109 @@ function hasImageOrRule(tokens: Token[]): boolean {
 
 const textCache = new Map<string, string>();
 const TEXT_CACHE_LIMIT = 2000;
+/** キーと結果の長さの合計。Worker はリクエストをまたいで残るので、件数だけでは 128MB を超えうる */
+const TEXT_CACHE_MAX_CHARS = 4_000_000;
+/** これを超える 1 件は覚えない（キーと結果の長さの合計） */
+const TEXT_CACHE_MAX_ENTRY = 100_000;
+let textCacheChars = 0;
 
-/** 検索・メンション・抜粋用の文字だけ。同じ文字列は 2000 件まで覚えておく */
+function dropOldestText(): void {
+  const oldest = textCache.keys().next().value;
+  if (oldest === undefined) return;
+  const value = textCache.get(oldest) ?? "";
+  textCache.delete(oldest);
+  textCacheChars -= oldest.length + value.length;
+}
+
+/** テストからキャッシュの大きさだけを見る。中身は返さない */
+export function markdownTextCacheSize(): { entries: number; chars: number } {
+  return { entries: textCache.size, chars: textCacheChars };
+}
+
+/** 文字参照を戻したあと、エスケープしていた & を文字に戻す */
+function restorePlain(s: string): string {
+  return decodeEntities(s, " ").replaceAll(ESCAPED_AMP, "&");
+}
+
+/** 検索・メンション・抜粋用の文字だけ。同じ文字列は、2000 件かつ長さの合計 400 万文字まで覚えておく */
 export function markdownToText(md: string): string {
   const cached = textCache.get(md);
   if (cached !== undefined) return cached;
-  const text = decodeEntities(blocksText(createMarked().lexer(md)), " ").replace(/\s+/g, " ").trim();
+  const text = restorePlain(blocksText(createMarked().lexer(md))).replace(/\s+/g, " ").trim();
+  const weight = md.length + text.length;
+  if (weight > TEXT_CACHE_MAX_ENTRY) return text;
   textCache.set(md, text);
-  if (textCache.size > TEXT_CACHE_LIMIT) {
-    const oldest = textCache.keys().next().value;
-    if (oldest !== undefined) textCache.delete(oldest);
+  textCacheChars += weight;
+  while (textCache.size > TEXT_CACHE_LIMIT || textCacheChars > TEXT_CACHE_MAX_CHARS) {
+    const before = textCache.size;
+    dropOldestText();
+    if (textCache.size === before) break;
   }
   return text;
+}
+
+function plainLines(tokens: Token[]): string[] {
+  return tokens.flatMap((token) => plainBlockLines(token));
+}
+
+function plainBlockLines(token: Token): string[] {
+  switch (token.type) {
+    case "space":
+    case "hr":
+    case "def":
+    case "checkbox":
+    case "footnoteReference":
+      return [];
+    case "code":
+    case "codespan":
+      return token.text.replace(/\n$/, "").split("\n");
+    case "heading":
+    case "paragraph":
+    case "strong":
+    case "em":
+    case "del":
+    case "link":
+      return inlinePlain(token.tokens).split("\n");
+    case "blockquote":
+    case "alert":
+    case "footnoteDefinition":
+      return plainLines((token as Tokens.Generic).tokens ?? []);
+    case "list": {
+      const list = token as Tokens.List;
+      return list.items.flatMap((item) => plainLines(item.tokens));
+    }
+    case "table":
+      return tableLines(token as Tokens.Table);
+    case "html":
+      return htmlToPlain(token.text).split("\n");
+    case "text":
+      return (token.tokens?.length ? inlinePlain(token.tokens) : token.text).split("\n");
+    default:
+      if (token.type === "inlineHtml") return htmlToPlain(String(token.raw ?? "")).split("\n");
+      return (token as Tokens.Generic).tokens ? plainLines((token as Tokens.Generic).tokens ?? []) : [];
+  }
+}
+
+function tableLines(table: Tokens.Table): string[] {
+  return [table.header, ...table.rows].flatMap((row) => {
+    const cells = row.map((cell) => inlinePlain(cell.tokens).split("\n"));
+    const height = Math.max(1, ...cells.map((lines) => lines.length));
+    const lines: string[] = [];
+    for (let i = 0; i < height; i++) lines.push(cells.map((cell) => cell[i] ?? "").join(" | "));
+    return lines;
+  });
+}
+
+/**
+ * スプレッドシートの説明列用。段落・見出し・コードブロックの各行・引用・注記・脚注の定義、
+ * リスト項目、表の行、改行（br）を改行で区切る。1 行の中の空白はまとめ、空行は詰める。
+ * リンクの URL は含めず、HTML のタグは除く。結果は覚えない。
+ */
+export function markdownToPlainLines(md: string): string {
+  return plainLines(createMarked().lexer(md))
+    .map((line) => restorePlain(line).replace(/\s+/g, " ").trim())
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
 /** 空白だけ、または文字が無く画像も水平線も無いとき */

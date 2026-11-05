@@ -5,7 +5,9 @@ import {
   ALERT_TYPES,
   createMarked,
   isMarkdownBlank,
+  markdownTextCacheSize,
   markdownToHtml,
+  markdownToPlainLines,
   markdownToText,
   matchAlert,
   matchFootnoteDefinition,
@@ -118,11 +120,23 @@ test("markdownToText は検索に使う文字だけを残す", () => {
   expect(markdownToText("a&nbsp;&nbsp;b")).toBe("a b");
   expect(markdownToText("a&nbsp;&nbsp;b").includes("\u00A0")).toBe(false);
   expect(markdownToText("a\n\n  b")).toBe("a b");
+  expect(markdownToText("a\nb")).toBe("a b");
   expect(markdownToText("  a  ")).toBe("a");
   expect(markdownToText("hello @taro")).toBe("hello @taro");
   expect(markdownToText("hi [@taro](https://e.com/u)")).toBe("hi @taro");
   expect(markdownToText("use `@taro`")).toBe("use @taro");
   expect(markdownToText("hello @taro")).toBe(markdownToText("hello @taro"));
+});
+
+test("markdownToPlainLines はブロックの区切りを改行で残す", () => {
+  expect(markdownToPlainLines("段落1\n\n段落2")).toBe("段落1\n段落2");
+  expect(markdownToPlainLines("- 項目1\n- 項目2")).toBe("項目1\n項目2");
+  expect(markdownToPlainLines("# 見出し")).toBe("見出し");
+  expect(markdownToPlainLines("| A | B |\n| --- | --- |\n| 1 | 2 |")).toBe("A | B\n1 | 2");
+  expect(markdownToPlainLines("a\nb")).toBe("a\nb");
+  expect(markdownToPlainLines("```\ncode1\ncode2\n```")).toBe("code1\ncode2");
+  expect(markdownToPlainLines("[文字](https://secret.example/path)")).toBe("文字");
+  expect(markdownToPlainLines("<div>タグの中</div>")).toBe("タグの中");
 });
 
 test("isMarkdownBlank は文字も画像も水平線も無いときだけ真", () => {
@@ -148,6 +162,7 @@ test("markdownToHtml は構文を安全な HTML にする", () => {
   expect(markdownToHtml("1. 一\n2. 二")).toBe("<ol>\n<li>一</li>\n<li>二</li>\n</ol>");
   expect(markdownToHtml("3. 三")).toBe('<ol start="3">\n<li>三</li>\n</ol>');
   expect(markdownToHtml("a  \nb")).toBe("<p>a<br>b</p>");
+  expect(markdownToHtml("a\nb")).toBe("<p>a<br>b</p>");
   expect(markdownToHtml("---")).toBe("<hr>");
   expect(markdownToHtml("- [x] 済み\n- [ ] 未")).toBe(
     '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label><input type="checkbox" checked disabled></label><div><p>済み</p></div></li><li data-type="taskItem" data-checked="false"><label><input type="checkbox" disabled></label><div><p>未</p></div></li></ul>',
@@ -180,6 +195,7 @@ test("markdownToHtml は構文を安全な HTML にする", () => {
   expect(markdownToHtml("[^1]: 本文")).toBe('<div class="md-footnote" data-label="1">\n<p>本文</p>\n</div>');
   expect(markdownToHtml("see [^1]")).toBe('<p>see <sup class="md-footnote-ref" data-label="1">1</sup></p>');
   expect(markdownToHtml("<script>alert(1)</script>")).toBe('<pre class="md-raw-html"><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></pre>');
+  expect(markdownToHtml("<div>a</div>\n\n\n")).toBe('<pre class="md-raw-html"><code>&lt;div&gt;a&lt;/div&gt;</code></pre>');
   expect(markdownToHtml("foo <em>x</em> bar")).toBe('<p>foo <code class="md-raw-html">&lt;em&gt;</code>x<code class="md-raw-html">&lt;/em&gt;</code> bar</p>');
   expect(markdownToHtml("<!-- メモ -->")).toBe('<pre class="md-raw-html"><code>&lt;!-- メモ --&gt;</code></pre>');
 });
@@ -261,4 +277,18 @@ test("各構文は例外なく HTML になり、65,536 文字でも 1 秒以内"
   const html = markdownToHtml(md);
   expect(Date.now() - started).toBeLessThan(1000);
   expect(html.length).toBeGreaterThan(1000);
+});
+
+test("平文のキャッシュは、長い文字列を重ねても文字数の合計が 400 万を超えない", () => {
+  const before = markdownTextCacheSize();
+  markdownToText("あ".repeat(100_001));
+  expect(markdownTextCacheSize()).toEqual(before);
+
+  const piece = "x".repeat(40_000);
+  for (let i = 0; i < 150; i++) markdownToText(`${piece} ${i}`);
+  const after = markdownTextCacheSize();
+  expect(after.entries).toBeLessThanOrEqual(2000);
+  expect(after.entries).toBeGreaterThan(0);
+  expect(after.chars).toBeLessThanOrEqual(4_000_000);
+  expect(after.chars).toBeGreaterThan(3_000_000);
 });

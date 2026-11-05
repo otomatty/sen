@@ -3,6 +3,9 @@ import syncMetaSql from "../migrations/0002_sync_meta.sql?raw";
 import relationsSql from "../migrations/0003_issue_relations.sql?raw";
 import googleAuthSql from "../migrations/0004_google_auth.sql?raw";
 import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
+// sync.ts は db.ts を import する。writeChanges は移行の関数の中でしか呼ばないので、循環しても読み込み時には問題にならない。
+import { migrateBodiesToMarkdown } from "./markdown-migration";
+import { writeChanges } from "./sync";
 
 type Param = string | number | null;
 
@@ -34,12 +37,23 @@ export async function batch(db: D1Database, statements: D1PreparedStatement[]): 
 // ---- 自動マイグレーション ----
 // wrangler の `d1 migrations apply` と同じ d1_migrations テーブルを使うので、
 // どちらの方法で適用しても二重に実行されない。
-const MIGRATIONS: { name: string; sql: string }[] = [
+// 0006 は SQL ファイルを置かない。`wrangler d1 migrations apply` は migrations/ の SQL だけを流すので、
+// 本文の HTML → Markdown は新しい Worker が最初のリクエストで行う。
+type Migration = { name: string; sql: string } | { name: string; run: (db: D1Database) => Promise<void> };
+
+const MIGRATIONS: Migration[] = [
   { name: "0001_init.sql", sql: initSql },
   { name: "0002_sync_meta.sql", sql: syncMetaSql },
   { name: "0003_issue_relations.sql", sql: relationsSql },
   { name: "0004_google_auth.sql", sql: googleAuthSql },
   { name: "0005_ai_tokens.sql", sql: aiTokensSql },
+  {
+    name: "0006_markdown_bodies",
+    run: (db) =>
+      migrateBodiesToMarkdown(db, (wsId) =>
+        writeChanges(db, wsId, [{ entity: "workspace", entityId: wsId, op: "upsert" }]),
+      ),
+  },
 ];
 
 export function splitSql(sql: string): string[] {
@@ -73,6 +87,10 @@ async function migrate(db: D1Database) {
   const applied = new Set((await all<{ name: string }>(db, "SELECT name FROM d1_migrations")).map((r) => r.name));
   for (const m of MIGRATIONS) {
     if (applied.has(m.name)) continue;
+    if ("run" in m) {
+      await m.run(db);
+      continue;
+    }
     const statements = splitSql(m.sql).map((s) => db.prepare(s));
     statements.push(db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(m.name));
     await db.batch(statements);

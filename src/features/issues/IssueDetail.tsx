@@ -17,7 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { Issue } from "../../../shared/types";
-import { priorityLabel } from "../../../shared/constants";
+import { ISSUE_TITLE_MAX_LENGTH, priorityLabel } from "../../../shared/constants";
 import { useData } from "../../store/data";
 import { engine } from "../../store/engine";
 import { archiveIssues, createIssue, restoreIssues, toggleSubscription, updateIssues } from "../../store/actions";
@@ -236,6 +236,7 @@ function SubIssues({ issue, adding, setAdding }: { issue: Issue; adding: boolean
             autoFocus
             value={title}
             placeholder="サブ課題のタイトル（Enter で追加、Esc で閉じる）"
+            maxLength={ISSUE_TITLE_MAX_LENGTH}
             data-testid="sub-issue-input"
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => {
@@ -421,6 +422,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
             <AutoTextarea
               className="detail-title"
               value={title}
+              maxLength={ISSUE_TITLE_MAX_LENGTH}
               data-testid="issue-title"
               placeholder="課題のタイトル"
               onFocus={() => (titleFocused.current = true)}

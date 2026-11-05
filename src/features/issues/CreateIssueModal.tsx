@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router";
 import { CalendarDays, ChevronDown, CornerLeftUp, Hash, Tag, X, Box, UserCircle2 } from "lucide-react";
-import { priorityLabel } from "../../../shared/constants";
+import { ISSUE_TITLE_MAX_LENGTH, priorityLabel } from "../../../shared/constants";
 import { createIssue, defaultStateFor } from "../../store/actions";
 import { useData } from "../../store/data";
 import { cycleName, useTeams } from "../../store/selectors";
@@ -152,6 +152,7 @@ function CreateIssueDialog() {
           className="create-title"
           placeholder="課題のタイトル"
           value={draft.title}
+          maxLength={ISSUE_TITLE_MAX_LENGTH}
           data-testid="create-title"
           onChange={(e) => set({ title: e.target.value.replace(/\n/g, "") })}
           onKeyDown={(e) => {

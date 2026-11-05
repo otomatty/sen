@@ -1,4 +1,5 @@
-import { DEFAULT_STATES, PALETTE, AVATAR_COLORS } from "../shared/constants";
+import { AVATAR_COLORS, DEFAULT_STATES, ISSUE_TITLE_MAX_LENGTH, MARKDOWN_MAX_LENGTH, PALETTE } from "../shared/constants";
+import { isMarkdownBlank, markdownToText } from "../shared/markdown";
 import { addDays, isValidYmd, mondayOf, todayYmd } from "../shared/dates";
 import type { ActivityType, IssueRelation, Me, Mutation, NotificationType, RelationType, Role, StateType } from "../shared/types";
 import { all, first, run, stmt, batch } from "./db";
@@ -48,29 +49,13 @@ function cleanText(v: unknown, max: number, field: string): string {
   return t;
 }
 
-/** 表示は必ず ProseMirror のスキーマを通すが、念のため危険なものは保存前に取り除く */
-export function sanitizeHtml(v: unknown, max = 200_000): string {
-  if (typeof v !== "string") return "";
-  if (v.length > max) fail("本文が長すぎます");
-  return v
-    .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
-    .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*\/?>/gi, "")
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/(href|src)\s*=\s*("|')\s*(javascript|data|vbscript):[^"']*\2/gi, '$1="#"');
-}
-
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|li|h\d|blockquote|pre)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&")
-    .trim();
+/** 説明・コメントは、受け取った Markdown をそのまま保存する。trim も改行の変換もしない */
+function cleanMarkdown(v: unknown, field: string): string {
+  if (typeof v !== "string") fail(`${field}が不正です`);
+  if (v.length > MARKDOWN_MAX_LENGTH) {
+    fail(`${field}は${MARKDOWN_MAX_LENGTH.toLocaleString("en-US")}文字以内で入力してください`);
+  }
+  return v;
 }
 
 function parseJsonArray(v: unknown): string[] {
@@ -345,7 +330,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       assertId(a.id);
       if (await first(db, "SELECT id FROM issues WHERE id = ?", a.id)) fail("ID が重複しています", 409);
       const team = await getTeam(ctx, a.teamId);
-      const title = cleanText(a.title, 500, "タイトル");
+      const title = cleanText(a.title, ISSUE_TITLE_MAX_LENGTH, "タイトル");
       const stateId = a.stateId ? (await getState(ctx, a.stateId, team.id)).id : await defaultStateId(ctx, team.id);
       const state = await getState(ctx, stateId);
       const priority = Number.isInteger(a.priority) && a.priority >= 0 && a.priority <= 4 ? a.priority : 0;
@@ -380,7 +365,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         team.id,
         number,
         title,
-        sanitizeHtml(a.description ?? ""),
+        cleanMarkdown(a.description ?? "", "説明"),
         stateId,
         priority,
         assigneeId,
@@ -425,13 +410,13 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         acts.push(["team", { from: row.team_id, to: teamId }]);
       }
       if (p.title !== undefined) {
-        const t = cleanText(p.title, 500, "タイトル");
+        const t = cleanText(p.title, ISSUE_TITLE_MAX_LENGTH, "タイトル");
         if (t !== row.title) {
           set.title = t;
           acts.push(["title", { from: row.title, to: t }]);
         }
       }
-      if (p.description !== undefined) set.description = sanitizeHtml(p.description);
+      if (p.description !== undefined) set.description = cleanMarkdown(p.description, "説明");
       if (p.stateId !== undefined || set.state_id) {
         const newStateId = p.stateId ?? set.state_id;
         const st = await getState(ctx, newStateId, teamId);
@@ -587,9 +572,9 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
     case "comment.create": {
       assertId(a.id);
       const issue = await getIssue(ctx, a.issueId);
-      const body = sanitizeHtml(a.body, 100_000);
-      const text = htmlToText(body);
-      if (!text) fail("コメントを入力してください");
+      const body = cleanMarkdown(a.body, "コメント");
+      if (isMarkdownBlank(body)) fail("コメントを入力してください");
+      const text = markdownToText(body);
       await run(
         db,
         "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -632,8 +617,8 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const c = await first<Row>(db, "SELECT * FROM comments WHERE id = ? AND workspace_id = ?", a.id, ws.id);
       if (!c) fail("コメントが見つかりません", 404);
       if (c.user_id !== user.id) fail("自分のコメントのみ編集できます", 403);
-      const body = sanitizeHtml(a.body, 100_000);
-      if (!htmlToText(body)) fail("コメントを入力してください");
+      const body = cleanMarkdown(a.body, "コメント");
+      if (isMarkdownBlank(body)) fail("コメントを入力してください");
       await run(db, "UPDATE comments SET body = ?, updated_at = ?, edited_at = ? WHERE id = ?", body, now, now, a.id);
       touch(ctx, "comment", a.id);
       return;
@@ -714,7 +699,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         a.id,
         ws.id,
         name,
-        sanitizeHtml(a.description ?? ""),
+        cleanMarkdown(a.description ?? "", "説明"),
         ["backlog", "planned", "started", "paused", "completed", "canceled"].includes(a.status) ? a.status : "planned",
         leadId,
         JSON.stringify(teamIds),
@@ -737,7 +722,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const p = (a.patch ?? {}) as Row;
       const set: Row = {};
       if (p.name !== undefined) set.name = cleanText(p.name, 120, "プロジェクト名");
-      if (p.description !== undefined) set.description = sanitizeHtml(p.description);
+      if (p.description !== undefined) set.description = cleanMarkdown(p.description, "説明");
       if (p.status !== undefined) {
         if (!["backlog", "planned", "started", "paused", "completed", "canceled"].includes(p.status)) fail("状態が不正です");
         set.status = p.status;

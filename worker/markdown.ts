@@ -1,120 +1,7 @@
-// AI ツールは Markdown で書き、Sen は Tiptap（StarterKit + チェックリスト + リンク、見出しは h1〜h3）の HTML で保存する。
-// その間を変換する。Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
+// 既存データを HTML から Markdown に移すときだけ使う。
+// 新しい本文は、受け取った Markdown をそのまま保存する。表示用の HTML は shared/markdown.ts が作る。
+// Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
 
-import { Marked, type Tokens } from "marked";
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/** リンクにしてよい href だけを通す（javascript: などはテキストにする）。画面の sanitize と同じく / と # も許可する */
-function isSafeHref(href: string): boolean {
-  if (!href || /[\u0000-\u0020]/.test(href)) return false;
-  return /^(https?:|mailto:|\/|#)/i.test(href);
-}
-
-/** タスク項目の中身を、Tiptap と同じくブロック（最低でも p）にする */
-function taskBody(html: string): string {
-  const t = html.replace(/\n+$/, "").trim();
-  if (!t) return "<p></p>";
-  const block = /<(?:ul|ol|p|pre|blockquote|h[1-6]|hr|div)\b/i.exec(t);
-  if (!block) return `<p>${t}</p>`;
-  if (block.index === 0) return t;
-  const before = t.slice(0, block.index).trim();
-  const after = t.slice(block.index);
-  return before ? `<p>${before}</p>${after}` : after;
-}
-
-function taskCheckbox(checked: boolean): string {
-  return checked ? `<input type="checkbox" checked disabled>` : `<input type="checkbox" disabled>`;
-}
-
-function renderTaskItem(parser: { parse(tokens: Tokens.ListItem["tokens"]): string }, item: Tokens.ListItem): string {
-  const checked = !!item.checked;
-  const inner = taskBody(parser.parse(item.tokens));
-  return `<li data-type="taskItem" data-checked="${checked}"><label>${taskCheckbox(checked)}</label><div>${inner}</div></li>`;
-}
-
-const marked = new Marked({
-  async: false,
-  gfm: true,
-  breaks: true,
-  renderer: {
-    html(token) {
-      const escaped = escapeHtml(token.text);
-      return token.block ? `${escaped}\n` : escaped;
-    },
-    heading({ tokens, depth }) {
-      const level = Math.min(depth, 3);
-      return `<h${level}>${this.parser.parseInline(tokens)}</h${level}>\n`;
-    },
-    del({ tokens }) {
-      return `<s>${this.parser.parseInline(tokens)}</s>`;
-    },
-    link(token) {
-      const text = token.autolink ? escapeHtml(token.text) : this.parser.parseInline(token.tokens);
-      // marked は href に &amp; などの文字参照を残す。戻してから安全性を見て、属性値では一度だけエスケープする
-      const href = decodeEntities(token.href);
-      if (!isSafeHref(href)) return text;
-      return `<a href="${escapeHtml(href)}">${text}</a>`;
-    },
-    image(token) {
-      const href = decodeEntities(token.href);
-      const label = token.text.trim() ? token.text.trim() : href;
-      if (!isSafeHref(href)) return escapeHtml(label);
-      return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
-    },
-    table(token) {
-      return `<pre><code>${escapeHtml(token.raw.replace(/\n$/, ""))}</code></pre>\n`;
-    },
-    checkbox() {
-      return "";
-    },
-    list(token) {
-      // 通常の項目とタスク項目が混ざっていたら、連続するまとまりごとに別のリストへ分ける。
-      // タスクはチェックリスト、通常は元の ul / ol。番号付きを分けたあとは start で番号を続ける。
-      const groups: { task: boolean; items: Tokens.ListItem[] }[] = [];
-      for (const item of token.items) {
-        const task = !!item.task;
-        const last = groups[groups.length - 1];
-        if (last && last.task === task) last.items.push(item);
-        else groups.push({ task, items: [item] });
-      }
-      const ordered = token.ordered;
-      let n = ordered && typeof token.start === "number" && token.start > 0 ? token.start : 1;
-      let html = "";
-      for (const group of groups) {
-        if (group.task) {
-          html += `<ul data-type="taskList">${group.items.map((item) => renderTaskItem(this.parser, item)).join("")}</ul>\n`;
-        } else {
-          const tag = ordered ? "ol" : "ul";
-          const startAttr = ordered && n !== 1 ? ` start="${n}"` : "";
-          let body = "";
-          for (const item of group.items) {
-            const inner = this.parser.parse(item.tokens).replace(/^\n+|\n+$/g, "");
-            body += `<li>${inner}</li>\n`;
-          }
-          html += `<${tag}${startAttr}>\n${body}</${tag}>\n`;
-        }
-        if (ordered) n += group.items.length;
-      }
-      return html;
-    },
-  },
-});
-
-/** Markdown を、Sen が保存する Tiptap の HTML にする */
-export function markdownToHtml(md: string): string {
-  if (!md || !md.trim()) return "";
-  return marked.parse(md, { async: false }).replace(/\n+$/, "");
-}
-
-// ---- HTML → Markdown（DOM を使わない小さなパーサー） ----
 
 interface El {
   type: "el";
@@ -177,30 +64,50 @@ function decodeEntities(s: string): string {
 }
 
 function escapeInline(s: string): string {
-  return s
-    .replace(/\\/g, "\\\\")
-    .replace(/([*`[\]])/g, "\\$1")
-    // user_id のような語中の _ は読めるように残す。前後が英数字のときだけ。
-    .replace(/_/g, (match: string, offset: number, str: string) => {
-      const prev = str[offset - 1] ?? "";
-      const next = str[offset + 1] ?? "";
-      if (/[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next)) return match;
-      return "\\_";
-    })
-    .replace(/~~/g, "\\~\\~");
+  return (
+    s
+      // HTML のテキスト中の改行は空白と同じ。残すと、表示側の改行で行が増える。
+      .replace(/\n/g, " ")
+      .replace(/\\/g, "\\\\")
+      .replace(/([*`[\]])/g, "\\$1")
+      .replace(/\|/g, "\\|")
+      // 生の HTML や自動リンクとして読まれないようにする。
+      .replace(/<(?=[A-Za-z/!?])/g, "\\<")
+      // `&amp;amp;` のように見えていた文字が、`&` に化けないようにする。
+      .replace(/&(?=#?[A-Za-z0-9]+;)/g, "\\&")
+      // user_id のような語中の _ は読めるように残す。前後が英数字のときだけ。
+      .replace(/_/g, (match: string, offset: number, str: string) => {
+        const prev = str[offset - 1] ?? "";
+        const next = str[offset + 1] ?? "";
+        if (/[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next)) return match;
+        return "\\_";
+      })
+      .replace(/~~/g, "\\~\\~")
+  );
 }
 
-/** 段落の行頭が見出しやリストとして読まれないようにする */
+/**
+ * 段落の各行を、見出し・リスト・引用・フェンス・水平線・下線見出しとして読まれないようにする。
+ * 行頭の空白は HTML では見えないので取り除く（4 個以上残るとコードブロックになる）。
+ */
 function protectLines(s: string): string {
   return s
     .split("\n")
-    .map((line) => {
-      if (/^\s{0,3}(#{1,6}\s|>|[-+]\s|\d{1,9}[.)]\s)/.test(line) || /^\s{0,3}([-*_])\1{2,}\s*$/.test(line)) {
-        return line.replace(/^(\s{0,3})(\S)/, "$1\\$2");
-      }
-      return line;
-    })
+    .map((line) => escapeLineStart(line.replace(/^[ \t]+/, "")))
     .join("\n");
+}
+
+function escapeLineStart(line: string): string {
+  // `1.` の数字の前に \ を置いてもエスケープにならない。点か括弧の前に置く。
+  const ordered = /^(\d{1,9})([.)])(?=[ \t]|$)/.exec(line);
+  if (ordered) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
+  if (/^#{1,6}(?:[ \t]|$)/.test(line)) return `\\${line}`;
+  if (line.startsWith(">")) return `\\${line}`;
+  if (/^[-+*](?:[ \t]|$)/.test(line)) return `\\${line}`;
+  if (/^(?:`{3,}|~{3,})/.test(line)) return `\\${line}`;
+  if (/^(?:=+|-+)[ \t]*$/.test(line)) return `\\${line}`;
+  if (/^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) return `\\${line}`;
+  return line;
 }
 
 interface TagInfo {
@@ -593,7 +500,7 @@ function collapseBlankLines(md: string): string {
   return out.join("\n").trim();
 }
 
-/** Sen が保存した HTML を Markdown に戻す */
+/** 保存済みの HTML を Markdown にする。データの移行以外では使わない */
 export function htmlToMarkdown(html: string): string {
   if (!html || !html.trim()) return "";
   const root = parseHtml(html.replace(/\r\n?/g, "\n"));

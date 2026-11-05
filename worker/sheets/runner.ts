@@ -6,7 +6,7 @@ import { isValidYmd, todayYmd } from "../../shared/dates";
 import type { SheetSyncStatus, StateType } from "../../shared/types";
 import { all, ensureMigrated, first } from "../db";
 import type { Env, WorkspaceRow } from "../env";
-import { htmlToText } from "../mutations";
+import { markdownToPlainLines } from "../../shared/markdown";
 import { sheetsConfig, spreadsheetUrl } from "./config";
 import { batchUpdate, getAccessToken, getSheets, parseServiceAccountKey, SheetsError } from "./google";
 import { buildReport, buildSheetRequests, type ReportInput } from "./report";
@@ -123,7 +123,7 @@ export async function loadReportInput(db: D1Database, ws: WorkspaceRow, origin: 
         id: issue.id,
         identifier: key ? `${key}-${issue.number}` : String(issue.number),
         title: issue.title,
-        descriptionText: htmlToText(issue.description ?? ""),
+        descriptionText: markdownToPlainLines(issue.description ?? ""),
         projectId: issue.project_id,
         stateName: state?.name ?? "",
         stateType: asStateType(state?.type),

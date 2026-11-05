@@ -181,9 +181,9 @@ test("AI が課題をまとめて作り、画面にリアルタイムで「Claud
     await titleRow(page, PARENT).locator(".row-title-text").click();
     await expect(page.getByTestId("issue-title")).toHaveValue(PARENT);
     const description = page.getByTestId("issue-description");
-    await expect(description.locator("h2")).toContainText("目的");
-    await expect(description.locator("ul[data-type='taskList']")).toContainText("計測を入れる");
-    await expect(description.getByRole("checkbox", { name: /計測を入れる/ })).toBeVisible();
+    // エディタは Phase 3 まで HTML を描画する。保存された Markdown の文字列が画面に出ることを確かめる。
+    await expect(description).toContainText("## 目的");
+    await expect(description).toContainText("- [ ] 計測を入れる");
     await expect(page.getByTestId("activity").getByTestId("via-badge").first()).toContainText("Claude Code 経由");
     await expect(page.getByTestId("sub-issues").locator(".row-title-text")).toHaveText([SUB1, SUB2]);
 
@@ -195,7 +195,7 @@ test("AI が課題をまとめて作り、画面にリアルタイムで「Claud
 
     await callJson(client, "add_comment", { issue: parent.id, body: "**確認しました**" });
     const comment = page.getByTestId("comment").filter({ hasText: "確認しました" });
-    await expect(comment.locator("strong")).toHaveText("確認しました");
+    await expect(comment).toContainText("**確認しました**");
     await expect(comment.getByTestId("via-badge")).toContainText("Claude Code 経由");
 
     const found = await callJson<{ total: number; issues: { title: string }[] }>(client, "search_issues", { query: "決済" });
