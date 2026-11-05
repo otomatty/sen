@@ -175,7 +175,7 @@ class SyncEngine {
   }
 
   /** キャッシュから状態を復元する */
-  private hydrate(snap: { applied: number; meId: string; workspace: unknown; workspaces: unknown; collections: Record<string, unknown[]> }) {
+  private hydrate(snap: { applied: number; meId: string; workspace: unknown; collections: Record<string, unknown[]> }) {
     this.resetBase();
     for (const c of COLLECTIONS) {
       const m = this.base.get(c)!;
@@ -187,7 +187,6 @@ class SyncEngine {
       error: null,
       meId: snap.meId,
       workspace: snap.workspace as DataState["workspace"],
-      workspaces: snap.workspaces as DataState["workspaces"],
       threads: {},
     };
     for (const c of COLLECTIONS) view[c] = this.computeCollection(c) as never;
@@ -211,7 +210,6 @@ class SyncEngine {
         applied: this.applied,
         meId: st.meId,
         workspace: st.workspace,
-        workspaces: st.workspaces,
         collections,
       });
     }, 1500);
@@ -278,7 +276,6 @@ class SyncEngine {
       error: null,
       meId: data.me.id,
       workspace: data.workspace,
-      workspaces: data.workspaces,
       threads: {},
       comments: {},
       activities: {},

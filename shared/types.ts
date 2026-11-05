@@ -215,6 +215,7 @@ export interface SyncChange {
 export interface BootstrapPayload {
   me: Me;
   workspace: Workspace;
+  /** 今のクライアントは /api/me の一覧を使う。古い版のクライアントのために残している */
   workspaces: WorkspaceSummary[];
   users: User[];
   teams: Team[];

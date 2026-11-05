@@ -12,7 +12,6 @@ import type {
   User,
   WorkflowState,
   Workspace,
-  WorkspaceSummary,
 } from "../../shared/types";
 
 export type SyncStatus = "synced" | "syncing" | "offline";
@@ -22,7 +21,6 @@ export interface DataState {
   error: string | null;
   meId: string | null;
   workspace: Workspace | null;
-  workspaces: WorkspaceSummary[];
   users: Record<string, User | Me>;
   teams: Record<string, Team>;
   states: Record<string, WorkflowState>;
@@ -44,7 +42,6 @@ export const initialData: DataState = {
   error: null,
   meId: null,
   workspace: null,
-  workspaces: [],
   users: {},
   teams: {},
   states: {},

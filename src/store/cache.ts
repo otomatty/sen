@@ -10,7 +10,6 @@ export interface Snapshot {
   applied: number;
   meId: string;
   workspace: unknown;
-  workspaces: unknown;
   collections: Record<string, unknown[]>;
 }
 
