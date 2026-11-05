@@ -102,6 +102,26 @@ async function revokePending(db: D1Database, workspaceId: string, email: string,
   );
 }
 
+/** 有効な未承諾の招待の数。emails を渡したときは、そのアドレス宛てのものだけ数える */
+async function countOpenInvitations(
+  db: D1Database,
+  workspaceId: string,
+  now: number,
+  emails?: string[],
+): Promise<number> {
+  const row = await first<{ c: number }>(
+    db,
+    emails
+      ? `SELECT COUNT(*) AS c FROM invitations
+     WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? AND email IN (${emails.map(() => "?").join(",")})`
+      : "SELECT COUNT(*) AS c FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+    workspaceId,
+    now,
+    ...(emails ?? []),
+  );
+  return row?.c ?? 0;
+}
+
 /** 招待を 1 件作る。メールを送れたときは email_sent_at が入っている。リンクはこの戻り値にだけ載る */
 async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): Promise<InvitationIssued> {
   const db = c.env.DB;
@@ -221,22 +241,10 @@ export async function createInvitations(c: Context<AppEnv>) {
   if (blocked.length) return err(c, `次のアドレスは招待できません：${blocked.join("、")}`);
 
   const now = Date.now();
-  const pending = await first<{ c: number }>(
-    db,
-    "SELECT COUNT(*) AS c FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
-    ws.id,
-    now,
-  );
-  const replacing = await first<{ c: number }>(
-    db,
-    `SELECT COUNT(*) AS c FROM invitations
-     WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? AND email IN (${emails.map(() => "?").join(",")})`,
-    ws.id,
-    now,
-    ...emails,
-  );
+  const pending = await countOpenInvitations(db, ws.id, now);
+  const replacing = await countOpenInvitations(db, ws.id, now, emails);
   // 同じアドレスの作り直しは件数を増やさない
-  if ((pending?.c ?? 0) - (replacing?.c ?? 0) + emails.length > MAX_PENDING) {
+  if (pending - replacing + emails.length > MAX_PENDING) {
     return err(c, `未承諾の招待は${MAX_PENDING}件までです`);
   }
 
@@ -261,7 +269,14 @@ export async function resendInvitation(c: Context<AppEnv>) {
   if (!row || row.accepted_at != null || row.revoked_at != null) return err(c, "招待が見つかりません", 404);
   const domains = parseAllowedDomains(ws.allowed_domains);
   if (!isEmailAllowed(row.email, domains)) return err(c, domainMessage(domains));
-  await revokePending(c.env.DB, ws.id, row.email, Date.now());
+  const now = Date.now();
+  const pending = await countOpenInvitations(c.env.DB, ws.id, now);
+  const replacing = await countOpenInvitations(c.env.DB, ws.id, now, [row.email]);
+  // 期限切れの再送は件数に入っていなかった招待を有効に戻す。有効な再送は 1 件取り消して 1 件作るだけ
+  if (pending - replacing + 1 > MAX_PENDING) {
+    return err(c, `未承諾の招待は${MAX_PENDING}件までです`);
+  }
+  await revokePending(c.env.DB, ws.id, row.email, now);
   return c.json(await issueInvitation(c, row.email, asRole(row.role)));
 }
 
