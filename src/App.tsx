@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AppShell, Toasts } from "./app/AppShell";
-import { lastWorkspaceKey, loadSession, useSession } from "./app/session";
+import { loadSession, pickWorkspaceKey, useSession } from "./app/session";
 import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPages";
 import { IssuePage, MyIssuesPage, SearchPage, TeamIssuesPage, WorkspaceHome } from "./features/issues/pages";
 import { InboxPage } from "./features/inbox/InboxPage";
@@ -32,8 +32,7 @@ function Root() {
   if (session.status === "anon") {
     return <Navigate to={shortcut ? `/login?next=${encodeURIComponent(`/?open=${shortcut}`)}` : "/login"} replace />;
   }
-  const last = lastWorkspaceKey();
-  const key = session.workspaces.find((w) => w.urlKey === last)?.urlKey ?? session.workspaces[0]?.urlKey;
+  const key = pickWorkspaceKey(session.workspaces, session.defaultWorkspaceId);
   if (!key) return <Navigate to="/new-workspace" replace />;
   if (shortcut) return <Navigate to={`/${key}${SHORTCUTS[shortcut]}`} state={shortcut === "new-issue" ? { createIssue: true } : null} replace />;
   return <Navigate to={`/${key}/my-issues`} replace />;
@@ -70,7 +69,7 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   useEffect(() => {
-    loadSession().catch(() => useSession.setState({ status: "anon" }));
+    loadSession().catch(() => useSession.setState({ status: "anon", defaultWorkspaceId: null }));
   }, []);
   return (
     <>

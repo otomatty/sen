@@ -166,7 +166,7 @@ export function AppShell() {
   useEffect(() => {
     const off1 = engine.onError((msg) => toast(msg, { kind: "error" }));
     const off2 = engine.onUnauthorized(() => {
-      useSession.setState({ status: "anon" });
+      useSession.setState({ status: "anon", defaultWorkspaceId: null });
       navigate(`/login?next=${encodeURIComponent(location.pathname)}`);
     });
     return () => {

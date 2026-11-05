@@ -245,6 +245,53 @@ function touch(ctx: MutationCtx, entity: Change["entity"], entityId: string) {
   ctx.changes.push({ entity, entityId, op: "upsert" });
 }
 
+/** user.update と同じ形で、本人にだけ設定を含むユーザー行を知らせる */
+function notifyUser(ctx: MutationCtx, cur: Row, name: string, avatarColor: string, settings: string) {
+  const user = ctx.user;
+  touch(ctx, "user", user.id);
+  ctx.changes.push({
+    entity: "user",
+    entityId: user.id,
+    op: "upsert",
+    userId: user.id,
+    data: {
+      id: user.id,
+      name,
+      email: cur.email,
+      avatarColor,
+      role: ctx.role,
+      createdAt: cur.created_at,
+      settings: JSON.parse(settings || "{}"),
+    },
+  });
+}
+
+const FAVORITE_TYPES = new Set(["project", "issue", "cycle", "view"]);
+
+function readUserSettings(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || !raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function readFavorite(v: unknown): { type: string; id: string } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) fail("お気に入りが不正です");
+  const type = (v as { type?: unknown }).type;
+  const id = (v as { id?: unknown }).id;
+  if (typeof type !== "string" || !FAVORITE_TYPES.has(type)) fail("お気に入りが不正です");
+  if (typeof id !== "string" || id.length < 1 || id.length > 100) fail("お気に入りが不正です");
+  return { type, id };
+}
+
+function sameFavorite(f: unknown, fav: { type: string; id: string }) {
+  return !!f && typeof f === "object" && (f as { type?: unknown }).type === fav.type && (f as { id?: unknown }).id === fav.id;
+}
+
 function stateTimestamps(type: StateType, row: Row, now: number) {
   switch (type) {
     case "started":
@@ -1023,22 +1070,42 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         now,
         user.id,
       );
-      touch(ctx, "user", user.id);
-      ctx.changes.push({
-        entity: "user",
-        entityId: user.id,
-        op: "upsert",
-        userId: user.id,
-        data: {
-          id: user.id,
-          name,
-          email: cur.email,
-          avatarColor: color,
-          role: ctx.role,
-          createdAt: cur.created_at,
-          settings: JSON.parse(settings || "{}"),
-        },
-      });
+      notifyUser(ctx, cur, name, color, settings);
+      return;
+    }
+
+    case "user.updateSettings": {
+      const cur = await first<Row>(db, "SELECT * FROM users WHERE id = ?", user.id);
+      if (!cur) fail("ユーザーが見つかりません", 404);
+      const settings = readUserSettings(cur.settings);
+      if (a.set !== undefined) {
+        if (!a.set || typeof a.set !== "object" || Array.isArray(a.set)) fail("設定が不正です");
+        const patch: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(a.set as Record<string, unknown>)) {
+          if (key === "welcomeDismissed") {
+            if (typeof value !== "boolean") fail("設定が不正です");
+          } else if (key === "theme") {
+            if (value !== "system" && value !== "light" && value !== "dark") fail("設定が不正です");
+          } else fail("設定が不正です");
+          patch[key] = value;
+        }
+        Object.assign(settings, patch);
+      }
+      if (a.addFavorite !== undefined) {
+        const fav = readFavorite(a.addFavorite);
+        const favorites = Array.isArray(settings.favorites) ? [...settings.favorites] : [];
+        if (!favorites.some((f) => sameFavorite(f, fav))) favorites.push(fav);
+        settings.favorites = favorites;
+      }
+      if (a.removeFavorite !== undefined) {
+        const fav = readFavorite(a.removeFavorite);
+        const favorites = Array.isArray(settings.favorites) ? settings.favorites : [];
+        settings.favorites = favorites.filter((f) => !sameFavorite(f, fav));
+      }
+      const serialized = JSON.stringify(settings);
+      if (serialized.length > 20_000) fail("設定が大きすぎます");
+      await run(db, "UPDATE users SET settings = ?, updated_at = ? WHERE id = ?", serialized, now, user.id);
+      notifyUser(ctx, cur, cur.name, cur.avatar_color, serialized);
       return;
     }
 
