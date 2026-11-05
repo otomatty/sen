@@ -3,6 +3,7 @@ import syncMetaSql from "../migrations/0002_sync_meta.sql?raw";
 import relationsSql from "../migrations/0003_issue_relations.sql?raw";
 import googleAuthSql from "../migrations/0004_google_auth.sql?raw";
 import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
+import defaultWorkspaceSql from "../migrations/0006_default_workspace.sql?raw";
 
 type Param = string | number | null;
 
@@ -40,6 +41,7 @@ const MIGRATIONS: { name: string; sql: string }[] = [
   { name: "0003_issue_relations.sql", sql: relationsSql },
   { name: "0004_google_auth.sql", sql: googleAuthSql },
   { name: "0005_ai_tokens.sql", sql: aiTokensSql },
+  { name: "0006_default_workspace.sql", sql: defaultWorkspaceSql },
 ];
 
 export function splitSql(sql: string): string[] {

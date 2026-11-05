@@ -114,3 +114,77 @@ test("初めて作るワークスペースにだけサンプルが入り、2 つ
   expect(second.cycles).toHaveLength(0);
   expect(labelNames(second.labels)).toEqual(["バグ", "機能", "改善"].sort());
 });
+
+test("最初に開くワークスペースを選ぶと、最後に開いたワークスペースより優先して開く", async ({ page }) => {
+  const { ws: ws1 } = await signupViaUi(page, { workspace: "ワークスペース1" });
+  await waitForSynced(page);
+
+  const created = await page.request.post("/api/workspaces", {
+    data: { name: "ワークスペース2" },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const ws2 = ((await created.json()) as { workspaceKey: string }).workspaceKey;
+
+  const before = (await (await page.request.get("/api/me")).json()) as { workspaces: { id: string; urlKey: string }[] };
+  const id1 = before.workspaces.find((w) => w.urlKey === ws1)?.id;
+  expect(id1).toBeTruthy();
+
+  await page.goto(`/${ws2}/settings/profile`);
+  await expect(page.getByTestId("default-workspace")).toBeVisible();
+  await page.getByTestId("default-workspace").selectOption(id1!);
+  await expect
+    .poll(async () => ((await (await page.request.get("/api/me")).json()) as { defaultWorkspaceId: string | null }).defaultWorkspaceId)
+    .toBe(id1);
+
+  await page.goto("/");
+  await expect(page).toHaveURL(new RegExp(`/${ws1}/`));
+
+  await page.goto(`/${ws2}/settings/profile`);
+  await expect(page.getByTestId("default-workspace")).toBeVisible();
+  await page.getByTestId("default-workspace").selectOption({ label: "最後に開いたワークスペース" });
+  await expect
+    .poll(async () => ((await (await page.request.get("/api/me")).json()) as { defaultWorkspaceId: string | null }).defaultWorkspaceId)
+    .toBeNull();
+
+  await page.goto("/");
+  await expect(page).toHaveURL(new RegExp(`/${ws2}/`));
+});
+
+test("参加していないワークスペースは最初に開くワークスペースにできない", async ({ page, browser }) => {
+  await signupViaUi(page, { workspace: "自分のワークスペース" });
+
+  const ctx = await browser.newContext();
+  const p2 = await ctx.newPage();
+  const { ws: otherKey } = await signupViaUi(p2, { name: "別の 人", workspace: "他人のワークスペース" });
+  const me2 = (await (await p2.request.get("/api/me")).json()) as { workspaces: { id: string; urlKey: string }[] };
+  const otherId = me2.workspaces.find((w) => w.urlKey === otherKey)?.id;
+  expect(otherId).toBeTruthy();
+
+  const foreign = await page.request.post("/api/me/default-workspace", {
+    data: { workspaceId: otherId },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(foreign.status()).toBe(404);
+
+  const me = (await (await page.request.get("/api/me")).json()) as { defaultWorkspaceId: string | null };
+  expect(me.defaultWorkspaceId).toBeNull();
+
+  const missing = await page.request.post("/api/me/default-workspace", {
+    data: { workspaceId: "does-not-exist" },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(missing.status()).toBe(404);
+
+  const badType = await page.request.post("/api/me/default-workspace", {
+    data: { workspaceId: 123 },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(badType.status()).toBe(400);
+
+  const noHeader = await page.request.post("/api/me/default-workspace", {
+    data: { workspaceId: null },
+  });
+  expect(noHeader.status()).toBe(403);
+  await ctx.close();
+});
