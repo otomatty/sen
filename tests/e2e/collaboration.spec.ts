@@ -1,38 +1,34 @@
 import { expect, test } from "@playwright/test";
-import { devSignIn, dismissWelcome, signupViaUi, waitForSynced } from "./helpers";
+import { inviteByEmail, joinByInvite, signupViaUi, uniqueEmail, waitForSynced } from "./helpers";
 
 test("招待リンクで参加したメンバーに、変更がリアルタイムで届く", async ({ page, browser }) => {
-  // 1人目: ワークスペースを作る
+  // 1人目: ワークスペースを作り、メールで招待する
   const { ws } = await signupViaUi(page, { name: "管理 花子" });
-  await page.goto(`/${ws}/settings/members`);
-  const invite = await page.getByTestId("invite-link").inputValue();
-  const code = invite.split("/invite/")[1];
+  const email = uniqueEmail("member");
+  const link = await inviteByEmail(page, ws, email);
 
-  // 2人目: 招待リンクから参加
-  const ctx2 = await browser.newContext();
-  const p2 = await ctx2.newPage();
-  await devSignIn(p2, { name: "参加 太郎" });
-  await p2.goto(`/invite/${code}`);
-  await p2.getByTestId("invite-accept").click();
-  await expect(p2.getByTestId("app")).toBeVisible();
-  await dismissWelcome(p2);
-  await expect(p2).toHaveURL(new RegExp(`/${ws}/`));
-  await p2.goto(`/${ws}/team/DEF/all`);
-  await expect(p2.getByTestId("sync-status")).toHaveAttribute("data-realtime", "on", { timeout: 15_000 });
+  // 2人目: 招待したアドレスで参加
+  const { context: ctx2, page: p2 } = await joinByInvite(browser, link, { email, name: "参加 太郎" });
+  try {
+    await expect(p2).toHaveURL(new RegExp(`/${ws}/`));
+    await p2.goto(`/${ws}/team/DEF/all`);
+    await expect(p2.getByTestId("sync-status")).toHaveAttribute("data-realtime", "on", { timeout: 15_000 });
 
-  // 1人目が課題のタイトルを変えると、2人目の画面に反映される
-  await page.goto(`/${ws}/issue/DEF-1`);
-  const title = page.getByTestId("issue-title");
-  await title.fill("リアルタイム同期のテスト");
-  await title.press("Enter");
-  await expect(p2.getByTestId("issue-row").filter({ hasText: "リアルタイム同期のテスト" })).toBeVisible({ timeout: 10_000 });
+    // 1人目が課題のタイトルを変えると、2人目の画面に反映される
+    await page.goto(`/${ws}/issue/DEF-1`);
+    const title = page.getByTestId("issue-title");
+    await title.fill("リアルタイム同期のテスト");
+    await title.press("Enter");
+    await expect(p2.getByTestId("issue-row").filter({ hasText: "リアルタイム同期のテスト" })).toBeVisible({ timeout: 10_000 });
 
-  // 1人目が2人目に割り当てると、2人目の受信トレイに通知が届く
-  await page.getByTestId("prop-assignee").click();
-  await page.getByTestId("picker-assignee").getByRole("option", { name: /参加 太郎/ }).click();
-  await p2.getByTestId("nav-inbox").click();
-  await expect(p2.getByTestId("inbox-item").first()).toContainText("あなたを担当者にしました", { timeout: 10_000 });
-  await ctx2.close();
+    // 1人目が2人目に割り当てると、2人目の受信トレイに通知が届く
+    await page.getByTestId("prop-assignee").click();
+    await page.getByTestId("picker-assignee").getByRole("option", { name: /参加 太郎/ }).click();
+    await p2.getByTestId("nav-inbox").click();
+    await expect(p2.getByTestId("inbox-item").first()).toContainText("あなたを担当者にしました", { timeout: 10_000 });
+  } finally {
+    await ctx2.close();
+  }
 });
 
 test("オフラインの間の変更は保持され、復帰後に送信される", async ({ page, context }) => {

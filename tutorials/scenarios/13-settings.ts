@@ -12,9 +12,11 @@ export default defineScenario({
     await t.poster();
     await t.settle();
     await t.click("[data-testid=settings-nav-members]");
-    await t.caption("招待リンクを共有すると、メンバーが参加できます");
-    await t.highlight("[data-testid=invite-link]", 1200);
-    await t.click(".invite-row button:has-text('コピー')", { pause: 700 });
+    await t.caption("メールアドレスを入力して招待すると、本人だけが参加できるリンクが届きます");
+    await t.click("[data-testid=invite-emails]");
+    // 動画では入力までにとどめる（招待すると、収録のたびに招待中の一覧が増えるため）
+    await t.type("kobayashi@example.com");
+    await t.highlight("[data-testid=invite-emails]", 1200);
     await t.click("[data-testid=settings-nav-labels]");
     await t.caption("ラベルを追加してみます");
     await t.click("[data-testid=new-label-name]");
