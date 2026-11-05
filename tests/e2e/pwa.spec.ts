@@ -142,7 +142,7 @@ test.afterEach(() => {
 /**
  * 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする。
  * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする。
- * hold を指定すると、キャッシュを作ったところでインストールを止めておく版にする（releaseInstall で再開する）
+ * hold を指定すると、ファイルを保存し終えたところでインストールを止めておく版にする（releaseInstall で再開する）
  */
 async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean; hold?: boolean }) {
   originalSw ??= readFileSync(SW_FILE, "utf8");
@@ -157,8 +157,9 @@ async function publishNextVersion(page: Page, opts: { version: string; drop?: "j
     source = source.replace(`"${file}",`, "");
   }
   if (opts.hold) {
-    expect(source).toContain("await cache.addAll(");
-    source = source.replace("await cache.addAll(", "await installHeld;\n      await cache.addAll(");
+    const addAll = /^(\s*)(await cache\.addAll\(.*\);)$/m;
+    expect(source).toMatch(addAll);
+    source = source.replace(addAll, "$1$2\n$1await installHeld;");
     source = `let releaseHeld;
 const installHeld = new Promise((resolve) => (releaseHeld = resolve));
 self.addEventListener("message", (event) => event.data?.type === "e2e-release-install" && releaseHeld());
@@ -288,16 +289,19 @@ test("さらに新しい版のインストール中に更新を押しても、�
   const [original] = await cacheNames(page);
 
   // 待機中の版（b）の案内が出ているところへ、さらに新しい版（c）を公開する。
-  // c はキャッシュを作ったところでインストールを止めておき、押した時点では確実にインストール中にする
+  // c はファイルを保存し終えたところでインストールを止めておき、押した時点では確実にインストール中にする
   await publishNextVersion(page, { version: "b", drop: "js" });
   await expect.poll(() => hasWaiting(page)).toBe(true);
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
   await publishNextVersion(page, { version: "c", drop: "js", hold: true });
-  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
+  // c のファイルの保存が終わり、インストールの最後で止まるまで待つ（addAll はすべて取れてからまとめて保存する）
+  await expect
+    .poll(() => page.evaluate(async () => (await caches.has("sen-c")) && (await (await caches.open("sen-c")).keys()).length > 0))
+    .toBe(true);
   const reloaded = page.waitForEvent("load");
   await notice.getByRole("button", { name: "更新" }).click();
-  // 押したあと、切り替え先を決める前（送信を待っている間）に c のインストールを終わらせる
+  // 押したあと、切り替え先を決める前（送信を待っている間）に c のインストールを終わらせる。保存は済んでいるので、回線の速さによらずすぐ待機に入る
   await releaseInstall(page);
   // 置き換わって使われなくなった b ではなく、c に切り替わって読み込み直す（止まったまま失敗しない）
   await reloaded;
