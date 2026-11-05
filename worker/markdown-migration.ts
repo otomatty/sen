@@ -103,23 +103,37 @@ async function convertPending(db: D1Database): Promise<void> {
 }
 
 async function finish(db: D1Database, writeMarker: (workspaceId: string) => Promise<number>): Promise<void> {
-  const listed = await db.prepare("SELECT id FROM workspaces").all<{ id: string }>();
+  // 仕上げの進み具合を残す。クエリ上限で途中までしか進まなくても、次は未処理のワークスペースだけを続ける。
+  await db.prepare("CREATE TABLE IF NOT EXISTS markdown_finalized (workspace_id TEXT PRIMARY KEY)").run();
+  const listed = await db
+    .prepare(
+      `SELECT id FROM workspaces
+       WHERE NOT EXISTS (
+         SELECT 1 FROM markdown_finalized WHERE markdown_finalized.workspace_id = workspaces.id
+       )`,
+    )
+    .all<{ id: string }>();
   for (const ws of listed.results ?? []) {
     const id = await writeMarker(ws.id);
     // 同期ログには変換前の HTML を含むスナップショットが残っている。
     // pruned_before より前の番号を持つクライアントには、全体の読み込み直しを指示する（worker/app.ts の /sync）。
     // 目印の行を 1 行足してからその番号にするので、移行の直後に読み込んだクライアントの最新番号（getLastSyncId）が
     // pruned_before を下回らず、読み込み直しが繰り返されない。同期ログの行は消さない（毎日の掃除に任せる）。
-    await db
-      .prepare(
-        `INSERT INTO sync_meta (workspace_id, pruned_before) VALUES (?, ?)
-         ON CONFLICT(workspace_id) DO UPDATE SET pruned_before = MAX(sync_meta.pruned_before, excluded.pruned_before)`,
-      )
-      .bind(ws.id, id)
-      .run();
+    // writeMarker のあと（この batch の前）で止まると、次の実行で同じワークスペースの目印がもう 1 行入る。
+    // pruned_before は MAX で更新するので、どちらの目印の番号以上になる。
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO sync_meta (workspace_id, pruned_before) VALUES (?, ?)
+           ON CONFLICT(workspace_id) DO UPDATE SET pruned_before = MAX(sync_meta.pruned_before, excluded.pruned_before)`,
+        )
+        .bind(ws.id, id),
+      db.prepare("INSERT OR IGNORE INTO markdown_finalized (workspace_id) VALUES (?)").bind(ws.id),
+    ]);
   }
   await db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(DONE).run();
-  // markdown_pending は空のまま残す。消すと、同時に走っている Worker の SELECT が失敗する。
+  // markdown_pending は空のまま残す。markdown_finalized の行も消さない。
+  // どちらかの表を消すと、同時に走っている Worker の SELECT が失敗する。
 }
 
 export async function migrateBodiesToMarkdown(

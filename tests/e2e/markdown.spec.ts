@@ -83,6 +83,30 @@ test("リンク先の文字参照は一度だけエスケープする", () => {
   expect(markdownToHtml("![図](/search?a=1&amp;b=2)")).toBe("<p>図</p>");
 });
 
+test("リンク先の文字参照に見える並びは、もう一度戻されない", async ({ page }) => {
+  const read = async (html: string) => {
+    await page.setContent(html);
+    const a = page.locator("a");
+    return { href: await a.getAttribute("href"), text: await a.textContent() };
+  };
+
+  const cases = [
+    '<a href="https://example.com/?q=&amp;copy;">link</a>',
+    '<a href="https://example.com/?q=&amp;copy;">https://example.com/?q=&amp;copy;</a>',
+    '<a href="https://example.com/?x=&amp;#169;">link</a>',
+  ];
+  for (const html of cases) {
+    const original = await read(html);
+    const back = await read(markdownToHtml(htmlToMarkdown(html)));
+    expect(back.href, html).toBe(original.href);
+    expect(back.text, html).toBe(original.text);
+  }
+
+  const query = '<a href="https://example.com/?a=1&amp;b=2">link</a>';
+  expect(htmlToMarkdown(query)).toBe("[link](https://example.com/?a=1&b=2)");
+  expect((await read(markdownToHtml(htmlToMarkdown(query)))).href).toBe("https://example.com/?a=1&b=2");
+});
+
 test("括弧を含むリンク先は往復しても切れない", () => {
   expect(htmlToMarkdown('<a href="/docs/a)">資料</a>')).toBe("[資料](</docs/a)>)");
   expect(markdownToHtml(htmlToMarkdown('<a href="/docs/a)">資料</a>'))).toBe('<p><a href="/docs/a)">資料</a></p>');

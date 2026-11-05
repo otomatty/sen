@@ -75,25 +75,34 @@ class Stmt {
   }
 
   async all<T>() {
+    this.shim.charge();
     this.shim.queries.push(this.sql);
     return { results: this.runSync().results as T[] };
   }
 
   async first<T>() {
+    this.shim.charge();
     this.shim.queries.push(this.sql);
     return (this.runSync().results[0] as T | undefined) ?? null;
   }
 
   async run() {
+    this.shim.charge();
     this.shim.queries.push(this.sql);
     this.runSync();
     return { success: true as const };
   }
 }
 
+/** D1 が 1 回の Worker 呼び出しで流せるクエリ数を超えたときのメッセージ */
+const D1_QUERY_LIMIT_ERROR = "D1_ERROR: Too many API requests by single Worker invocation.";
+
 class MiniD1 {
   batchCount = 0;
   queries: string[] = [];
+  /** 設定すると、この回数を超えたクエリで D1 と同じく失敗する。batch は 1 回と数える。 */
+  queryLimit: number | undefined;
+  queryCount = 0;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -101,12 +110,20 @@ class MiniD1 {
     private beforeBatch?: (n: number) => void,
   ) {}
 
+  /** クエリを 1 回消費する。上限を超えたら SQL は流さない。 */
+  charge() {
+    if (this.queryLimit === undefined) return;
+    this.queryCount += 1;
+    if (this.queryCount > this.queryLimit) throw new Error(D1_QUERY_LIMIT_ERROR);
+  }
+
   prepare(sql: string) {
     return new Stmt(this, sql);
   }
 
   batch(statements: Stmt[]) {
     const run = this.queue.then(() => {
+      this.charge();
       this.queries.push("batch");
       this.batchCount += 1;
       this.beforeBatch?.(this.batchCount);
@@ -415,4 +432,60 @@ test("100 行の移行は、1 ページあたり一覧・表の読み取り・ba
   expect(issue?.updated_at).toBe(2000);
   expect(project?.value).toBe(htmlToMarkdown("<p>計画 79</p>"));
   expect(project?.updated_at).toBe(3079);
+});
+
+test("クエリ上限で仕上げが途中で切れても、続きから終わる", async () => {
+  const once = htmlToMarkdown(SENTINEL);
+  expect(htmlToMarkdown(once)).not.toBe(once);
+
+  const db = await openDb();
+  const workspaceIds: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const id = `ws-${String(i).padStart(2, "0")}`;
+    workspaceIds.push(id);
+    await insertWorkspace(db, id);
+  }
+  await insertIssue(db, { id: "limit-issue", ws: "ws-00", description: SENTINEL, updatedAt: 11, number: 1 });
+  await insertProject(db, { id: "limit-project", ws: "ws-01", description: SENTINEL, updatedAt: 22 });
+  await insertComment(db, { id: "limit-comment", ws: "ws-02", body: SENTINEL, updatedAt: 33 });
+
+  db.queryLimit = 50;
+  const marker = markerFor(db);
+  let finished = false;
+  let attempts = 0;
+  for (; attempts < 10; attempts++) {
+    db.queryCount = 0;
+    try {
+      await migrateBodiesToMarkdown(db as never, marker.write);
+      finished = true;
+      break;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      expect(message).toContain(D1_QUERY_LIMIT_ERROR);
+    }
+  }
+  expect(finished).toBe(true);
+  expect(attempts).toBeGreaterThan(0);
+  expect(attempts).toBeLessThan(10);
+
+  db.queryLimit = undefined;
+  const issue = await value(db, "SELECT description AS value, updated_at FROM issues WHERE id = ?", "limit-issue");
+  const project = await value(db, "SELECT description AS value, updated_at FROM projects WHERE id = ?", "limit-project");
+  const comment = await value(db, "SELECT body AS value, updated_at FROM comments WHERE id = ?", "limit-comment");
+  expect(issue?.value).toBe(once);
+  expect(issue?.updated_at).toBe(11);
+  expect(project?.value).toBe(once);
+  expect(project?.updated_at).toBe(22);
+  expect(comment?.value).toBe(once);
+  expect(comment?.updated_at).toBe(33);
+
+  for (const wsId of workspaceIds) {
+    const meta = await db.prepare("SELECT pruned_before FROM sync_meta WHERE workspace_id = ?").bind(wsId).first<{ pruned_before: number }>();
+    const rows = await db.prepare("SELECT id FROM sync_log WHERE workspace_id = ?").bind(wsId).all<{ id: number }>();
+    expect(rows.results?.length).toBeGreaterThan(0);
+    for (const row of rows.results ?? []) expect(meta?.pruned_before).toBeGreaterThanOrEqual(row.id);
+  }
+
+  const done = await db.prepare("SELECT COUNT(*) AS c FROM d1_migrations WHERE name = ?").bind("0009_markdown_bodies").first<{ c: number }>();
+  expect(Number(done?.c ?? 0)).toBe(1);
 });
