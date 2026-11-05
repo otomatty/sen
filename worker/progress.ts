@@ -1,4 +1,4 @@
-// 着手日を課題 ID ごとに返す。スプレッドシート連携とアプリで同じ計算を使う。
+// 着手日を課題 ID ごとに返す。進捗の API（GET /api/progress/started）で使う。
 
 import { todayYmd } from "../shared/dates";
 import { all } from "./db";

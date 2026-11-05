@@ -13,12 +13,11 @@ import type {
   Mutation,
   ProgressStartedResponse,
   Role,
-  SheetSyncStatus,
 } from "../shared/types";
 import { isEmailAllowed, parseAllowedDomains } from "../shared/domains";
 import { MAX_ACCOUNTS, forwardCookies, getAuth, getSession, getSessionUser, isGoogleConfigured } from "./auth";
 import { all, ensureMigrated, first, run } from "./db";
-import type { AppEnv, Env, WorkspaceRow } from "./env";
+import type { AppEnv, WorkspaceRow } from "./env";
 import { applyMutation, MutationError, type MutationCtx } from "./mutations";
 import { createWorkspace, seedDemo } from "./seed";
 import {
@@ -48,16 +47,9 @@ import {
   resendInvitation,
 } from "./invitations";
 import { loadStartedOn } from "./progress";
-import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
 
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
-}
-
-/** 対象ワークスペース向けの応答。連携は有効で、スプレッドシートの URL を付ける */
-function asEnabledStatus(env: Env, status: SheetSyncStatus): SheetSyncStatus {
-  const cfg = sheetsConfig(env);
-  return { ...status, enabled: true, spreadsheetUrl: cfg ? spreadsheetUrl(cfg.spreadsheetId) : status.spreadsheetUrl };
 }
 
 async function readJson<T>(c: Context): Promise<T> {
@@ -393,7 +385,6 @@ export function createApp() {
     const lastSyncId = await writeChanges(c.env.DB, ctx.ws.id, ctx.changes);
     if (ctx.changes.length) {
       c.executionCtx?.waitUntil?.(notifyRealtime(c.env, ctx.ws.id, lastSyncId));
-      c.executionCtx?.waitUntil?.(scheduleSheetSync(c.env, ctx.ws, ctx.changes, publicOrigin(c)));
     }
     return c.json({ results, lastSyncId } satisfies MutateResponse);
   });
@@ -433,25 +424,7 @@ export function createApp() {
     return stub.fetch(new Request("https://realtime/connect", c.req.raw));
   });
 
-  // ---------------- スプレッドシート連携（メンバーなら誰でも） ----------------
-  app.get("/sheets/status", requireUser, requireWorkspace, async (c) => {
-    const ws = c.get("workspace");
-    if (!isSheetsTarget(c.env, ws.url_key)) return c.json({ enabled: false } satisfies SheetSyncStatus);
-    const status = await requestSheetSyncStatus(c.env, ws.id);
-    return c.json(asEnabledStatus(c.env, status));
-  });
-
-  app.post("/sheets/sync", requireUser, requireWorkspace, async (c) => {
-    const ws = c.get("workspace");
-    if (!isSheetsTarget(c.env, ws.url_key)) {
-      return err(c, "このワークスペースではスプレッドシート連携が設定されていません", 404);
-    }
-    // 反映そのものが失敗しても 200。理由は lastError に入る。
-    const status = await requestSheetSyncNow(c.env, ws.id, publicOrigin(c));
-    return c.json(asEnabledStatus(c.env, status));
-  });
-
-  // ---------------- 進捗（メンバーなら誰でも。スプレッドシート連携とは別） ----------------
+  // ---------------- 進捗（メンバーなら誰でも） ----------------
   app.get("/progress/started", requireUser, requireWorkspace, async (c) => {
     const startedOn = await loadStartedOn(c.env.DB, c.get("workspace").id);
     const body: ProgressStartedResponse = { startedOn };

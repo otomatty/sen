@@ -451,18 +451,6 @@ export interface ApiTokenCreateResponse {
   mcpUrl: string;
 }
 
-/** スプレッドシート連携の状態（Durable Object が保持し、API が返す） */
-export interface SheetSyncStatus {
-  /** このワークスペースで連携が有効か */
-  enabled: boolean;
-  spreadsheetUrl?: string;
-  lastAttemptAt?: number | null;
-  lastSuccessAt?: number | null;
-  lastError?: string | null;
-  /** 反映の予約（アラーム）があるか */
-  pending?: boolean;
-}
-
 /** GET /api/progress/started の応答。課題 ID → 日本時間の着手日 'YYYY-MM-DD'（無い課題は含めない） */
 export interface ProgressStartedResponse {
   startedOn: Record<string, string>;

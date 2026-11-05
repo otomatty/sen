@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { addDays, isValidYmd, todayYmd } from "../../shared/dates";
-import { summarizeProgress, type ProgressActivity, type ReportInput } from "../../shared/progress";
-import type { BootstrapPayload, Mutation, ProgressStartedResponse, SheetSyncStatus, StateType } from "../../shared/types";
+import { summarizeProgress, type ProgressActivity, type ReportInput, type ReportIssueInput } from "../../shared/progress";
+import type { BootstrapPayload, Mutation, ProgressStartedResponse, StateType } from "../../shared/types";
 import { devSignIn, newUserPage, seedDemo, signupViaUi } from "./helpers";
 
 async function mutate(page: Page, ws: string, mutations: Mutation[]) {
@@ -33,10 +33,6 @@ test("進行中にしてからバックログに戻すと、startedAt は消え�
   const project = data.projects[0];
   if (!project) throw new Error("プロジェクトがありません");
 
-  const sheets = await page.request.get(`/api/sheets/status?ws=${encodeURIComponent(ws)}`);
-  expect(sheets.ok()).toBeTruthy();
-  expect(((await sheets.json()) as SheetSyncStatus).enabled).toBe(false);
-
   const id = randomUUID();
   await mutate(page, ws, [
     {
@@ -57,6 +53,82 @@ test("進行中にしてからバックログに戻すと、startedAt は消え�
   if (!afterRes.ok()) throw new Error(`bootstrap が失敗しました (${afterRes.status()}): ${await afterRes.text()}`);
   const after = (await afterRes.json()) as BootstrapPayload;
   expect(after.issues.find((issue) => issue.id === id)?.startedAt).toBeNull();
+
+  const res = await page.request.get(`/api/progress/started?ws=${encodeURIComponent(ws)}`);
+  expect(res.ok()).toBeTruthy();
+  const body = (await res.json()) as ProgressStartedResponse;
+  expect(body.startedOn[id]).toBe(todayYmd(540));
+});
+
+test("進行中で作った課題をバックログに戻しても、着手日は作った日のまま", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "進捗の着手日 作成時" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const project = data.projects[0];
+  if (!project) throw new Error("プロジェクトがありません");
+
+  const id = randomUUID();
+  await mutate(page, ws, [
+    {
+      type: "issue.create",
+      args: {
+        id,
+        teamId: team.id,
+        projectId: project.id,
+        title: "進行中で作ってバックログに戻した課題",
+        stateId: stateId(data, team.id, "started", "進行中"),
+      },
+    },
+    { type: "issue.update", args: { id, patch: { stateId: stateId(data, team.id, "backlog", "バックログ") } } },
+  ]);
+
+  const afterRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!afterRes.ok()) throw new Error(`bootstrap が失敗しました (${afterRes.status()}): ${await afterRes.text()}`);
+  const after = (await afterRes.json()) as BootstrapPayload;
+  expect(after.issues.find((issue) => issue.id === id)?.startedAt).toBeNull();
+
+  const res = await page.request.get(`/api/progress/started?ws=${encodeURIComponent(ws)}`);
+  expect(res.ok()).toBeTruthy();
+  const body = (await res.json()) as ProgressStartedResponse;
+  expect(body.startedOn[id]).toBe(todayYmd(540));
+});
+
+test("進行中にしたあとそのステータスを削除しても、着手日は消えない", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "進捗の着手日 ステータス削除" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const project = data.projects[0];
+  if (!project) throw new Error("プロジェクトがありません");
+
+  const startedId = stateId(data, team.id, "started", "進行中");
+  const unstartedId = stateId(data, team.id, "unstarted", "未着手");
+  const tempStateId = randomUUID();
+  const id = randomUUID();
+  await mutate(page, ws, [
+    {
+      type: "state.create",
+      args: { id: tempStateId, teamId: team.id, name: "一時の進行中", type: "started", color: "#f2c94c" },
+    },
+    {
+      type: "issue.create",
+      args: {
+        id,
+        teamId: team.id,
+        projectId: project.id,
+        title: "ステータスを消しても着手日が残る課題",
+        stateId: unstartedId,
+      },
+    },
+    { type: "issue.update", args: { id, patch: { stateId: tempStateId } } },
+    { type: "issue.update", args: { id, patch: { stateId: unstartedId } } },
+    { type: "state.delete", args: { id: tempStateId, moveToStateId: startedId } },
+  ]);
 
   const res = await page.request.get(`/api/progress/started?ws=${encodeURIComponent(ws)}`);
   expect(res.ok()).toBeTruthy();
@@ -153,7 +225,6 @@ test("サイドバーから進捗を開き、活動一覧が集計と一致す�
   await page.goto(`/${ws}/my-issues`);
   await page.getByTestId("nav-progress").click();
   await expect(page.getByTestId("progress-page")).toBeVisible();
-  await expect(page.getByTestId("progress-open-sheet")).toHaveCount(0);
   await expect(page.getByText("自動で最新の状態に更新")).toBeVisible();
 
   const { summary } = await loadSummary(page, ws);
@@ -988,3 +1059,212 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow.doc).toBeLessThanOrEqual(1);
   expect(overflow.right).toBeLessThanOrEqual(391);
 }
+
+const RULE_TODAY = "2026-11-10";
+
+function sampleIssue(partial: Pick<ReportIssueInput, "id" | "projectId" | "stateType"> & Partial<ReportIssueInput>): ReportIssueInput {
+  return {
+    identifier: "ENG-1",
+    title: "課題",
+    descriptionText: "",
+    stateName: "状態",
+    priority: 0,
+    assigneeName: null,
+    labelNames: [],
+    dueDate: null,
+    startedOn: null,
+    completedOn: null,
+    ...partial,
+  };
+}
+
+function sampleInput(projects: ReportInput["projects"], issues: ReportIssueInput[]): ReportInput {
+  return {
+    workspaceName: "テスト",
+    urlKey: "progress-rules",
+    origin: null,
+    today: RULE_TODAY,
+    now: Date.UTC(2026, 10, 10),
+    projects,
+    issues,
+  };
+}
+
+test.describe("集計ルール", () => {
+  test("タスクがないプロジェクト", () => {
+    const { activities } = summarizeProgress(sampleInput([{ id: "p", name: "空" }], []));
+    expect(activities[0]).toMatchObject({ completionRate: "タスクなし", nextDue: "—", status: "タスク未登録" });
+  });
+
+  test("すべて完了している", () => {
+    const { activities } = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "a", projectId: "p", stateType: "completed", completedOn: "2026-11-01" }),
+          sampleIssue({ id: "b", identifier: "ENG-2", projectId: "p", stateType: "completed", completedOn: "2026-11-02" }),
+        ],
+      ),
+    );
+    expect(activities[0]).toMatchObject({ completionRate: "100%（2/2）", nextDue: "—", status: "完了" });
+  });
+
+  test("完了率は切り捨てる", () => {
+    const third = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "a", projectId: "p", stateType: "completed" }),
+          sampleIssue({ id: "b", identifier: "ENG-2", projectId: "p", stateType: "unstarted" }),
+          sampleIssue({ id: "c", identifier: "ENG-3", projectId: "p", stateType: "started" }),
+        ],
+      ),
+    );
+    expect(third.activities[0]?.completionRate).toBe("33%（1/3）");
+
+    const almost = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        Array.from({ length: 200 }, (_, index) =>
+          sampleIssue({
+            id: `id-${index}`,
+            identifier: `ENG-${index + 1}`,
+            projectId: "p",
+            stateType: index < 199 ? "completed" : "unstarted",
+          }),
+        ),
+      ),
+    );
+    expect(almost.activities[0]?.completionRate).toBe("99%（199/200）");
+
+    for (const done of [29, 57, 58]) {
+      const report = summarizeProgress(
+        sampleInput(
+          [{ id: "p", name: "P" }],
+          Array.from({ length: 100 }, (_, index) =>
+            sampleIssue({
+              id: `id-${index}`,
+              identifier: `ENG-${index + 1}`,
+              projectId: "p",
+              stateType: index < done ? "completed" : "unstarted",
+            }),
+          ),
+        ),
+      );
+      expect(report.activities[0]?.completionRate).toBe(`${done}%（${done}/100）`);
+    }
+  });
+
+  test("未完了で保留でない課題の期日が今日より前なら期限超過", () => {
+    const { activities } = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [sampleIssue({ id: "a", projectId: "p", stateType: "started", dueDate: "2026-11-09" })],
+      ),
+    );
+    expect(activities[0]?.status).toBe("期限超過");
+  });
+
+  test("保留の課題は直近期限と期限超過に入らず、完了率の分母には入る", () => {
+    const { activities } = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "done", projectId: "p", stateType: "completed" }),
+          sampleIssue({ id: "hold", identifier: "ENG-2", projectId: "p", stateType: "backlog", dueDate: "2020-01-01" }),
+        ],
+      ),
+    );
+    expect(activities[0]).toMatchObject({ completionRate: "50%（1/2）", nextDue: "—", status: "保留あり" });
+  });
+
+  test("期日がない課題", () => {
+    const none = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "a", projectId: "p", stateType: "unstarted" }),
+          sampleIssue({ id: "b", identifier: "ENG-2", projectId: "p", stateType: "started" }),
+        ],
+      ),
+    );
+    expect(none.activities[0]?.nextDue).toBe("期限未設定");
+
+    const some = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "a", projectId: "p", stateType: "unstarted", dueDate: "2026-11-20" }),
+          sampleIssue({ id: "b", identifier: "ENG-2", projectId: "p", stateType: "started" }),
+        ],
+      ),
+    );
+    expect(some.activities[0]?.nextDue).toBe("2026/11/20（未設定1件）");
+  });
+
+  test("キャンセルした課題は WBS にも完了率にも入らない", () => {
+    const report = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({ id: "done", projectId: "p", stateType: "completed" }),
+          sampleIssue({ id: "cancel", identifier: "ENG-2", projectId: "p", stateType: "canceled" }),
+          sampleIssue({ id: "open", identifier: "ENG-3", projectId: "p", stateType: "unstarted" }),
+        ],
+      ),
+    );
+    expect(report.activities[0]?.completionRate).toBe("50%（1/2）");
+    expect(report.tasks.map((task) => task.id).sort()).toEqual(["done", "open"]);
+  });
+
+  test("工程と優先度の表示名", () => {
+    const report = summarizeProgress(
+      sampleInput(
+        [{ id: "p", name: "P" }],
+        [
+          sampleIssue({
+            id: "done",
+            projectId: "p",
+            stateType: "completed",
+            priority: 0,
+            completedOn: "2026-11-01",
+            labelNames: ["工程:企画・設計", "バグ", "工程：開発・検証"],
+          }),
+        ],
+      ),
+    );
+    const done = report.tasks.find((task) => task.id === "done");
+    expect(done?.process).toBe("企画・設計／開発・検証");
+    expect(done?.processes).toEqual(["企画・設計", "開発・検証"]);
+    expect(done?.priorityLabel).toBe("なし");
+    expect(done?.completedOn).toBe("2026-11-01");
+  });
+
+  test("WBS はプロジェクトの順、期日（未設定は後ろ）、番号の順", () => {
+    const report = summarizeProgress(
+      sampleInput(
+        [
+          { id: "p1", name: "先" },
+          { id: "p2", name: "後" },
+        ],
+        [
+          sampleIssue({ id: "late-num", identifier: "ENG-5", projectId: "p1", stateType: "unstarted" }),
+          sampleIssue({ id: "due-early-num", identifier: "ENG-2", projectId: "p1", stateType: "unstarted", dueDate: "2026-11-20" }),
+          sampleIssue({ id: "due-earliest", identifier: "ENG-9", projectId: "p1", stateType: "started", dueDate: "2026-11-01" }),
+          sampleIssue({ id: "other-project", identifier: "ENG-1", projectId: "p2", stateType: "unstarted", dueDate: "2020-01-01" }),
+          sampleIssue({ id: "no-due-earlier-num", identifier: "ENG-3", projectId: "p1", stateType: "completed" }),
+          sampleIssue({ id: "due-later-num", identifier: "ENG-8", projectId: "p1", stateType: "backlog", dueDate: "2026-11-20" }),
+          sampleIssue({ id: "canceled", identifier: "ENG-4", projectId: "p1", stateType: "canceled", dueDate: "2020-01-01" }),
+        ],
+      ),
+    );
+    expect(report.tasks.map((task) => task.id)).toEqual([
+      "due-earliest",
+      "due-early-num",
+      "due-later-num",
+      "no-due-earlier-num",
+      "late-num",
+      "other-project",
+    ]);
+  });
+});

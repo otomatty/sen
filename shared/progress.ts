@@ -1,4 +1,4 @@
-// 活動一覧・WBS と同じ進捗集計。シートの書式（セル・列幅・リンク）には依存しない。
+// 進捗ページ（活動一覧・WBS・タイムライン）の集計。表示の書式には依存しない。
 // ブラウザ（src/）と Worker の両方から使う。DB・fetch・実行環境固有の API には依存しない。
 
 import { PRIORITIES } from "./constants";
@@ -13,7 +13,7 @@ export interface ReportInput {
   origin: string | null;
   /** 日本時間の今日 'YYYY-MM-DD' */
   today: string;
-  /** 反映日時（UNIX ミリ秒） */
+  /** 現在時刻（UNIX ミリ秒） */
   now: number;
   /** 表示順に並んだ、アーカイブされていないプロジェクト */
   projects: { id: string; name: string }[];
@@ -46,28 +46,28 @@ export type ActivityStatus = "タスク未登録" | "完了" | "期限超過" | 
 export interface ProgressTask extends ReportIssueInput {
   /** `工程:` / `工程：` ラベルの工程名。名前順・重複なし */
   processes: string[];
-  /** 工程名を名前順に `／` でつないだもの。無ければ空。表示とシート用 */
+  /** 工程名を名前順に `／` でつないだもの。無ければ空。表示用 */
   process: string;
-  /** シートの優先度列と同じ短い表示名（なし / 緊急 / 高 / 中 / 低） */
+  /** 優先度の短い表示名（なし / 緊急 / 高 / 中 / 低） */
   priorityLabel: string;
 }
 
 export interface ProgressActivity {
   projectId: string;
   name: string;
-  /** 並び順はシートの WBS と同じ */
+  /** 並び順は WBS と同じ */
   tasks: ProgressTask[];
   total: number;
   done: number;
   /** 対象タスクが無いときは null。あるときは floor(done*100/total) */
   percent: number | null;
-  /** シートと同じ文字列。'28%（2/7）' / 'タスクなし' */
+  /** 表示する文字列。'28%（2/7）' / 'タスクなし' */
   completionRate: string;
   /** 保留でない未完了のうち一番早い完了予定 'YYYY-MM-DD'。無ければ null */
   nextDueDate: string | null;
   /** 保留でない未完了のうち期限が無い件数 */
   nextDueUnset: number;
-  /** シートと同じ文字列。'2026/11/07（未設定2件）' / '期限未設定' / '—' */
+  /** 表示する文字列。'2026/11/07（未設定2件）' / '期限未設定' / '—' */
   nextDue: string;
   status: ActivityStatus;
 }
@@ -177,7 +177,7 @@ function processNames(labelNames: string[]): string[] {
   return [...new Set(processBodies(labelNames))].sort(byProcessName);
 }
 
-/** 名前順に `／` でつなぐ。重複も残す（シートの工程列はこの文字列のまま） */
+/** 名前順に `／` でつなぐ。重複も残す */
 function processLabel(labelNames: string[]): string {
   return processBodies(labelNames).sort(byProcessName).join("／");
 }

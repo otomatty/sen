@@ -6,7 +6,7 @@ import path from "node:path";
 import { SCREENS } from "../shared/navigation";
 import { buildAssistantKnowledge, readGuidePages } from "./assistant-knowledge";
 
-const FORBIDDEN = ["wrangler", "secret put", "bun run", ".dev.vars", "GOOGLE_SERVICE_ACCOUNT_KEY", "DEV_TOOLS", ".env"];
+const FORBIDDEN = ["wrangler", "secret put", "bun run", ".dev.vars", "DEV_TOOLS", ".env"];
 
 function segments(value: string): string[] {
   return value.split("/").filter((part) => part.length > 0);

@@ -38,7 +38,7 @@ export function ActivityTab({ model }: { model: ProgressModel }) {
     return (
       <>
         <NoProjects />
-        <p className="progress-note">数え方はスプレッドシートと同じです（キャンセル・重複は数えない、バックログは「保留」）。</p>
+        <p className="progress-note">キャンセル・重複は数えません。バックログは「保留」として数えます。</p>
       </>
     );
   }
@@ -92,7 +92,7 @@ export function ActivityTab({ model }: { model: ProgressModel }) {
           </div>
         </div>
       )}
-      <p className="progress-note">数え方はスプレッドシートと同じです（キャンセル・重複は数えない、バックログは「保留」）。</p>
+      <p className="progress-note">キャンセル・重複は数えません。バックログは「保留」として数えます。</p>
     </>
   );
 }

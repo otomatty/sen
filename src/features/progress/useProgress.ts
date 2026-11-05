@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isValidYmd, todayYmd } from "../../../shared/dates";
 import { summarizeProgress, type ProgressActivity } from "../../../shared/progress";
-import type { Issue, Me, ProgressStartedResponse, Project, SheetSyncStatus, User, WorkflowState } from "../../../shared/types";
+import type { Issue, Me, ProgressStartedResponse, Project, User, WorkflowState } from "../../../shared/types";
 import { api } from "../../lib/api";
 import { useData } from "../../store/data";
 import { useMembers } from "../../store/selectors";
@@ -9,7 +9,6 @@ import { useMembers } from "../../store/selectors";
 export interface ProgressModel {
   activities: ProgressActivity[];
   today: string;
-  sheetUrl: string | null;
   meId: string | null;
   members: User[];
   projects: Record<string, Project>;
@@ -22,7 +21,7 @@ export interface ProgressModel {
 
 /**
  * ストアから活動一覧・WBS を作る。
- * 対象と並びはサーバーの loadReportInput と同じ。数字は summarizeProgress だけが数える。
+ * 対象はアーカイブされていない、プロジェクトのある課題。数字と並びは summarizeProgress だけが決める。
  * 着手日は API の値と課題の startedAt（日本時間の日付）の早いほう。API が取れなければ startedAt だけ。
  */
 export function useProgress(): ProgressModel {
@@ -37,7 +36,6 @@ export function useProgress(): ProgressModel {
   const meId = useData((s) => s.meId);
   const members = useMembers();
   const startedOn = useStartedOn(wsKey, issues);
-  const sheetUrl = useSheetUrl(wsKey);
   const today = useJstToday();
 
   return useMemo(() => {
@@ -84,7 +82,6 @@ export function useProgress(): ProgressModel {
     return {
       activities: summary.activities,
       today,
-      sheetUrl,
       meId,
       members,
       projects,
@@ -93,7 +90,7 @@ export function useProgress(): ProgressModel {
       users,
       assigneeIdByIssue,
     };
-  }, [workspace, projects, issues, states, teams, users, labels, meId, members, startedOn, sheetUrl, today]);
+  }, [workspace, projects, issues, states, teams, users, labels, meId, members, startedOn, today]);
 }
 
 const JST_OFFSET_MINUTES = 540;
@@ -187,33 +184,4 @@ function useStartedOn(wsKey: string, issues: Record<string, Issue>): Record<stri
   }, [wsKey, signature]);
 
   return map;
-}
-
-/** 連携が有効なときだけスプレッドシートの URL。デモ版・失敗時は出さない */
-function useSheetUrl(wsKey: string): string | null {
-  const demo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (demo || !wsKey) {
-      setUrl(null);
-      return;
-    }
-    const key = wsKey;
-    let cancelled = false;
-    setUrl(null);
-    void api<SheetSyncStatus>(`/api/sheets/status?ws=${encodeURIComponent(key)}`)
-      .then((status) => {
-        if (cancelled || useData.getState().workspace?.urlKey !== key) return;
-        setUrl(status.enabled && status.spreadsheetUrl ? status.spreadsheetUrl : null);
-      })
-      .catch(() => {
-        if (!cancelled) setUrl(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [demo, wsKey]);
-
-  return url;
 }

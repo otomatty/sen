@@ -1,5 +1,5 @@
 import { Navigate, NavLink, useParams } from "react-router";
-import { ChartColumn, ExternalLink } from "lucide-react";
+import { ChartColumn } from "lucide-react";
 import { cx } from "../../lib/utils";
 import { PageHeader } from "../../components/PageHeader";
 import { useDocumentTitle, useWsPath } from "../../app/hooks";
@@ -25,17 +25,7 @@ export function ProgressPage() {
           </span>
         }
         screen="progress"
-        actions={
-          <>
-            <span className="progress-live">自動で最新の状態に更新</span>
-            {model.sheetUrl && (
-              <a className="toolbar-btn" href={model.sheetUrl} target="_blank" rel="noopener noreferrer" data-testid="progress-open-sheet">
-                <ExternalLink size={13} />
-                スプレッドシートを開く
-              </a>
-            )}
-          </>
-        }
+        actions={<span className="progress-live">自動で最新の状態に更新</span>}
       >
         <nav className="tabs">
           <NavLink end to={p("/progress")} className={({ isActive }) => cx("tab", isActive && "active")} data-testid="progress-tab-overview">
