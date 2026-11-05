@@ -612,6 +612,12 @@
   flex: 1 1 200px;
   color: var(--text-secondary);
 }
+.domain-pending-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
 .members-page-head {
   display: flex;
   align-items: flex-start;
@@ -2023,6 +2029,17 @@
   .domain-add .input,
   .domain-add .btn {
     height: 40px;
+  }
+  /* 狭い幅では文を1行目、ボタン2つを右寄せの2行目にする */
+  .domain-pending-note {
+    flex: 1 1 100%;
+  }
+  .domain-pending-actions {
+    margin-left: auto;
+  }
+  .domain-pending-actions .btn {
+    height: 36px;
+    min-height: 36px;
   }
   .members-page-head {
     flex-direction: column;

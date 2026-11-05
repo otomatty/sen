@@ -360,12 +360,14 @@ function AllowedDomains({ onSaved }: { onSaved: () => void }) {
           {dirty && (
             <div className="domain-pending">
               <span className="domain-pending-note">まだ保存していない変更があります</span>
-              <Button type="button" variant="ghost" size="sm" data-testid="allowed-domains-reset" disabled={saving} onClick={reset}>
-                元に戻す
-              </Button>
-              <Button type="button" variant="primary" size="sm" data-testid="allowed-domains-save" disabled={saving} onClick={() => void save()}>
-                {saving ? "保存しています…" : "保存"}
-              </Button>
+              <div className="domain-pending-actions">
+                <Button type="button" variant="ghost" size="sm" data-testid="allowed-domains-reset" disabled={saving} onClick={reset}>
+                  元に戻す
+                </Button>
+                <Button type="button" variant="primary" size="sm" data-testid="allowed-domains-save" disabled={saving} onClick={() => void save()}>
+                  {saving ? "保存しています…" : "保存"}
+                </Button>
+              </div>
             </div>
           )}
         </>
