@@ -62,7 +62,7 @@ const sessionChannel: BroadcastChannel | null = (() => {
 type SessionMessage =
   | { type: "account-changed"; userId?: string }
   | { type: "pending-query"; id: string }
-  | { type: "pending-reply"; id: string; pending: number };
+  | { type: "pending-reply"; id: string; pending: number; drafts: boolean };
 
 function postSession(message: SessionMessage) {
   sessionChannel?.postMessage(message);
@@ -77,8 +77,8 @@ let handlingAccountChange = false;
 
 /**
  * 別のタブでアカウントが替わった。
- * 未送信の変更がなければ開き直す。あれば、捨てる前に元のアカウントへ戻して送るか聞く。
- * 戻せなかったときは変更を残したまま、もう一度聞く。キャンセルしたときだけ捨てて開き直す。
+ * 未送信の変更も書きかけもなければ開き直す。あれば、捨てる前に元のアカウントへ戻すか聞く。
+ * 戻せなかったときは残したまま、もう一度聞く。キャンセルしたときだけ捨てて開き直す。
  */
 async function handleAccountChangedElsewhere() {
   if (handlingAccountChange) return;
@@ -86,8 +86,9 @@ async function handleAccountChangedElsewhere() {
   // 409 のときは api がこの関数を呼んだあとで engine の catch に入る。先に止めて、変更が捨てられないようにする
   engine.pause();
   const pending = useData.getState().pendingCount;
+  const drafts = hasIssueDraft() || hasCommentDraft();
   const me = useSession.getState().user;
-  if (pending === 0 || !me) {
+  if ((pending === 0 && !drafts) || !me) {
     engine.stop();
     window.location.assign("/");
     return;
@@ -103,8 +104,11 @@ async function handleAccountChangedElsewhere() {
           }
         : {
             title: "別のタブでアカウントが切り替わりました",
-            message: `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。`,
-            confirmLabel: "元のアカウントに戻して送る",
+            message:
+              pending > 0
+                ? `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。${drafts ? "書きかけの内容も残っています。" : ""}`
+                : `このタブには、書きかけのコメントや作成中の課題があります。元のアカウント（${me.name}）に戻しますか？ キャンセルすると、捨てて開き直します。`,
+            confirmLabel: pending > 0 ? "元のアカウントに戻して送る" : "元のアカウントに戻す",
           },
     );
     if (!ok) {
@@ -121,7 +125,7 @@ async function handleAccountChangedElsewhere() {
     notifyOtherTabs(me.id);
     handlingAccountChange = false;
     engine.resume();
-    toast(`元のアカウント（${me.name}）に戻しました。変更を送っています`);
+    toast(pending > 0 ? `元のアカウント（${me.name}）に戻しました。変更を送っています` : `元のアカウント（${me.name}）に戻しました`);
     return;
   }
 }
@@ -135,7 +139,7 @@ export function initSessionSync() {
     channel.onmessage = (ev) => {
       const data = ev.data as SessionMessage | undefined;
       if (data?.type === "pending-query") {
-        postSession({ type: "pending-reply", id: data.id, pending: useData.getState().pendingCount });
+        postSession({ type: "pending-reply", id: data.id, pending: useData.getState().pendingCount, drafts: hasIssueDraft() || hasCommentDraft() });
         return;
       }
       if (data?.type !== "account-changed") return;
@@ -303,15 +307,19 @@ export function canChangeAccount(): string | null {
   return null;
 }
 
-// 切り替えると、ほかのタブは読み込み直すので、送っていない変更が消える。切り替えたあとは別のアカウントになるので送り直せない。だから切り替える前に確かめる
-async function otherTabsBlocker(): Promise<string | null> {
-  if (!sessionChannel) return null;
+// 切り替えると、ほかのタブは読み込み直すので、送っていない変更や書きかけが消える。切り替えたあとは別のアカウントになるので送り直せない。だから切り替える前に確かめる
+async function queryOtherTabs(): Promise<{ pending: number; drafts: boolean }> {
+  if (!sessionChannel) return { pending: 0, drafts: false };
   const channel = sessionChannel;
   const id = crypto.randomUUID();
-  let total = 0;
+  let pending = 0;
+  let drafts = false;
   const onMessage = (ev: MessageEvent) => {
     const data = ev.data as SessionMessage | undefined;
-    if (data?.type === "pending-reply" && data.id === id) total += data.pending;
+    if (data?.type === "pending-reply" && data.id === id) {
+      pending += data.pending;
+      if (data.drafts) drafts = true;
+    }
   };
   channel.addEventListener("message", onMessage);
   try {
@@ -320,19 +328,20 @@ async function otherTabsBlocker(): Promise<string | null> {
   } finally {
     channel.removeEventListener("message", onMessage);
   }
-  if (total >= 1) return `別のタブに未送信の変更（${total}件）があります。送り終わってから切り替えてください`;
-  return null;
+  return { pending, drafts };
 }
 
 /** 切り替える前に、書きかけを捨ててよいか確かめ、画面を止めて、保存と送信が終わるのを待つ。終わったら元に戻す関数を返す。やめたときは null */
 async function prepareAccountChange(label: string): Promise<(() => void) | null> {
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
-  // 読み込み直すと消える書きかけの内容は、画面を止める前に確かめる
-  if (hasIssueDraft() || hasCommentDraft()) {
+  const other = await queryOtherTabs();
+  if (other.pending > 0) throw new Error(`別のタブに未送信の変更（${other.pending}件）があります。送り終わってから切り替えてください`);
+  // 読み込み直すと消える書きかけの内容は、画面を止める前に確かめる。ほかのタブの書きかけも含む
+  if (hasIssueDraft() || hasCommentDraft() || other.drafts) {
     const ok = await confirmDialog({
       title: "書きかけの内容があります",
-      message: "作成中の課題や書きかけのコメントは、アカウントを切り替えると失われます。続けますか？",
+      message: "作成中の課題や書きかけのコメントは、アカウントを切り替えると失われます。ほかのタブのものも含みます。続けますか？",
       confirmLabel: "続ける",
       danger: true,
     });
@@ -349,8 +358,8 @@ async function prepareAccountChange(label: string): Promise<(() => void) | null>
     // 入力が止まってから保存する欄（説明文は 700 ミリ秒後）の送信が始まるのを待ち、送り終わるまで待つ
     await new Promise((r) => setTimeout(r, 800));
     if (!(await waitForSync(10_000))) throw new Error("送信できていない変更があります。同期が終わってから、もう一度お試しください");
-    const other = await otherTabsBlocker();
-    if (other) throw new Error(other);
+    const again = await queryOtherTabs();
+    if (again.pending > 0) throw new Error(`別のタブに未送信の変更（${again.pending}件）があります。送り終わってから切り替えてください`);
   } catch (e) {
     release();
     throw e;

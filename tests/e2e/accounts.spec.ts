@@ -332,6 +332,54 @@ test("書きかけのコメントがあるときは、アカウントを切り�
   await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
 });
 
+test("ほかのタブに書きかけのコメントがあるときは、切り替える前に確かめる", async ({ page }) => {
+  const { jiro } = await signInTwoAccounts(page);
+  await waitForSynced(page);
+  const other = await page.context().newPage();
+  await other.goto(`/${jiro.ws}/team/DEF/all`);
+  await expect(other.getByTestId("app")).toBeVisible();
+  await dismissWelcome(other);
+  if ((await other.getByTestId("issue-row").count()) === 0) {
+    await other.getByTestId("sidebar-create").click();
+    await other.getByTestId("create-title").fill("オフラインで確認する課題");
+    await other.keyboard.press("ControlOrMeta+Enter");
+    await expect(other.getByTestId("issue-row").first()).toBeVisible();
+  }
+  await other.getByTestId("issue-row").first().click();
+  await expect(other.getByTestId("issue-detail")).toBeVisible();
+  await other.getByTestId("comment-input").click();
+  await other.keyboard.type("ほかのタブの書きかけ");
+  await expect(other.getByTestId("comment-input")).toContainText("ほかのタブの書きかけ");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("書きかけの内容があります");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+  await expect(other.getByTestId("comment-input")).toContainText("ほかのタブの書きかけ");
+});
+
+test("知らせを受けたタブに書きかけのコメントがあるときは、読み込み直す前に確かめる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  await other.getByTestId("issue-row").first().click();
+  await expect(other.getByTestId("issue-detail")).toBeVisible();
+  await other.getByTestId("comment-input").click();
+  await other.keyboard.type("書きかけのコメント");
+  await expect(other.getByTestId("comment-input")).toContainText("書きかけのコメント");
+  // Google から戻ってきたのと同じく、このタブだけ別のアカウントになる
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題があります", { timeout: 15_000 });
+  await expect(other.getByTestId("confirm-ok")).toHaveText("元のアカウントに戻す");
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("user-menu")).toContainText("山田 花子");
+  await expect(other.getByTestId("comment-input")).toContainText("書きかけのコメント");
+});
+
 test("アカウントの一覧が分かるまでは、ログアウトを 2 つに分けて出す", async ({ page }) => {
   await signInTwoAccounts(page);
   await page.route("**/api/accounts", (route) =>
