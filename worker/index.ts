@@ -15,7 +15,7 @@ export default {
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   },
 
-  /** 毎日の掃除：30日より古い同期ログ、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータを削除する */
+  /** 毎日の掃除：30日より古い同期ログ、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータ、古い招待を削除する */
   async scheduled(_event, env) {
     await ensureMigrated(env.DB);
     const cutoff = Date.now() - 30 * 86_400_000;
@@ -40,6 +40,14 @@ export default {
     const now = new Date().toISOString();
     await run(env.DB, "DELETE FROM auth_sessions WHERE expires_at < ?", now);
     await run(env.DB, "DELETE FROM auth_verifications WHERE expires_at < ?", now);
+    // 期限から 30 日以上たった未承諾の招待と、取り消してから 30 日以上たった招待。
+    // 承諾済みは「誰が誰を招待したか」の記録として残す
+    await run(env.DB, "DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?", cutoff);
+    await run(
+      env.DB,
+      "DELETE FROM invitations WHERE accepted_at IS NULL AND revoked_at IS NOT NULL AND revoked_at < ?",
+      cutoff,
+    );
     // スプレッドシートへ反映する（期限の超過など日付で変わる値の更新と、失敗した分のやり直し）。
     // ここで失敗しても、上の掃除はすでに終わっている。
     try {

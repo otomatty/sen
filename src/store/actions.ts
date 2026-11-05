@@ -1,6 +1,7 @@
 import type {
   AppNotification,
   Cycle,
+  Favorite,
   Issue,
   IssuePatch,
   Label,
@@ -16,7 +17,7 @@ import type {
 import { addDays, mondayOf } from "../../shared/dates";
 import { DEFAULT_STATES } from "../../shared/constants";
 import { localYmd, uuid } from "../lib/utils";
-import { getData } from "./data";
+import { getData, useData } from "./data";
 import { engine, type Effect } from "./engine";
 import { toast } from "./ui";
 
@@ -581,8 +582,24 @@ export function updateWorkspaceName(name: string) {
   m({ type: "workspace.update", args: { name } });
 }
 
-export function regenerateInvite() {
-  m({ type: "workspace.regenerateInvite", args: {} });
+function sameDomains(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((d, i) => d === b[i]);
+}
+
+/** 利用できるドメインを保存する。手元のワークスペースにも先に反映し、失敗したら戻す */
+export function setAllowedDomains(domains: string[]) {
+  const next = [...domains];
+  const prev = getData().workspace;
+  if (prev) useData.setState({ workspace: { ...prev, allowedDomains: next } });
+  return m({ type: "workspace.setAllowedDomains", args: { domains: next } }).then((ok) => {
+    if (!ok && prev) {
+      const cur = getData().workspace;
+      if (cur && cur.id === prev.id && sameDomains(cur.allowedDomains ?? [], next)) {
+        useData.setState({ workspace: { ...cur, allowedDomains: prev.allowedDomains ?? [] } });
+      }
+    }
+    return ok;
+  });
 }
 
 export function updateMe(patch: { name?: string; avatarColor?: string; settings?: UserSettings }) {
@@ -590,10 +607,28 @@ export function updateMe(patch: { name?: string; avatarColor?: string; settings?
   m({ type: "user.update", args: patch }, [{ c: "users", id, fn: (v) => v && { ...v, ...patch } }]);
 }
 
-export function updateSettings(patch: Partial<UserSettings>) {
-  const d = getData();
-  const me = d.users[d.meId!] as { settings?: UserSettings } | undefined;
-  updateMe({ settings: { ...(me?.settings ?? {}), ...patch } });
+export function updateSettings(patch: Partial<Omit<UserSettings, "favorites">>) {
+  const id = getData().meId!;
+  m({ type: "user.updateSettings", args: { set: patch } }, [
+    { c: "users", id, fn: (v) => v && { ...v, settings: { ...(v.settings ?? {}), ...patch } } },
+  ]);
+}
+
+export function setFavorite(fav: Favorite, on: boolean) {
+  const id = getData().meId!;
+  m({ type: "user.updateSettings", args: on ? { addFavorite: fav } : { removeFavorite: fav } }, [
+    {
+      c: "users",
+      id,
+      fn: (v) => {
+        if (!v) return v;
+        const current = Array.isArray(v.settings?.favorites) ? v.settings.favorites : [];
+        const same = (f: Favorite) => f?.type === fav.type && f?.id === fav.id;
+        const favorites = on ? (current.some(same) ? current : [...current, fav]) : current.filter((f: Favorite) => !same(f));
+        return { ...v, settings: { ...(v.settings ?? {}), favorites } };
+      },
+    },
+  ]);
 }
 
 export function setMemberRole(userId: string, role: "admin" | "member") {

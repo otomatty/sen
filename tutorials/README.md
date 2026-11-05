@@ -102,6 +102,7 @@ API キーの値は、ログにもエラーにもファイルにも出しませ�
 | `GEMINI_TTS_VOICE` | `Kore` | 声。未設定か空なら既定 |
 | `GEMINI_TTS_STYLE` | 下の指示文 | 読み上げ方の指示。読み上げ文とは別に `speechMetadata.style` として送ります（Gemini 3.8 の TTS は本文をそのまま読むため、指示を本文に入れると読み上げられてしまいます）。未設定か空なら既定 |
 | `GEMINI_TTS_CONCURRENCY` | `3` | 先読みの同時リクエスト数。1 未満、または数値として読めないときは 3 |
+| `GEMINI_TTS_RPM` | `10` | 1 分あたりに送るリクエストの上限。Gemini API の無料枠・Tier 1 の TTS は 1 分 10 回。1 未満、または数値として読めないときは 10 |
 | `GEMINI_TTS_TEMPO` | `1.2` | 読み上げの速さの倍率。0.5〜2。範囲外や数値でないときは既定。合成した音声を ffmpeg の atempo で速めるので声の高さは変わらない。速さはキャッシュのハッシュに入らないので、変えても API を呼び直さない |
 | `GEMINI_TTS_BATCH` | 有効 | `0` / `false` / `off`（大文字小文字は問わない）で 1 文ずつ読む |
 | `GEMINI_API_BASE_URL` | `https://generativelanguage.googleapis.com` | API のベース URL（テストやプロキシ用） |
@@ -120,6 +121,8 @@ Calm, warm and clear narration for a software tutorial video, at a relaxed, slig
 
 `GEMINI_TTS_BATCH` を切ったときは、これまでどおり 1 文ずつ読みます。
 
+先読みも、収録の途中で取りに行くときも、直近 1 分に送り始めたリクエスト数が `GEMINI_TTS_RPM` に達していれば空くまで待ってから送ります。1 分あたりの上限に達したときは待ってから送り直し、1 日あたりの上限に達したとき（応答が 1 日の上限を示すとき、または再試行までの待ち時間が 120 秒を超えるとき）は、そこで止まります。
+
 ### キャッシュ
 
 同じ文を何度も API に送らないよう、読み上げ済みの PCM を OS の一時ディレクトリに置きます。場所は `os.tmpdir()` の `sen-tutorials/_narration` です（Linux では `/tmp/sen-tutorials/_narration`）。ファイル名は `{ v: 3, baseUrl, model, voice, style, speech }` の JSON を sha256 した値です。`speech` は読み替えたあとの文です。API のベース URL（`GEMINI_API_BASE_URL`）も含むので、模擬サーバーで試した音声が本物の API での収録に混ざりません。ベース URL・声・モデル・指示文のどれかを変えると、別のファイルになります。
@@ -128,7 +131,7 @@ Calm, warm and clear narration for a software tutorial video, at a relaxed, slig
 
 収録の前に、各シナリオのタイトルと、ソースから集めた字幕を先に読み上げてキャッシュします（ビルドやサーバー起動と並行。進捗は「ナレーションを準備しています（12/108）」のように出ます）。キャッシュに無い文を収録の途中で取りに行くときは、そのあいだ録画を止めます。API の待ち時間は動画に入りません。
 
-429（回数の制限）のときは、応答の `retryDelay` だけ待って同じリクエストをやり直します。1 日の上限に達したとき（待ち時間が 120 秒を超えるとき）は、待たずに止まります。
+上限で停止したときも、作成済みの音声はキャッシュに残ります。次の実行では、足りない文だけを続きから取得します。
 
 `--speed` は操作の待ちだけを変えます。読み上げの長さは倍率で割りません。読み上げの速さは `GEMINI_TTS_TEMPO` で変えます。
 

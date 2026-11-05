@@ -22,7 +22,12 @@ const BYTES_PER_SECOND = SAMPLE_RATE * 2;
 const FRAME_SAMPLES = 240;
 const FRAME_BYTES = FRAME_SAMPLES * 2;
 const MAX_ATTEMPTS = 6;
+/** 5xx とネットワークエラーの待ち（秒） */
 const BACKOFF_SEC = [2, 4, 8, 16, 32];
+/** 429（1 分あたりの上限）の待ち（秒）。応答の retryDelay がこれより短いときはこちらを使う */
+const RATE_LIMIT_BACKOFF_SEC = [10, 20, 30, 60, 60];
+const DEFAULT_REQUESTS_PER_MINUTE = 10;
+const RATE_WINDOW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 90_000;
 /** これより長い 429 の待ちは、1 日の上限とみなして待たない */
 const DAILY_QUOTA_WAIT_MS = 120_000;
@@ -49,6 +54,8 @@ export interface NarratorOptions {
   style?: string;
   cacheDir: string;
   concurrency?: number;
+  /** 直近 1 分に送り始めるリクエストの上限。1 未満や非数は既定 */
+  requestsPerMinute?: number;
   baseUrl?: string;
   /** 読み上げの速さ。1 で等倍。未指定は 1.2 */
   tempo?: number;
@@ -56,7 +63,7 @@ export interface NarratorOptions {
   batch?: boolean;
 }
 
-/** 再試行しても直らないエラー（キーやモデル名の誤りなど） */
+/** 再試行しても直らないエラー（キーやモデル名の誤り、1 日あたりの上限など） */
 class FatalNarrationError extends Error {
   constructor(message: string) {
     super(message);
@@ -153,6 +160,7 @@ export class Narrator {
   private readonly style: string;
   private readonly cacheDir: string;
   private readonly concurrency: number;
+  private readonly requestsPerMinute: number;
   private readonly baseUrl: string;
   private readonly tempo: number;
   private readonly batch: boolean;
@@ -160,6 +168,8 @@ export class Narrator {
   private requests = 0;
   /** 同じ最終ファイルへの同時処理は、1 つの Promise にまとめる */
   private readonly inflight = new Map<string, Promise<NarrationClip>>();
+  /** 送り始めた時刻（ms、昇順）。60 秒より古いものは捨てる。先読みと clip で共有する */
+  private readonly requestStarts: number[] = [];
 
   constructor(opts: NarratorOptions) {
     if (!opts.apiKey) throw new Error("音声合成の API キーが空です");
@@ -171,6 +181,7 @@ export class Narrator {
     this.cacheDir = opts.cacheDir;
     this.baseUrl = (opts.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.concurrency = normalizeConcurrency(opts.concurrency);
+    this.requestsPerMinute = normalizeRequestsPerMinute(opts.requestsPerMinute);
     this.tempo = normalizeTempo(opts.tempo);
     this.batch = opts.batch ?? true;
   }
@@ -186,6 +197,7 @@ export class Narrator {
       style: process.env.GEMINI_TTS_STYLE,
       cacheDir,
       concurrency: process.env.GEMINI_TTS_CONCURRENCY ? Number(process.env.GEMINI_TTS_CONCURRENCY) : undefined,
+      requestsPerMinute: process.env.GEMINI_TTS_RPM ? Number(process.env.GEMINI_TTS_RPM) : undefined,
       baseUrl: process.env.GEMINI_API_BASE_URL,
       tempo: process.env.GEMINI_TTS_TEMPO ? Number(process.env.GEMINI_TTS_TEMPO) : undefined,
       batch: parseBatch(process.env.GEMINI_TTS_BATCH),
@@ -462,6 +474,7 @@ export class Narrator {
 
     let lastError = "音声の生成に失敗しました";
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      await this.acquireRequestSlot();
       try {
         this.requests++;
         const res = await fetch(url, {
@@ -481,18 +494,20 @@ export class Narrator {
         if (res.status === 429 || res.status >= 500) {
           lastError = httpError(res.status, parsed, this.model, this.#apiKey);
           if (res.status === 429) {
-            const delay = retryDelayMs(parsed);
-            if (delay != null && delay > DAILY_QUOTA_WAIT_MS) {
+            const hinted = retryDelayMs(parsed);
+            if (isDailyQuota(parsed) || (hinted != null && hinted > DAILY_QUOTA_WAIT_MS)) {
               throw new FatalNarrationError(
-                `1 日あたりの上限に達した可能性があります。時間をおいて撮り直してください。${lastError}`,
+                `${lastError}（1 日あたりの上限に達しています。時間をおいてから撮り直してください）`,
               );
             }
-            if (attempt === MAX_ATTEMPTS - 1) break;
-            await sleep(delay ?? backoffMs(attempt));
-            continue;
           }
           if (attempt === MAX_ATTEMPTS - 1) break;
-          await sleep(backoffMs(attempt));
+          const delay = res.status === 429 ? rateLimitDelayMs(parsed, attempt) : backoffMs(attempt);
+          if (res.status === 429) {
+            const seconds = Math.round(delay / 1000);
+            console.log(sanitize(`[tutorials] Gemini の上限に達したので ${seconds} 秒待ちます`, this.#apiKey));
+          }
+          await sleep(delay);
           continue;
         }
         if (!res.ok) {
@@ -586,6 +601,32 @@ export class Narrator {
   /** 切り分けた 1 文に、1 文合成と同じ無音除去をかける */
   private trimSilence(pcm: Buffer): Promise<Buffer> {
     return this.decodeAudio({ bytes: pcm, kind: "pcm", rate: SAMPLE_RATE, ext: ".raw" }, true);
+  }
+
+  /**
+   * 直近 60 秒の送信数が上限なら、空くまで待つ。
+   * 待ち時間を計算して時刻を先に記録してから sleep する。記録は同期的なので、同時に待っているワーカーが同じ枠を取らない。
+   */
+  private async acquireRequestSlot(): Promise<void> {
+    const waitMs = this.reserveRequestSlot();
+    if (waitMs > 0) await sleep(waitMs);
+  }
+
+  private reserveRequestSlot(): number {
+    const now = Date.now();
+    const expired = now - RATE_WINDOW_MS;
+    while (this.requestStarts.length > 0 && this.requestStarts[0] <= expired) {
+      this.requestStarts.shift();
+    }
+    let startAt = now;
+    if (this.requestStarts.length >= this.requestsPerMinute) {
+      const oldestInWindow = this.requestStarts[this.requestStarts.length - this.requestsPerMinute];
+      startAt = Math.max(now, oldestInWindow + RATE_WINDOW_MS);
+    }
+    const at = this.requestStarts.findIndex((t) => t > startAt);
+    if (at === -1) this.requestStarts.push(startAt);
+    else this.requestStarts.splice(at, 0, startAt);
+    return startAt - now;
   }
 }
 
@@ -951,6 +992,11 @@ function isNoAudio(err: unknown): boolean {
   return err instanceof Error && err.message === NO_AUDIO_MESSAGE;
 }
 
+function normalizeRequestsPerMinute(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value) || value < 1) return DEFAULT_REQUESTS_PER_MINUTE;
+  return Math.floor(value);
+}
+
 async function readCached(file: string): Promise<NarrationClip | null> {
   try {
     const info = await stat(file);
@@ -973,22 +1019,73 @@ function errorMessage(body: unknown): string {
   return "サーバーからの説明はありませんでした";
 }
 
-/** 応答に retryDelay が無ければ null（呼び出し側がバックオフと区別する） */
-function retryDelayMs(body: unknown): number | null {
-  const details =
-    body && typeof body === "object" && "error" in body
-      ? (body as { error?: { details?: unknown } }).error?.details
-      : undefined;
-  if (Array.isArray(details)) {
-    for (const item of details) {
-      if (!item || typeof item !== "object" || !("retryDelay" in item)) continue;
-      const delay = (item as { retryDelay?: unknown }).retryDelay;
-      if (typeof delay !== "string") continue;
-      const match = /^(\d+(?:\.\d+)?)s$/.exec(delay.trim());
-      if (match) return Math.round(Number(match[1]) * 1000);
+function rateLimitDelayMs(body: unknown, attempt: number): number {
+  const sec = RATE_LIMIT_BACKOFF_SEC[Math.min(attempt, RATE_LIMIT_BACKOFF_SEC.length - 1)];
+  const hinted = retryDelayMs(body);
+  if (hinted == null) return sec * 1000;
+  return Math.max(hinted, sec * 1000);
+}
+
+/** 応答の retryDelay（秒の文字列）。無ければ undefined */
+function retryDelayMs(body: unknown): number | undefined {
+  const details = errorDetails(body);
+  if (!Array.isArray(details)) return undefined;
+  for (const item of details) {
+    if (!item || typeof item !== "object" || !("retryDelay" in item)) continue;
+    const delay = (item as { retryDelay?: unknown }).retryDelay;
+    if (typeof delay !== "string") continue;
+    const match = /^(\d+(?:\.\d+)?)s$/.exec(delay.trim());
+    if (match) return Math.round(Number(match[1]) * 1000);
+  }
+  return undefined;
+}
+
+/**
+ * 1 日あたりの上限なら true。
+ * QuotaFailure の violations[].quotaId に PerDay が含まれる、または quotaMetric / description が per day を示す。
+ * 判定できなければ false（1 分あたりとして待つ）。
+ */
+function isDailyQuota(body: unknown): boolean {
+  const details = errorDetails(body);
+  if (!Array.isArray(details)) return false;
+  for (const item of details) {
+    if (!isQuotaFailure(item)) continue;
+    if (fieldsIndicatePerDay(item)) return true;
+    const violations = (item as { violations?: unknown }).violations;
+    if (!Array.isArray(violations)) continue;
+    for (const violation of violations) {
+      if (!violation || typeof violation !== "object") continue;
+      const quotaId = (violation as { quotaId?: unknown }).quotaId;
+      if (typeof quotaId === "string" && quotaId.includes("PerDay")) return true;
+      if (fieldsIndicatePerDay(violation)) return true;
     }
   }
-  return null;
+  return false;
+}
+
+function errorDetails(body: unknown): unknown {
+  if (!body || typeof body !== "object" || !("error" in body)) return undefined;
+  return (body as { error?: { details?: unknown } }).error?.details;
+}
+
+function isQuotaFailure(item: unknown): item is object {
+  if (!item || typeof item !== "object") return false;
+  const type = (item as { ["@type"]?: unknown })["@type"];
+  if (typeof type === "string" && type.includes("QuotaFailure")) return true;
+  return Array.isArray((item as { violations?: unknown }).violations);
+}
+
+function fieldsIndicatePerDay(item: object): boolean {
+  const metric = (item as { quotaMetric?: unknown }).quotaMetric;
+  const description = (item as { description?: unknown }).description;
+  return (
+    (typeof metric === "string" && indicatesPerDay(metric)) ||
+    (typeof description === "string" && indicatesPerDay(description))
+  );
+}
+
+function indicatesPerDay(text: string): boolean {
+  return /per[\s_-]?day/i.test(text);
 }
 
 function backoffMs(attempt: number): number {
