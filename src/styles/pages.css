@@ -224,6 +224,14 @@
 .table-row:hover {
   background: var(--hover);
 }
+/* ドラッグ中は行を浮かせる */
+.table-row.dragging {
+  position: relative;
+  z-index: 2;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  cursor: grabbing;
+}
 .cell-name {
   display: flex;
   align-items: center;
