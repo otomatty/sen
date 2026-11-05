@@ -1,13 +1,14 @@
 // 活動一覧と WBS の中身、および Sheets API の batchUpdate リクエストを作る純粋関数。
+// 集計は shared/progress.ts。ここはシートの書式（セル・列幅・リンク）を足す。
 // DB・fetch には依存しない（Playwright から直接 import して確かめる）。
 
 import { dateToYmd } from "../../shared/dates";
-import { PRIORITIES } from "../../shared/constants";
-import type { StateType } from "../../shared/types";
+import { summarizeProgress, type ActivityStatus, type ProgressTask, type ReportInput } from "../../shared/progress";
+
+export type { ActivityStatus, ReportInput, ReportIssueInput } from "../../shared/progress";
 
 const DESCRIPTION_MAX = 50_000;
 const JST_OFFSET_MS = 540 * 60_000;
-const PROCESS_PREFIX = /^工程[:：](.*)$/;
 
 const ACTIVITY_TAB = "活動一覧";
 const WBS_TAB = "WBS";
@@ -22,47 +23,10 @@ const WBS_WIDTHS = [200, 110, 300, 320, 100, 100, 100, 90, 100, 70];
 
 const NOTE = "このシートは Sen から自動で作られます。変更は Sen で行ってください。";
 
-export interface ReportInput {
-  workspaceName: string;
-  urlKey: string;
-  /** アプリの公開 URL（リンク用）。null ならリンクなしの文字列にする */
-  origin: string | null;
-  /** 日本時間の今日 'YYYY-MM-DD' */
-  today: string;
-  /** 反映日時（UNIX ミリ秒） */
-  now: number;
-  /** 表示順に並んだ、アーカイブされていないプロジェクト */
-  projects: { id: string; name: string }[];
-  issues: ReportIssueInput[];
-}
-
-export interface ReportIssueInput {
-  id: string;
-  /** 'ENG-12' */
-  identifier: string;
-  title: string;
-  /** 説明を平文にしたもの */
-  descriptionText: string;
-  projectId: string;
-  stateName: string;
-  stateType: StateType;
-  priority: number;
-  assigneeName: string | null;
-  labelNames: string[];
-  /** 'YYYY-MM-DD' */
-  dueDate: string | null;
-  /** 着手日 'YYYY-MM-DD'（日本時間） */
-  startedOn: string | null;
-  /** 完了日 'YYYY-MM-DD'（日本時間） */
-  completedOn: string | null;
-}
-
 export interface ReportLink {
   text: string;
   url: string | null;
 }
-
-export type ActivityStatus = "タスク未登録" | "完了" | "期限超過" | "保留あり" | "進行中" | "未着手";
 
 export interface ActivityRow {
   /** プロジェクト名。origin があればプロジェクトへのリンク */
@@ -103,22 +67,22 @@ export interface ExistingSheet {
 
 /** プロジェクトの表示順 → 完了予定（未設定は後ろ）→ チームキー → 番号 */
 export function buildReport(input: ReportInput): Report {
-  const projectOrder = new Map(input.projects.map((p, i) => [p.id, i]));
-  const projectName = new Map(input.projects.map((p) => [p.id, p.name]));
-  const issues = input.issues.filter((issue) => projectOrder.has(issue.projectId) && issue.stateType !== "canceled");
-  issues.sort((a, b) => compareIssues(a, b, projectOrder));
-
-  const byProject = new Map<string, ReportIssueInput[]>();
-  for (const project of input.projects) byProject.set(project.id, []);
-  for (const issue of issues) byProject.get(issue.projectId)?.push(issue);
-
+  const summary = summarizeProgress(input);
+  const projectName = new Map(summary.activities.map((activity) => [activity.projectId, activity.name]));
   return {
     workspaceName: input.workspaceName,
     now: input.now,
-    activities: input.projects.map((project) =>
-      activityRow(project, byProject.get(project.id) ?? [], input.origin, input.urlKey, input.today),
-    ),
-    tasks: issues.map((issue) => taskRow(issue, projectName.get(issue.projectId) ?? "", input.origin, input.urlKey)),
+    activities: summary.activities.map((activity) => ({
+      activity: {
+        text: activity.name,
+        url: input.origin ? `${input.origin}/${input.urlKey}/project/${activity.projectId}` : null,
+      },
+      nextDue: activity.nextDue,
+      completionRate: activity.completionRate,
+      status: activity.status,
+      id: activity.projectId,
+    })),
+    tasks: summary.tasks.map((task) => taskRow(task, projectName.get(task.projectId) ?? "", input.origin, input.urlKey)),
   };
 }
 
@@ -149,55 +113,10 @@ export function buildSheetRequests(report: Report, existing: ExistingSheet[]): o
   return requests;
 }
 
-function compareIssues(a: ReportIssueInput, b: ReportIssueInput, projectOrder: Map<string, number>): number {
-  const byProject = (projectOrder.get(a.projectId) ?? 0) - (projectOrder.get(b.projectId) ?? 0);
-  if (byProject !== 0) return byProject;
-  const byDue = compareDue(a.dueDate, b.dueDate);
-  if (byDue !== 0) return byDue;
-  const ak = splitIdentifier(a.identifier);
-  const bk = splitIdentifier(b.identifier);
-  if (ak.key !== bk.key) return ak.key < bk.key ? -1 : 1;
-  return ak.num - bk.num;
-}
-
-function compareDue(a: string | null, b: string | null): number {
-  if (!a && !b) return 0;
-  if (!a) return 1;
-  if (!b) return -1;
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** 'ENG-12' → チームキーと番号。番号の区切りは最後の '-' */
-function splitIdentifier(identifier: string): { key: string; num: number } {
-  const i = identifier.lastIndexOf("-");
-  if (i < 0) return { key: identifier, num: 0 };
-  const num = Number(identifier.slice(i + 1));
-  return { key: identifier.slice(0, i), num: Number.isFinite(num) ? num : 0 };
-}
-
-function activityRow(
-  project: { id: string; name: string },
-  tasks: ReportIssueInput[],
-  origin: string | null,
-  urlKey: string,
-  today: string,
-): ActivityRow {
-  return {
-    activity: {
-      text: project.name,
-      url: origin ? `${origin}/${urlKey}/project/${project.id}` : null,
-    },
-    nextDue: nextDue(tasks),
-    completionRate: completionRate(tasks),
-    status: activityStatus(tasks, today),
-    id: project.id,
-  };
-}
-
-function taskRow(issue: ReportIssueInput, projectName: string, origin: string | null, urlKey: string): TaskRow {
+function taskRow(issue: ProgressTask, projectName: string, origin: string | null, urlKey: string): TaskRow {
   return {
     activity: projectName,
-    process: processLabel(issue.labelNames),
+    process: issue.process,
     work: {
       text: `${issue.identifier} ${issue.title}`,
       url: origin ? `${origin}/${urlKey}/issue/${issue.identifier}` : null,
@@ -208,22 +127,9 @@ function taskRow(issue: ReportIssueInput, projectName: string, origin: string | 
     dueDate: slashDate(issue.dueDate),
     state: issue.stateName,
     completedOn: issue.stateType === "completed" ? slashDate(issue.completedOn) : "",
-    priority: PRIORITIES.find((p) => p.value === issue.priority)?.short ?? "なし",
+    priority: issue.priorityLabel,
     id: issue.id,
   };
-}
-
-/** `工程:` または `工程：` で始まるラベルの接頭辞を除き、名前順に `／` でつなぐ */
-function processLabel(labelNames: string[]): string {
-  const names: string[] = [];
-  for (const name of labelNames) {
-    const matched = PROCESS_PREFIX.exec(name);
-    if (!matched) continue;
-    const body = matched[1].trim();
-    if (body) names.push(body);
-  }
-  names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return names.join("／");
 }
 
 function clipDescription(text: string): string {
@@ -234,42 +140,6 @@ function clipDescription(text: string): string {
 
 function slashDate(ymd: string | null): string {
   return ymd ? ymd.replaceAll("-", "/") : "";
-}
-
-/** 完了以外が未完了。保留は backlog。active は未完了のうち保留でないもの */
-function partition(tasks: ReportIssueInput[]) {
-  const open = tasks.filter((task) => task.stateType !== "completed");
-  const active = open.filter((task) => task.stateType !== "backlog");
-  const done = tasks.length - open.length;
-  return { open, active, done };
-}
-
-function completionRate(tasks: ReportIssueInput[]): string {
-  if (tasks.length === 0) return "タスクなし";
-  const { done } = partition(tasks);
-  const pct = Math.floor((done * 100) / tasks.length);
-  return `${pct}%（${done}/${tasks.length}）`;
-}
-
-function nextDue(tasks: ReportIssueInput[]): string {
-  const { open, active } = partition(tasks);
-  if (tasks.length === 0 || open.length === 0 || active.length === 0) return "—";
-  const dated = active.filter((task) => task.dueDate);
-  if (dated.length === 0) return "期限未設定";
-  const earliest = dated.map((task) => task.dueDate!).sort()[0];
-  const unset = active.length - dated.length;
-  const text = slashDate(earliest);
-  return unset > 0 ? `${text}（未設定${unset}件）` : text;
-}
-
-function activityStatus(tasks: ReportIssueInput[], today: string): ActivityStatus {
-  if (tasks.length === 0) return "タスク未登録";
-  const { open, active } = partition(tasks);
-  if (open.length === 0) return "完了";
-  if (active.some((task) => task.dueDate && task.dueDate < today)) return "期限超過";
-  if (open.some((task) => task.stateType === "backlog")) return "保留あり";
-  if (open.some((task) => task.stateType === "started")) return "進行中";
-  return "未着手";
 }
 
 // ---- Sheets API リクエスト ----

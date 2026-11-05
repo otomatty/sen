@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import {
   ArrowRightLeft,
   BarChart3,
+  ChartColumn,
   Box,
   CalendarDays,
   CircleDashed,
@@ -185,6 +186,7 @@ function Palette() {
       { id: "go-inbox", label: "受信トレイへ移動", group: "移動", icon: <Inbox size={15} />, combo: "g i", keywords: "inbox", perform: () => go("/inbox") },
       { id: "go-my", label: "自分の課題へ移動", group: "移動", icon: <CircleDot size={15} />, combo: "g m", keywords: "my issues", perform: () => go("/my-issues") },
       { id: "go-projects", label: "プロジェクトへ移動", group: "移動", icon: <Box size={15} />, combo: "g p", keywords: "projects", perform: () => go("/projects") },
+      { id: "go-progress", label: "進捗へ移動", group: "移動", icon: <ChartColumn size={15} />, combo: "g r", keywords: "progress wbs 進捗 活動", perform: () => go("/progress") },
       ...teams.flatMap((t) => [
         {
           id: `go-team-${t.id}`,

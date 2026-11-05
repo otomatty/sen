@@ -6,6 +6,7 @@ import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPag
 import { IssuePage, MyIssuesPage, SearchPage, TeamIssuesPage, WorkspaceHome } from "./features/issues/pages";
 import { InboxPage } from "./features/inbox/InboxPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
+import { ProgressPage } from "./features/progress/ProgressPage";
 import { ProjectPage } from "./features/projects/ProjectPage";
 import { CyclePage, CyclesPage } from "./features/cycles/CyclesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -112,6 +113,8 @@ function AppRoutes() {
           <Route path="team/:teamKey/projects" element={<ProjectsPage />} />
           <Route path="team/:teamKey/:tab" element={<TeamIssuesPage />} />
           <Route path="projects" element={<ProjectsPage />} />
+          <Route path="progress" element={<ProgressPage />} />
+          <Route path="progress/:tab" element={<ProgressPage />} />
           <Route path="project/:projectId" element={<ProjectPage />} />
           <Route path="project/:projectId/:tab" element={<ProjectPage />} />
           <Route path="issue/:identifier" element={<IssuePage />} />

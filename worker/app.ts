@@ -8,6 +8,7 @@ import type {
   MutateRequest,
   MutateResponse,
   Mutation,
+  ProgressStartedResponse,
   Role,
   SheetSyncStatus,
 } from "../shared/types";
@@ -32,6 +33,7 @@ import {
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
 import { handleMcp } from "./mcp/server";
 import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
+import { loadStartedOn } from "./progress";
 import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
 
 function err(c: Context, message: string, status = 400) {
@@ -313,6 +315,13 @@ export function createApp() {
     // 反映そのものが失敗しても 200。理由は lastError に入る。
     const status = await requestSheetSyncNow(c.env, ws.id, publicOrigin(c));
     return c.json(asEnabledStatus(c.env, status));
+  });
+
+  // ---------------- 進捗（メンバーなら誰でも。スプレッドシート連携とは別） ----------------
+  app.get("/progress/started", requireUser, requireWorkspace, async (c) => {
+    const startedOn = await loadStartedOn(c.env.DB, c.get("workspace").id);
+    const body: ProgressStartedResponse = { startedOn };
+    return c.json(body);
   });
 
   // ---------------- 開発用 ----------------

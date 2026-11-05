@@ -21,6 +21,7 @@ import {
   Sun,
   UserPlus,
   RefreshCw,
+  ChartColumn,
 } from "lucide-react";
 import { useData } from "../store/data";
 import { useProjects, useTeams, useUnreadCount } from "../store/selectors";
@@ -108,6 +109,7 @@ export function Sidebar() {
 
         <div className="nav-section">ワークスペース</div>
         {link(p("/projects"), <Box size={15} />, "プロジェクト", null, "nav-projects")}
+        {link(p("/progress"), <ChartColumn size={15} />, "進捗", null, "nav-progress")}
 
         {favorites.length > 0 && (
           <>

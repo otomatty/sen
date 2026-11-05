@@ -20,6 +20,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
       ["g b", "チームのバックログ"],
       ["g c", "サイクル"],
       ["g p", "プロジェクト"],
+      ["g r", "進捗"],
       ["g s", "設定"],
       ["g h", "使い方動画"],
     ],
