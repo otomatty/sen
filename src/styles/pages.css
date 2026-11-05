@@ -597,12 +597,20 @@
   margin: 8px 0;
   line-height: 1.6;
 }
-.domain-save {
+.domain-pending {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0 12px;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.domain-pending-note {
+  flex: 1 1 200px;
+  color: var(--text-secondary);
 }
 .members-page-head {
   display: flex;
@@ -633,16 +641,60 @@
   gap: 8px 12px;
   padding: 8px 0;
 }
-.invitation-meta {
+.invitation-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px dashed var(--border-strong);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.invitation-main {
+  flex: 1 1 200px;
+  gap: 2px;
+}
+.invitation-email-line {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 2px 6px;
-  overflow-wrap: anywhere;
+  gap: 6px;
+  min-width: 0;
+}
+.invitation-email {
+  font-weight: 600;
+  min-width: 0;
+}
+.invitation-status {
+  flex-shrink: 0;
 }
 .invitation-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+.settings-section-count {
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+.member-person {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.member-email {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-row > select,
+.member-row > .pill {
+  flex-shrink: 0;
 }
 .invite-dialog .modal-head {
   padding: 16px 20px 0;
@@ -892,6 +944,19 @@
   flex-shrink: 1;
   max-width: 100%;
 }
+.domain-chip.is-draft {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.domain-chip-draft {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.domain-chip.is-draft .chip-x {
+  color: inherit;
+}
 .chip-x {
   display: inline-flex;
   align-items: center;
@@ -906,16 +971,11 @@
   background: var(--hover);
   color: var(--text);
 }
-.settings-loading {
-  display: flex;
-  justify-content: center;
-  padding: 18px 0;
-}
 .member-name-line {
   width: 100%;
   min-width: 0;
 }
-.pill.warn {
+.member-name-line .pill.warn {
   white-space: normal;
   height: auto;
   min-height: 20px;
@@ -1725,15 +1785,36 @@
   .settings-content textarea {
     font-size: 16px;
   }
-  .domain-save .btn,
-  .invitation-actions .btn {
-    min-height: 40px;
+  .invitation-email-line {
+    flex-wrap: nowrap;
+  }
+  .invitation-email {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .invitation-actions {
-    width: 100%;
+    flex: 1 0 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+    gap: 8px;
   }
   .invitation-actions .btn {
-    flex: 1;
+    flex: 0 0 auto;
+    height: 36px;
+    min-height: 36px;
+  }
+  .member-row > .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .member-row > select {
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .domain-add .input,
+  .domain-add .btn {
+    height: 40px;
   }
   .members-page-head {
     flex-direction: column;

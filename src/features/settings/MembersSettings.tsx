@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { Trash2, UserPlus, X } from "lucide-react";
+import { Mail, Trash2, UserPlus, X } from "lucide-react";
 import type { InvitationIssued, InvitationListResponse, InvitationSummary, Role } from "../../../shared/types";
 import { emailDomain, isEmailAllowed, isValidDomain, MAX_ALLOWED_DOMAINS, normalizeDomain } from "../../../shared/domains";
 import { useData } from "../../store/data";
@@ -8,8 +8,9 @@ import { removeMember, setAllowedDomains, setMemberRole } from "../../store/acti
 import { useMembers } from "../../store/selectors";
 import { toast } from "../../store/ui";
 import { api } from "../../lib/api";
+import { cx } from "../../lib/utils";
 import { confirmDialog } from "../../components/ConfirmDialog";
-import { Avatar, Button, Spinner } from "../../components/ui";
+import { Avatar, Button } from "../../components/ui";
 import { useIsAdmin } from "../../app/hooks";
 import { InviteDialog } from "./InviteDialog";
 import { Section } from "./parts";
@@ -25,10 +26,38 @@ function sameList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
+function isExpired(inv: Pick<InvitationSummary, "expiresAt" | "status">, now = Date.now()): boolean {
+  return inv.status === "expired" || inv.expiresAt <= now;
+}
+
 function expiryLabel(inv: Pick<InvitationSummary, "expiresAt" | "status">, now = Date.now()): string {
-  if (inv.status === "expired" || inv.expiresAt <= now) return "期限切れ";
+  if (isExpired(inv, now)) {
+    const d = new Date(inv.expiresAt);
+    return `${d.getMonth() + 1}月${d.getDate()}日に期限切れ`;
+  }
   const days = Math.max(1, Math.ceil((inv.expiresAt - now) / DAY_MS));
-  return `${days}日後に期限切れ`;
+  return `あと ${days} 日`;
+}
+
+function invitationTone(inv: InvitationSummary, now = Date.now()): "danger" | "success" | "warn" {
+  if (isExpired(inv, now)) return "danger";
+  if (inv.emailSentAt != null) return "success";
+  return "warn";
+}
+
+function invitationStatusLabel(tone: "danger" | "success" | "warn"): string {
+  if (tone === "danger") return "期限切れ";
+  if (tone === "success") return "メールを送りました";
+  return "メール未送信";
+}
+
+function countTitle(label: string, count: string) {
+  return (
+    <>
+      {label}
+      <span className="settings-section-count">（{count}）</span>
+    </>
+  );
 }
 
 function MemberList() {
@@ -37,13 +66,13 @@ function MemberList() {
   const allowed = useData((s) => s.workspace?.allowedDomains) ?? EMPTY_DOMAINS;
   const admin = useIsAdmin();
   return (
-    <Section title={`メンバー（${members.length}人）`}>
+    <Section title={countTitle("メンバー", `${members.length}人`)}>
       {members.map((m) => {
         const blocked = allowed.length > 0 && !isEmailAllowed(m.email, allowed);
         return (
           <div key={m.id} className="member-row">
             <Avatar user={m} size={28} />
-            <div className="member-info">
+            <div className="member-info member-person">
               <span className="member-name-line">
                 <b>
                   {m.name}
@@ -55,9 +84,10 @@ function MemberList() {
                   </span>
                 )}
               </span>
-              <span className="muted small">{m.email}</span>
+              <span className="muted small member-email" title={m.email}>
+                {m.email}
+              </span>
             </div>
-            <span className="spacer" />
             {admin && m.id !== meId ? (
               <>
                 <select value={m.role} onChange={(e) => setMemberRole(m.id, e.target.value as Role)}>
@@ -147,45 +177,52 @@ function InvitationList({
     }
   };
 
+  // 招待が無いときは出さない。読み込みに失敗したときだけ、空でもエラーを出す。
+  if (invitations.length === 0 && (loading || !loadError)) return null;
+
   return (
-    <Section title="招待中">
-      {loading && invitations.length === 0 && !loadError ? (
-        <div className="settings-loading">
-          <Spinner />
-        </div>
-      ) : loadError && invitations.length === 0 ? (
-        <p className="form-error">{loadError}</p>
-      ) : invitations.length === 0 ? (
-        <p className="muted settings-empty">招待中の人はいません</p>
-      ) : (
-        <>
-          {loadError && <p className="form-error">{loadError}</p>}
-          {invitations.map((inv) => (
-            <div key={inv.id} className="member-row invitation-row" data-testid="invitation-row" data-email={inv.email}>
-              <div className="member-info">
-                <b className="invite-result-email">{inv.email}</b>
-                <span className="muted small invitation-meta">
-                  {roleLabel(inv.role)}
-                  <span>・</span>
-                  {inv.invitedBy ? `招待した人：${inv.invitedBy.name}` : "招待した人は不明"}
-                  <span>・</span>
-                  {expiryLabel(inv)}
-                  <span>・</span>
-                  {inv.emailSentAt ? "メールを送りました" : "メールは送られていません"}
+    <Section title={countTitle("招待中", `${invitations.length}件`)}>
+      {loadError && <p className="form-error">{loadError}</p>}
+      {invitations.map((inv) => {
+        const expired = isExpired(inv);
+        const tone = invitationTone(inv);
+        const by = inv.invitedBy ? `${inv.invitedBy.name} さんが招待` : "招待した人は不明";
+        return (
+          <div key={inv.id} className="member-row invitation-row" data-testid="invitation-row" data-email={inv.email}>
+            <span className="invitation-mark muted" aria-hidden>
+              <Mail size={14} />
+            </span>
+            <div className="member-info invitation-main">
+              <span className="invitation-email-line">
+                <b className={cx("invitation-email", expired && "muted")} title={inv.email}>
+                  {inv.email}
+                </b>
+                <span className={cx("pill", "invitation-status", tone)} data-testid="invitation-status">
+                  {invitationStatusLabel(tone)}
                 </span>
-              </div>
-              <div className="invitation-actions">
-                <Button type="button" size="sm" data-testid="invitation-resend" disabled={busyId !== null} onClick={() => void resend(inv)}>
-                  再送
-                </Button>
-                <Button type="button" size="sm" variant="ghost" data-testid="invitation-revoke" disabled={busyId !== null} onClick={() => void revoke(inv)}>
-                  取り消す
-                </Button>
-              </div>
+              </span>
+              <span className="muted small">
+                {roleLabel(inv.role)} ・ {by} ・ {expiryLabel(inv)}
+              </span>
             </div>
-          ))}
-        </>
-      )}
+            <div className="invitation-actions">
+              <Button
+                type="button"
+                size="sm"
+                variant={expired ? "primary" : "secondary"}
+                data-testid="invitation-resend"
+                disabled={busyId !== null}
+                onClick={() => void resend(inv)}
+              >
+                招待し直す
+              </Button>
+              <Button type="button" size="sm" variant="ghost" data-testid="invitation-revoke" disabled={busyId !== null} onClick={() => void revoke(inv)}>
+                取り消す
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </Section>
   );
 }
@@ -231,6 +268,12 @@ function AllowedDomains({ onSaved }: { onSaved: () => void }) {
     edit([...domains, domain]);
   };
 
+  const reset = () => {
+    setDraft(null);
+    setInputError(null);
+    setSaveError(null);
+  };
+
   const save = async () => {
     if (!dirty || saving) return;
     setSaveError(null);
@@ -272,16 +315,20 @@ function AllowedDomains({ onSaved }: { onSaved: () => void }) {
         <p className="muted small domain-hint">制限していません</p>
       ) : (
         <div className="domain-chips">
-          {domains.map((d) => (
-            <span key={d} className="chip domain-chip" data-testid="allowed-domain">
-              <span className="chip-text">{d}</span>
-              {admin && (
-                <button type="button" className="chip-x" aria-label={`${d} を外す`} onClick={() => edit(domains.filter((x) => x !== d))}>
-                  <X size={12} />
-                </button>
-              )}
-            </span>
-          ))}
+          {domains.map((d) => {
+            const unsaved = !saved.includes(d);
+            return (
+              <span key={d} className={cx("chip", "domain-chip", unsaved && "is-draft")} data-testid="allowed-domain">
+                <span className="chip-text">{d}</span>
+                {unsaved && <span className="domain-chip-draft">（未保存）</span>}
+                {admin && (
+                  <button type="button" className="chip-x" aria-label={`${d} を外す`} onClick={() => edit(domains.filter((x) => x !== d))}>
+                    <X size={12} />
+                  </button>
+                )}
+              </span>
+            );
+          })}
         </div>
       )}
       {admin && (
@@ -309,12 +356,18 @@ function AllowedDomains({ onSaved }: { onSaved: () => void }) {
             </Button>
           </div>
           {inputError && <p className="form-error">{inputError}</p>}
-          <div className="domain-save">
-            <Button type="button" variant="primary" data-testid="allowed-domains-save" disabled={!dirty || saving} onClick={() => void save()}>
-              {saving ? "保存しています…" : "保存"}
-            </Button>
-          </div>
           {saveError && <p className="form-error">{saveError}</p>}
+          {dirty && (
+            <div className="domain-pending">
+              <span className="domain-pending-note">まだ保存していない変更があります</span>
+              <Button type="button" variant="ghost" size="sm" data-testid="allowed-domains-reset" disabled={saving} onClick={reset}>
+                元に戻す
+              </Button>
+              <Button type="button" variant="primary" size="sm" data-testid="allowed-domains-save" disabled={saving} onClick={() => void save()}>
+                {saving ? "保存しています…" : "保存"}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </Section>
@@ -398,7 +451,6 @@ export function MembersSettings() {
           </Button>
         )}
       </header>
-      <MemberList />
       {admin && (
         <InvitationList
           wsKey={wsKey}
@@ -409,6 +461,7 @@ export function MembersSettings() {
           onChange={reload}
         />
       )}
+      <MemberList />
       <AllowedDomains key={wsKey} onSaved={reload} />
       {dialog && (
         <InviteDialog

@@ -487,6 +487,19 @@ test("自分のドメインを含めないと、利用できるドメインは�
   expect(((await boot.json()) as { workspace: { allowedDomains: string[] } }).workspace.allowedDomains).toEqual([]);
 });
 
+test("利用できるドメインを追加すると未保存の案内が出て、元に戻すと消える", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "管理 花子" });
+  await page.goto(`/${ws}/settings/members`);
+  await addDomain(page, "example.com");
+  const section = domainSection(page);
+  const chip = section.getByTestId("allowed-domain");
+  await expect(chip).toContainText("（未保存）");
+  await expect(section.getByText("まだ保存していない変更があります")).toBeVisible();
+  await section.getByTestId("allowed-domains-reset").click();
+  await expect(chip).toHaveCount(0);
+  await expect(section.getByText("まだ保存していない変更があります")).toHaveCount(0);
+});
+
 test("利用できるドメインの制限を外すと、その人はまた使える", async ({ page, browser }) => {
   test.setTimeout(90_000);
   const { ws, email, guest } = await joinOutsideMember(page, browser);
