@@ -393,3 +393,48 @@ test("アカウントの一覧が分かるまでは、ログアウトを 2 つ�
   await expect(page.getByTestId("user-menu-logout")).toHaveCount(0);
   await page.unroute("**/api/accounts");
 });
+
+test("知らせを受けたタブで入力中のタイトルは、読み込み直す前に送信待ちに入れて確かめる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  await other.getByTestId("issue-row").first().click();
+  // Enter も欄から離れることもせず、まだ保存されていない状態にしておく
+  await other.getByTestId("issue-title").fill("入力中のタイトル");
+  // Google から戻ってきたのと同じく、このタブだけ別のアカウントになる
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("まだ送っていない変更", { timeout: 15_000 });
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("user-menu")).toContainText("山田 花子");
+  await expect(other.getByTestId("sync-status")).toContainText("同期済み", { timeout: 40_000 });
+  await other.reload();
+  await expect(other.getByTestId("issue-title")).toHaveValue("入力中のタイトル");
+});
+
+test("画面と違うアカウントからの『切り替え』は止め、元のアカウントへ戻すのは通す", async ({ page }) => {
+  await signInTwoAccounts(page);
+  const listed = (await (await page.request.get("/api/accounts")).json()) as {
+    accounts: { id: string; current: boolean }[];
+  };
+  const jiroId = listed.accounts.find((a) => a.current)!.id;
+  const hanakoId = listed.accounts.find((a) => !a.current)!.id;
+  const blocked = await page.request.post("/api/accounts/switch", {
+    data: { userId: hanakoId },
+    headers: { "x-sen-client": "1", "x-sen-user": "someone-else" },
+  });
+  expect(blocked.status()).toBe(409);
+  expect(((await blocked.json()) as { code?: string }).code).toBe("account-switched");
+  const me = await page.request.get("/api/me");
+  expect(((await me.json()) as { user: { id: string } }).user.id).toBe(jiroId);
+  const ok = await page.request.post("/api/accounts/switch", {
+    data: { userId: hanakoId },
+    headers: { "x-sen-client": "1", "x-sen-user": hanakoId },
+  });
+  expect(ok.status()).toBe(200);
+  const after = await page.request.get("/api/me");
+  expect(((await after.json()) as { user: { id: string } }).user.id).toBe(hanakoId);
+});

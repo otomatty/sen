@@ -85,6 +85,11 @@ async function handleAccountChangedElsewhere() {
   handlingAccountChange = true;
   // 409 のときは api がこの関数を呼んだあとで engine の catch に入る。先に止めて、変更が捨てられないようにする
   engine.pause();
+  // 離れたときの保存と、説明の 700 ミリ秒後の保存が送信待ちに入るのを待つ。待っているあいだは新しく入力させない
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  lockScreen(true);
+  await new Promise((r) => setTimeout(r, 800));
+  lockScreen(false);
   const pending = useData.getState().pendingCount;
   const drafts = hasIssueDraft() || hasCommentDraft();
   const me = useSession.getState().user;

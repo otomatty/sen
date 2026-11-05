@@ -225,6 +225,14 @@ export function createApp() {
   app.post("/accounts/switch", async (c) => {
     try {
       const body = await readJson<{ userId?: string }>(c);
+      const current = await getSessionUser(c);
+      if (!current) return err(c, "ログインが必要です", 401);
+      const expected = c.req.header("x-sen-user");
+      // 画面は別のアカウントのまま、Cookie だけ替わったタブが、さらに別のアカウントへ切り替えるのを止める。元のアカウントへ戻すときと、ヘッダーの無いリクエストは通す
+      if (expected && expected !== current.id && expected !== body.userId) {
+        const switched = accountSwitched(c, current.id);
+        if (switched) return switched;
+      }
       const sessions = await getAuth(c).api.listDeviceSessions({ headers: c.req.raw.headers });
       const target = sessions.find((s) => s.user.id === body.userId);
       if (!target) return err(c, "このアカウントは、もう一度ログインが必要です", 404);
