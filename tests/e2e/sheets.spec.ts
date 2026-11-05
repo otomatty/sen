@@ -867,7 +867,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
         await mutate(page, ws, [
           {
             type: "issue.update",
-            args: { id: overdueId, patch: { description: `<p>予約の保持 ${attempt}</p>` } },
+            args: { id: overdueId, patch: { description: `予約の保持 ${attempt}` } },
           },
         ]);
 
@@ -965,7 +965,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     await mutate(page, ws, [
       {
         type: "issue.update",
-        args: { id: overdueId, patch: { description: `<p>開いたままの反映 ${Date.now()}</p>` } },
+        args: { id: overdueId, patch: { description: `開いたままの反映 ${Date.now()}` } },
       },
     ]);
 

@@ -1,5 +1,6 @@
 // MCP Streamable HTTP（ステートレス）。セッションは発行しない。認証は API トークンだけ。
 
+import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import type { Context } from "hono";
 import type { AppEnv } from "../env";
 import { MutationError, type MutationCtx } from "../mutations";
@@ -32,7 +33,7 @@ function instructions(wsName: string, userName: string, readOnly: boolean): stri
   lines.push(
     "- 最初に get_workspace で、チーム・ステータス・メンバー・ラベル・プロジェクト・今日の日付を確かめてください。",
     "- 課題は「ENG-12」の形式で指定します。チーム・ステータス・担当者・ラベル・プロジェクト・サイクルは名前で指定できます。",
-    "- 説明とコメントは Markdown で書けます（見出し・箇条書き・チェックリスト・コード・リンク）。表と画像は使えません。",
+    `- 説明とコメントは GitHub と同じ Markdown（GFM）です。見出し（h1〜h6）・箇条書き・チェックリスト・コード・リンク・表・画像（https の URL）・注記（> [!NOTE] など）・脚注が使えます。書いた文字列をそのまま保存します。最大 ${MARKDOWN_MAX_LENGTH.toLocaleString("en-US")} 文字です。`,
     "- 複数の課題を作る・変えるときは、create_issues / update_issues に配列でまとめて渡してください（1 回 50 件まで）。",
     "- 多くの課題をまとめて変える前には、何をどう変えるかをユーザーに確かめてください。",
     "- 結果をユーザーに伝えるときは、課題の ID（例: ENG-12）と URL を添えてください。",

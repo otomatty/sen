@@ -1,4 +1,5 @@
-import { isHtmlEmpty, readLocal } from "../../lib/utils";
+import { isMarkdownBlank } from "../../../shared/markdown";
+import { readLocal } from "../../lib/utils";
 
 // 課題作成の下書き。ワークスペースとユーザーごとに、読み込み直しても残す。
 // メモリの控えは localStorage に保存できなかった下書きだけを持つ。保存できた下書きを控えに残すと、別のタブで作成・削除したあとによみがえるため。
@@ -38,7 +39,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function draftHasContent(d: Partial<Draft> | null | undefined): boolean {
   if (!d) return false;
   if (typeof d.title === "string" && d.title.trim() !== "") return true;
-  return typeof d.description === "string" && !isHtmlEmpty(d.description);
+  return typeof d.description === "string" && !isMarkdownBlank(d.description);
 }
 
 function pickFields(raw: Record<string, unknown>): Partial<Draft> {

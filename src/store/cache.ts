@@ -2,7 +2,8 @@
 // 起動時はキャッシュから描画 → 差分（/api/sync）だけを取得して最新にする。
 
 // 参加一覧 workspaces をスナップショットから外した。古い版のクライアントが新しい形を読んで落ちないよう、版を分ける。
-export const CACHE_VERSION = 4;
+// 本文を Markdown で保存するようにしたため、HTML のままのキャッシュは捨てる。
+export const CACHE_VERSION = 5;
 
 export interface Snapshot {
   v: number;

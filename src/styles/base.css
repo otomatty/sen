@@ -23,6 +23,11 @@
   --danger: #eb5757;
   --warn: #f0a63a;
   --success: #3fb27f;
+  --alert-note: #7aa2f7;
+  --alert-tip: #3fb27f;
+  --alert-important: #c084fc;
+  --alert-warning: #f0a63a;
+  --alert-caution: #f07178;
   --icon-on-color: #111215;
   --backdrop: rgba(4, 4, 6, 0.55);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -53,6 +58,11 @@
   --danger: #d23c3c;
   --warn: #a96500;
   --success: #1e8a5b;
+  --alert-note: #3451b2;
+  --alert-tip: #1e8a5b;
+  --alert-important: #6d28d9;
+  --alert-warning: #a96500;
+  --alert-caution: #d23c3c;
   --icon-on-color: #ffffff;
   --backdrop: rgba(20, 20, 30, 0.22);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);

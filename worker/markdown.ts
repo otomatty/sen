@@ -1,120 +1,10 @@
-// AI ツールは Markdown で書き、Sen は Tiptap（StarterKit + チェックリスト + リンク、見出しは h1〜h3）の HTML で保存する。
-// その間を変換する。Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
+// 既存データを HTML から Markdown に移すときだけ使う。
+// 新しい本文は、受け取った Markdown をそのまま保存する。表示用の HTML は shared/markdown.ts が作る。
+// Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
 
-import { Marked, type Tokens } from "marked";
+import { HTML4_NAMED_ENTITIES } from "../shared/html4-entities";
+import { markdownToText } from "../shared/markdown";
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/** リンクにしてよい href だけを通す（javascript: などはテキストにする）。画面の sanitize と同じく / と # も許可する */
-function isSafeHref(href: string): boolean {
-  if (!href || /[\u0000-\u0020]/.test(href)) return false;
-  return /^(https?:|mailto:|\/|#)/i.test(href);
-}
-
-/** タスク項目の中身を、Tiptap と同じくブロック（最低でも p）にする */
-function taskBody(html: string): string {
-  const t = html.replace(/\n+$/, "").trim();
-  if (!t) return "<p></p>";
-  const block = /<(?:ul|ol|p|pre|blockquote|h[1-6]|hr|div)\b/i.exec(t);
-  if (!block) return `<p>${t}</p>`;
-  if (block.index === 0) return t;
-  const before = t.slice(0, block.index).trim();
-  const after = t.slice(block.index);
-  return before ? `<p>${before}</p>${after}` : after;
-}
-
-function taskCheckbox(checked: boolean): string {
-  return checked ? `<input type="checkbox" checked disabled>` : `<input type="checkbox" disabled>`;
-}
-
-function renderTaskItem(parser: { parse(tokens: Tokens.ListItem["tokens"]): string }, item: Tokens.ListItem): string {
-  const checked = !!item.checked;
-  const inner = taskBody(parser.parse(item.tokens));
-  return `<li data-type="taskItem" data-checked="${checked}"><label>${taskCheckbox(checked)}</label><div>${inner}</div></li>`;
-}
-
-const marked = new Marked({
-  async: false,
-  gfm: true,
-  breaks: true,
-  renderer: {
-    html(token) {
-      const escaped = escapeHtml(token.text);
-      return token.block ? `${escaped}\n` : escaped;
-    },
-    heading({ tokens, depth }) {
-      const level = Math.min(depth, 3);
-      return `<h${level}>${this.parser.parseInline(tokens)}</h${level}>\n`;
-    },
-    del({ tokens }) {
-      return `<s>${this.parser.parseInline(tokens)}</s>`;
-    },
-    link(token) {
-      const text = token.autolink ? escapeHtml(token.text) : this.parser.parseInline(token.tokens);
-      // marked は href に &amp; などの文字参照を残す。戻してから安全性を見て、属性値では一度だけエスケープする
-      const href = decodeEntities(token.href);
-      if (!isSafeHref(href)) return text;
-      return `<a href="${escapeHtml(href)}">${text}</a>`;
-    },
-    image(token) {
-      const href = decodeEntities(token.href);
-      const label = token.text.trim() ? token.text.trim() : href;
-      if (!isSafeHref(href)) return escapeHtml(label);
-      return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
-    },
-    table(token) {
-      return `<pre><code>${escapeHtml(token.raw.replace(/\n$/, ""))}</code></pre>\n`;
-    },
-    checkbox() {
-      return "";
-    },
-    list(token) {
-      // 通常の項目とタスク項目が混ざっていたら、連続するまとまりごとに別のリストへ分ける。
-      // タスクはチェックリスト、通常は元の ul / ol。番号付きを分けたあとは start で番号を続ける。
-      const groups: { task: boolean; items: Tokens.ListItem[] }[] = [];
-      for (const item of token.items) {
-        const task = !!item.task;
-        const last = groups[groups.length - 1];
-        if (last && last.task === task) last.items.push(item);
-        else groups.push({ task, items: [item] });
-      }
-      const ordered = token.ordered;
-      let n = ordered && typeof token.start === "number" && token.start > 0 ? token.start : 1;
-      let html = "";
-      for (const group of groups) {
-        if (group.task) {
-          html += `<ul data-type="taskList">${group.items.map((item) => renderTaskItem(this.parser, item)).join("")}</ul>\n`;
-        } else {
-          const tag = ordered ? "ol" : "ul";
-          const startAttr = ordered && n !== 1 ? ` start="${n}"` : "";
-          let body = "";
-          for (const item of group.items) {
-            const inner = this.parser.parse(item.tokens).replace(/^\n+|\n+$/g, "");
-            body += `<li>${inner}</li>\n`;
-          }
-          html += `<${tag}${startAttr}>\n${body}</${tag}>\n`;
-        }
-        if (ordered) n += group.items.length;
-      }
-      return html;
-    },
-  },
-});
-
-/** Markdown を、Sen が保存する Tiptap の HTML にする */
-export function markdownToHtml(md: string): string {
-  if (!md || !md.trim()) return "";
-  return marked.parse(md, { async: false }).replace(/\n+$/, "");
-}
-
-// ---- HTML → Markdown（DOM を使わない小さなパーサー） ----
 
 interface El {
   type: "el";
@@ -150,10 +40,25 @@ const BLOCK_TAGS = new Set([
   "tr",
 ]);
 
+/** 再帰を使わない平文で段落を分ける。br は行が分かれ、td・th はマスごとに分かれる */
+const PLAIN_BREAK_TAGS = new Set<string>([...BLOCK_TAGS, "br", "td", "th"]);
+
+/**
+ * 数値と、HTML 4 の表にある名前を 1 回だけ戻す。表に無い名前はそのまま残す。
+ * 名前の大文字小文字は区別する。amp・lt・gt・quot・apos・nbsp だけは、これまで通り区別しない。
+ * apos は HTML 4 の表に無い。これまで戻していたので、そのまま戻す。
+ */
 function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (all, ent: string) => {
-    const e = ent.toLowerCase();
-    switch (e) {
+  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z][A-Za-z0-9]{1,31});/g, (all, ent: string) => {
+    if (ent[0] === "#") {
+      const hex = ent[1] === "x" || ent[1] === "X";
+      const cp = hex ? Number.parseInt(ent.slice(2), 16) : Number.parseInt(ent.slice(1), 10);
+      if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
+      return String.fromCodePoint(cp);
+    }
+    const named = Object.hasOwn(HTML4_NAMED_ENTITIES, ent) ? HTML4_NAMED_ENTITIES[ent] : undefined;
+    if (named !== undefined) return named;
+    switch (ent.toLowerCase()) {
       case "amp":
         return "&";
       case "lt":
@@ -166,41 +71,135 @@ function decodeEntities(s: string): string {
         return "'";
       case "nbsp":
         return "\u00A0";
-      default: {
-        const hex = e.startsWith("#x");
-        const cp = hex ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
-        if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return all;
-        return String.fromCodePoint(cp);
-      }
+      default:
+        return all;
     }
   });
 }
 
 function escapeInline(s: string): string {
-  return s
-    .replace(/\\/g, "\\\\")
-    .replace(/([*`[\]])/g, "\\$1")
-    // user_id のような語中の _ は読めるように残す。前後が英数字のときだけ。
-    .replace(/_/g, (match: string, offset: number, str: string) => {
-      const prev = str[offset - 1] ?? "";
-      const next = str[offset + 1] ?? "";
-      if (/[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next)) return match;
-      return "\\_";
-    })
-    .replace(/~~/g, "\\~\\~");
+  return (
+    s
+      // HTML のテキスト中の改行は空白と同じ。残すと、表示側の改行で行が増える。
+      .replace(/\n/g, " ")
+      .replace(/\\/g, "\\\\")
+      .replace(/([*`[\]])/g, "\\$1")
+      .replace(/\|/g, "\\|")
+      // 生の HTML や自動リンクとして読まれないようにする。
+      .replace(/<(?=[A-Za-z/!?])/g, "\\<")
+      // `&amp;amp;` のように見えていた文字が、`&` に化けないようにする。
+      .replace(/&(?=#?[A-Za-z0-9]+;)/g, "\\&")
+      // user_id のような語中の _ は読めるように残す。前後が英数字のときだけ。
+      .replace(/_/g, (match: string, offset: number, str: string) => {
+        const prev = str[offset - 1] ?? "";
+        const next = str[offset + 1] ?? "";
+        if (/[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next)) return match;
+        return "\\_";
+      })
+      // GFM は ~ が 1 つでも取り消し線になる。
+      .replace(/~/g, "\\~")
+  );
 }
 
-/** 段落の行頭が見出しやリストとして読まれないようにする */
-function protectLines(s: string): string {
-  return s
-    .split("\n")
-    .map((line) => {
-      if (/^\s{0,3}(#{1,6}\s|>|[-+]\s|\d{1,9}[.)]\s)/.test(line) || /^\s{0,3}([-*_])\1{2,}\s*$/.test(line)) {
-        return line.replace(/^(\s{0,3})(\S)/, "$1\\$2");
-      }
-      return line;
-    })
-    .join("\n");
+interface Piece {
+  text: string;
+  /** 元の HTML のテキストノード。行頭のエスケープはここだけにかける。 */
+  fromText: boolean;
+}
+
+function piecesToString(pieces: Piece[]): string {
+  let out = "";
+  for (const piece of pieces) out += piece.text;
+  return out;
+}
+
+function pieceMask(pieces: Piece[]): boolean[] {
+  const mask: boolean[] = [];
+  for (const piece of pieces) {
+    for (let i = 0; i < piece.text.length; i++) mask.push(piece.fromText);
+  }
+  return mask;
+}
+
+/** String.prototype.trim と同じ範囲。全部空白なら [0, 0] */
+function trimOffsets(text: string): [number, number] {
+  const trimmed = text.trim();
+  if (!trimmed) return [0, 0];
+  const start = text.indexOf(trimmed);
+  return [start, start + trimmed.length];
+}
+
+function slicePieces(pieces: Piece[], start: number, end: number): Piece[] {
+  const out: Piece[] = [];
+  let offset = 0;
+  for (const piece of pieces) {
+    const pieceEnd = offset + piece.text.length;
+    if (pieceEnd > start && offset < end) {
+      const text = piece.text.slice(Math.max(0, start - offset), Math.min(piece.text.length, end - offset));
+      if (text) out.push({ text, fromText: piece.fromText });
+    }
+    offset = pieceEnd;
+  }
+  return out;
+}
+
+/**
+ * 端の空白を、中身から切り離す。全部空白なら lead に残し、中身は空。
+ * 中身の範囲は String.prototype.trim と同じ。切り離した空白は、呼び出し側が記法の外へ出す。
+ */
+function splitTrimmedPieces(pieces: Piece[]): { lead: Piece[]; core: Piece[]; trail: Piece[] } {
+  const raw = piecesToString(pieces);
+  if (!raw.trim()) return { lead: pieces, core: [], trail: [] };
+  const [start, end] = trimOffsets(raw);
+  if (start === 0 && end === raw.length) return { lead: [], core: pieces, trail: [] };
+  return {
+    lead: slicePieces(pieces, 0, start),
+    core: slicePieces(pieces, start, end),
+    trail: slicePieces(pieces, end, raw.length),
+  };
+}
+
+/**
+ * 段落の各行を、見出し・リスト・引用・フェンス・水平線・下線見出しとして読まれないようにする。
+ * 行頭の空白は HTML では見えないので取り除く（4 個以上残るとコードブロックになる）。
+ * エスケープはテキストノード由来の文字だけ。行内コードの区切りや太字・斜体・リンクの記号にはかけない。
+ */
+function protectPieces(pieces: Piece[]): string {
+  const raw = piecesToString(pieces);
+  const mask = pieceMask(pieces);
+  const [start, end] = trimOffsets(raw);
+  if (start === end) return "";
+  const text = raw.slice(start, end);
+  const fromText = mask.slice(start, end);
+  const lines: string[] = [];
+  let lineStart = 0;
+  for (let i = 0; i <= text.length; i++) {
+    if (i !== text.length && text[i] !== "\n") continue;
+    let skip = 0;
+    while (lineStart + skip < i && (text[lineStart + skip] === " " || text[lineStart + skip] === "\t")) skip++;
+    const from = lineStart + skip;
+    lines.push(escapeLineStart(text.slice(from, i), fromText.slice(from, i)));
+    lineStart = i + 1;
+  }
+  return lines.join("\n");
+}
+
+function escapeLineStart(line: string, fromText: boolean[]): string {
+  // `1.` の数字の前に \ を置いてもエスケープにならない。点か括弧の前に置く。
+  const ordered = /^(\d{1,9})([.)])(?=[ \t]|$)/.exec(line);
+  if (ordered) {
+    if (fromText[ordered[1].length]) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
+    return line;
+  }
+  const atStart =
+    /^#{1,6}(?:[ \t]|$)/.test(line) ||
+    line.startsWith(">") ||
+    /^[-+*](?:[ \t]|$)/.test(line) ||
+    /^(?:`{3,}|~{3,})/.test(line) ||
+    /^(?:=+|-+)[ \t]*$/.test(line) ||
+    /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line);
+  if (atStart && fromText[0]) return `\\${line}`;
+  return line;
 }
 
 interface TagInfo {
@@ -340,11 +339,15 @@ function fenceFor(text: string, ch: string, min: number): string {
   return ch.repeat(n);
 }
 
-function renderCodeSpan(el: El): string {
+/** 区切りは変換が作った記法。中の文字はテキストノードなので、行が分かれたときだけ行頭をエスケープする。 */
+function codeSpanPieces(el: El): Piece[] {
   const text = rawText(el);
   const fence = fenceFor(text, "`", 1);
   const pad = /^`|`$|^\s|\s$/.test(text) ? " " : "";
-  return `${fence}${pad}${text}${pad}${fence}`;
+  const pieces: Piece[] = [{ text: fence + pad, fromText: false }];
+  if (text) pieces.push({ text, fromText: true });
+  pieces.push({ text: pad + fence, fromText: false });
+  return pieces;
 }
 
 function renderPre(el: El): string {
@@ -359,26 +362,348 @@ interface Block {
   kind: "list" | "other";
 }
 
+/** CommonMark では、1 以外から始まる番号付きリストは段落の途中では始まらない */
+function orderedListNeedsBlankLine(text: string): boolean {
+  const nl = text.indexOf("\n");
+  const line = nl === -1 ? text : text.slice(0, nl);
+  const marker = /^(\d{1,9})[.)]/.exec(line);
+  return marker !== null && Number(marker[1]) !== 1;
+}
+
+/** 行頭のリスト記号。番号付きは `.` か `)`、箇条書き・チェックリストは `-` か `*` */
+function listOpening(text: string): { family: "ordered" | "bullet"; marker: string } | null {
+  const line = text.split("\n").find((l) => l !== "") ?? "";
+  const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+  if (ordered) return { family: "ordered", marker: ordered[2] };
+  const bullet = /^([-*])(?=\s|$)/.exec(line);
+  if (bullet) return { family: "bullet", marker: bullet[1] };
+  return null;
+}
+
+/** 行頭の記号だけを、もう一方にする。字下げした入れ子の行はいじらない。`- [ ]` は `* [ ]` になる */
+function flipListMarkers(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const bullet = /^([-*])(?=\s|$)/.exec(line);
+      if (bullet) return (bullet[1] === "-" ? "*" : "-") + line.slice(1);
+      const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+      if (ordered) return ordered[1] + (ordered[2] === "." ? ")" : ".") + line.slice(ordered[0].length);
+      return line;
+    })
+    .join("\n");
+}
+
+/**
+ * CommonMark では、空行をはさんでも同じ記号のリストは 1 つになる。
+ * 直前が同じ種類（番号付きどうし、箇条書き・チェックリストどうし）で記号も同じなら、
+ * このブロックの行頭だけを切り替える。3 つ以上続いても、隣どうしは違う記号になる。
+ */
 function joinBlocks(parts: Block[]): string {
   let out = "";
+  let prev: { family: "ordered" | "bullet"; marker: string } | null = null;
   for (const p of parts) {
     if (!p.text) continue;
+    let text = p.text;
+    let opening = p.kind === "list" ? listOpening(text) : null;
+    if (opening && prev && opening.family === prev.family && opening.marker === prev.marker) {
+      text = flipListMarkers(text);
+      opening = listOpening(text);
+    }
     if (!out) {
-      out = p.text;
+      out = text;
+    } else {
+      const separate = p.kind !== "list" || orderedListNeedsBlankLine(text);
+      out += (separate ? "\n\n" : "\n") + text;
+    }
+    prev = opening;
+  }
+  return out;
+}
+
+/** edgeBefore / edgeAfter は、この並びの外側の隣。その側に文字が無い子には、それを隣として渡す */
+function renderPieces(nodes: Node[], edgeBefore: string | null = null, edgeAfter: string | null = null): Piece[] {
+  const out: Piece[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.type === "text") {
+      if (n.text) out.push({ text: escapeInline(n.text), fromText: true });
       continue;
     }
-    out += (p.kind === "list" ? "\n" : "\n\n") + p.text;
+    const before = lastOutputChar(out) ?? edgeBefore;
+    const after = firstNeighborChar(nodes, i + 1) ?? edgeAfter;
+    const inline = inlinePieces(n, before, after);
+    if (inline) {
+      out.push(...inline);
+      continue;
+    }
+    const text = renderElement(n);
+    if (text) out.push({ text, fromText: false });
   }
   return out;
 }
 
 function renderInline(nodes: Node[]): string {
-  let out = "";
-  for (const n of nodes) {
-    if (n.type === "text") out += escapeInline(n.text);
-    else out += renderElement(n);
+  return piecesToString(renderPieces(nodes));
+}
+
+/** 句読点は Unicode の P と S。空白は区切りの外に出す対象（行頭・行末は呼び出し側が null で表す） */
+function isPunct(ch: string): boolean {
+  return /[\p{P}\p{S}]/u.test(ch);
+}
+
+function isWhitespace(ch: string): boolean {
+  return /[\p{Zs}\t\n\f\r]/u.test(ch);
+}
+
+/** 空白でも句読点でもない文字。行頭・行末や、テキストでない隣は null */
+function isWordish(ch: string | null): boolean {
+  return ch != null && !isWhitespace(ch) && !isPunct(ch);
+}
+
+function lastCodePoint(s: string): string | null {
+  if (!s) return null;
+  const end = s.length - 1;
+  const tail = s.charCodeAt(end);
+  if (tail >= 0xdc00 && tail <= 0xdfff && end > 0) {
+    const lead = s.charCodeAt(end - 1);
+    if (lead >= 0xd800 && lead <= 0xdbff) return s.slice(end - 1);
+  }
+  return s[end] ?? null;
+}
+
+function firstCodePoint(s: string): string | null {
+  if (!s) return null;
+  const cp = s.codePointAt(0);
+  return cp === undefined ? null : String.fromCodePoint(cp);
+}
+
+function lastOutputChar(pieces: Piece[]): string | null {
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    const ch = lastCodePoint(pieces[i].text);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+interface FlatChar {
+  ch: string;
+  fromText: boolean;
+}
+
+function flattenPieces(pieces: Piece[]): FlatChar[] {
+  const out: FlatChar[] = [];
+  for (const piece of pieces) {
+    for (const ch of piece.text) out.push({ ch, fromText: piece.fromText });
   }
   return out;
+}
+
+function charsToPieces(chars: FlatChar[]): Piece[] {
+  const out: Piece[] = [];
+  for (const c of chars) {
+    const last = out[out.length - 1];
+    if (last && last.fromText === c.fromText) last.text += c.ch;
+    else out.push({ text: c.ch, fromText: c.fromText });
+  }
+  return out;
+}
+
+/**
+ * 強調の直後に出る文字。空白ならその空白、そうでなければ句読点（区切りや動かした句読点）か本文の文字。
+ * 強調そのものは、先頭の空白以外、最初の文字が文字や数字になることはない。
+ */
+function openingCharOf(node: Node): string | null {
+  if (node.type === "text") {
+    if (!node.text) return null;
+    return firstCodePoint(escapeInline(node.text));
+  }
+  switch (node.tag) {
+    case "br":
+      return "\n";
+    case "input":
+      return null;
+    case "img":
+      return firstCodePoint(escapeInline((node.attrs.alt ?? "").trim() || node.attrs.src || ""));
+    case "code":
+      return "`";
+    case "a":
+      return (node.attrs.href ?? "").trim() ? "[" : openingCharOfNodes(node.children);
+    case "strong":
+    case "b":
+    case "em":
+    case "i":
+    case "s":
+    case "del":
+    case "strike":
+      return openingCharOfEmphasis(node);
+    default:
+      if (BLOCK_TAGS.has(node.tag)) return null;
+      return openingCharOfNodes(node.children);
+  }
+}
+
+function openingCharOfNodes(nodes: Node[]): string | null {
+  for (const n of nodes) {
+    const ch = openingCharOf(n);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+function openingCharOfEmphasis(el: El): string | null {
+  const chars = flattenPieces(renderPieces(el.children));
+  if (chars.length && chars[0].fromText && isWhitespace(chars[0].ch)) return chars[0].ch;
+  if (!chars.length) return null;
+  return "*";
+}
+
+function firstNeighborChar(nodes: Node[], index: number): string | null {
+  for (let i = index; i < nodes.length; i++) {
+    const ch = openingCharOf(nodes[i]);
+    if (ch) return ch;
+  }
+  return null;
+}
+
+function isBlankText(n: Node): boolean {
+  return n.type === "text" && n.text.trim() === "";
+}
+
+/** 空白だけのテキストを除いて、リンクがちょうど 1 つのときだけリンクを返す */
+function singleLink(children: Node[]): { link: El; leading: Node[]; trailing: Node[] } | null {
+  const leading: Node[] = [];
+  const trailing: Node[] = [];
+  let link: El | null = null;
+  for (const child of children) {
+    if (!link) {
+      if (isBlankText(child)) {
+        leading.push(child);
+        continue;
+      }
+      if (child.type === "el" && child.tag === "a" && (child.attrs.href ?? "").trim()) {
+        link = child;
+        continue;
+      }
+      return null;
+    }
+    if (isBlankText(child)) {
+      trailing.push(child);
+      continue;
+    }
+    return null;
+  }
+  if (!link) return null;
+  return { link, leading, trailing };
+}
+
+function markedLink(el: El, marker: string): Piece[] {
+  const href = (el.attrs.href ?? "").trim();
+  const { lead, core, trail } = splitTrimmedPieces(renderPieces(el.children));
+  if (!piecesToString(core)) return [...lead, { text: `[](${linkDestination(href)})`, fromText: false }, ...trail];
+  return [
+    ...lead,
+    { text: "[", fromText: false },
+    { text: marker, fromText: false },
+    ...core,
+    { text: marker, fromText: false },
+    { text: `](${linkDestination(href)})`, fromText: false },
+    ...trail,
+  ];
+}
+
+/**
+ * 端の空白は常に区切りの外へ出す。空白だけなら区切りを付けない。
+ * 端の句読点は、どちらかの外側が文字（空白でも句読点でもない）のとき、両端とも外へ出す。
+ * 外に出せるのは元の HTML の文字だけ。中身が残らなければ区切りを付けない。
+ * 両側が行頭・行末・空白・句読点なら、句読点は中に残す（`**#** と` のように区切りが効くため）。
+ */
+function emphasize(marker: string, pieces: Piece[], before: string | null, after: string | null): Piece[] {
+  const chars = flattenPieces(pieces);
+  if (!chars.length) return [];
+  let start = 0;
+  while (start < chars.length && chars[start].fromText && isWhitespace(chars[start].ch)) start++;
+  let end = chars.length;
+  while (end > start && chars[end - 1].fromText && isWhitespace(chars[end - 1].ch)) end--;
+  const leadWs = chars.slice(0, start);
+  const trailWs = chars.slice(end);
+  if (start === end) return charsToPieces(chars);
+
+  const neighborBefore = leadWs.length ? leadWs[leadWs.length - 1].ch : before;
+  const neighborAfter = trailWs.length ? trailWs[0].ch : after;
+  let coreStart = start;
+  let coreEnd = end;
+  if (isWordish(neighborBefore) || isWordish(neighborAfter)) {
+    while (coreStart < coreEnd && chars[coreStart].fromText && isPunct(chars[coreStart].ch)) coreStart++;
+    while (coreEnd > coreStart && chars[coreEnd - 1].fromText && isPunct(chars[coreEnd - 1].ch)) coreEnd--;
+  }
+  if (coreStart === coreEnd) return charsToPieces(chars);
+  return [
+    ...charsToPieces(leadWs),
+    ...charsToPieces(chars.slice(start, coreStart)),
+    { text: marker, fromText: false },
+    ...charsToPieces(chars.slice(coreStart, coreEnd)),
+    { text: marker, fromText: false },
+    ...charsToPieces(chars.slice(coreEnd, end)),
+    ...charsToPieces(trailWs),
+  ];
+}
+
+function wrapMarked(marker: string, el: El, before: string | null, after: string | null): Piece[] {
+  const around = singleLink(el.children);
+  if (around) return [...renderPieces(around.leading), ...markedLink(around.link, marker), ...renderPieces(around.trailing)];
+  // 端の子の強調は、間に文字が無ければ親の外側をその側の隣にする。
+  // 区切りが隣り合うと 1 つになり、効くかどうかは外側の文字で決まる。内側が句読点を外に出せば、親も元の文字として外に出せる。
+  return emphasize(marker, renderPieces(el.children, before, after), before, after);
+}
+
+function linkPieces(el: El): Piece[] {
+  const href = (el.attrs.href ?? "").trim();
+  const { lead, core, trail } = splitTrimmedPieces(renderPieces(el.children));
+  const text = piecesToString(core);
+  const plain = rawText(el).replace(/\s+/g, " ").trim();
+  if (!href) return [...lead, ...core, ...trail];
+  // 端の空白はリンクの外へ出す。自動リンクは < の前と > の後、それ以外は [ の前と ) の後。
+  // 中の文字は、これまで通り端を除いて整える。強調が先に外へ出した空白と重なっても、ここでは切り離すだけで増やさない。
+  // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す。
+  // 自動リンクにするかは、エスケープ前の文字と URL で決める。
+  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) {
+    return [...lead, { text: `<${escapeLinkEntities(href)}>`, fromText: false }, ...trail];
+  }
+  return [...lead, { text: "[", fromText: false }, ...core, { text: `](${linkDestination(href)})`, fromText: false }, ...trail];
+}
+
+/** インライン要素を、テキストと変換が作った記法に分けて返す。ブロックなら null */
+function inlinePieces(el: El, before: string | null, after: string | null): Piece[] | null {
+  switch (el.tag) {
+    case "br":
+      return [{ text: "\n", fromText: false }];
+    case "strong":
+    case "b":
+      return wrapMarked("**", el, before, after);
+    case "em":
+    case "i":
+      return wrapMarked("*", el, before, after);
+    case "s":
+    case "del":
+    case "strike":
+      return wrapMarked("~~", el, before, after);
+    case "u":
+    case "span":
+    case "label":
+      return renderPieces(el.children);
+    case "code":
+      return codeSpanPieces(el);
+    case "a":
+      return linkPieces(el);
+    case "img":
+      return [{ text: escapeInline((el.attrs.alt ?? "").trim() || el.attrs.src || ""), fromText: true }];
+    case "input":
+      return [];
+    default:
+      if (BLOCK_TAGS.has(el.tag) || hasBlock(el.children)) return null;
+      return renderPieces(el.children);
+  }
 }
 
 function hasBlock(nodes: Node[]): boolean {
@@ -396,7 +721,7 @@ function collect(nodes: Node[]): Block[] {
 
   const flushInline = () => {
     if (!inline.length) return;
-    const text = protectLines(renderInline(inline).trim());
+    const text = protectPieces(renderPieces(inline));
     inline = [];
     if (!text) return;
     parts.push({ text, kind: "other" });
@@ -482,13 +807,30 @@ function renderList(el: El): string {
   return lines.join("\n");
 }
 
+/**
+ * 文字参照に見える並びの先頭の `&` だけを `&amp;` にする。
+ * 属性を 1 回戻した `&copy;` や `&#169;` をそのまま出すと、表示側でもう一度戻って URL が変わる。
+ * `?a=1&b=2` のように参照の形でない `&` はそのまま残す。
+ */
+function escapeLinkEntities(href: string): string {
+  return href.replace(/&(#(?:[xX][0-9a-fA-F]+|\d+)|[A-Za-z][A-Za-z0-9]*);/g, "&amp;$1;");
+}
+
 /** `( )` 空白 `<` `>` を含むリンク先は `<href>` で囲む。中の `<` `>` は先にパーセントにする */
 function linkDestination(href: string): string {
-  if (!/[()\s<>]/.test(href)) return href;
-  return `<${href.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
+  const safe = escapeLinkEntities(href);
+  if (!/[()\s<>]/.test(href)) return safe;
+  return `<${safe.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
+}
+
+/** 末尾の「空白 + #」は ATX 見出しの閉じ記号になるので、その # をエスケープする */
+function escapeTrailingHeadingHashes(text: string): string {
+  return text.replace(/(\s)(#+$)/, (_all, space: string, hashes: string) => `${space}${"\\#".repeat(hashes.length)}`);
 }
 
 function renderElement(el: El): string {
+  const inline = inlinePieces(el, null, null);
+  if (inline) return piecesToString(inline);
   switch (el.tag) {
     case "h1":
     case "h2":
@@ -496,35 +838,11 @@ function renderElement(el: El): string {
     case "h4":
     case "h5":
     case "h6": {
-      const text = renderInline(el.children).trim();
+      const text = escapeTrailingHeadingHashes(renderInline(el.children).trim());
       return `${"#".repeat(Number(el.tag[1]))} ${text}`.trimEnd();
     }
     case "p":
-      return protectLines(renderInline(el.children).trim());
-    case "br":
-      return "\n";
-    case "strong":
-    case "b": {
-      const inner = renderInline(el.children);
-      return inner ? `**${inner}**` : "";
-    }
-    case "em":
-    case "i": {
-      const inner = renderInline(el.children);
-      return inner ? `*${inner}*` : "";
-    }
-    case "s":
-    case "del":
-    case "strike": {
-      const inner = renderInline(el.children);
-      return inner ? `~~${inner}~~` : "";
-    }
-    case "u":
-    case "span":
-    case "label":
-      return renderInline(el.children);
-    case "code":
-      return renderCodeSpan(el);
+      return protectPieces(renderPieces(el.children));
     case "pre":
       return renderPre(el);
     case "blockquote": {
@@ -540,23 +858,10 @@ function renderElement(el: El): string {
       return renderList(el);
     case "li":
       return renderBlocks(listItemNodes(el));
-    case "a": {
-      const href = (el.attrs.href ?? "").trim();
-      const text = renderInline(el.children).trim();
-      const plain = rawText(el).replace(/\s+/g, " ").trim();
-      if (!href) return text;
-      // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
-      if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return `<${href}>`;
-      return `[${text}](${linkDestination(href)})`;
-    }
     case "hr":
       return "---";
     case "div":
       return renderBlocks(el.children);
-    case "input":
-      return "";
-    case "img":
-      return escapeInline((el.attrs.alt ?? "").trim() || el.attrs.src || "");
     default:
       return hasBlock(el.children) ? renderBlocks(el.children) : renderInline(el.children);
   }
@@ -593,9 +898,258 @@ function collapseBlankLines(md: string): string {
   return out.join("\n").trim();
 }
 
-/** Sen が保存した HTML を Markdown に戻す */
+/** strong/b、em/i、s/del/strike、code。前の版の MCP は `**a**__b__` のような Markdown から、同じ種類を隣り合わせて出す */
+const FORMAT_KIND: Record<string, string> = {
+  strong: "strong",
+  b: "strong",
+  em: "em",
+  i: "em",
+  s: "strike",
+  del: "strike",
+  strike: "strike",
+  code: "code",
+};
+
+/**
+ * 行内へ出す前に、間に何も無く隣り合う同じ種類の書式を 1 つにまとめる。
+ * 子は順につなぐ。まとめたことで子どうしが隣り合ったら、そこもまとめる。
+ */
+function mergeAdjacentFormats(nodes: Node[]): Node[] {
+  const out: Node[] = [];
+  for (const node of nodes) {
+    const current: Node =
+      node.type === "text"
+        ? node
+        : { type: "el", tag: node.tag, attrs: node.attrs, children: mergeAdjacentFormats(node.children) };
+    const prev = out[out.length - 1];
+    const kind = current.type === "el" ? FORMAT_KIND[current.tag] : undefined;
+    if (current.type === "el" && kind && prev?.type === "el" && FORMAT_KIND[prev.tag] === kind) {
+      prev.children = mergeAdjacentFormats([...prev.children, ...current.children]);
+      continue;
+    }
+    out.push(current);
+  }
+  return out;
+}
+
+const INLINE_MARK_TAGS = new Set(["strong", "b", "em", "i", "s", "del", "strike", "code", "a"]);
+/** 表示されない中身。script・style と、同じように中を出さないもの */
+const HIDDEN_TAGS = new Set(["script", "style", "noscript", "template"]);
+
+/** 太字・斜体・取り消し線・行内コード・リンクを外し、コードブロックはそのまま残す */
+function stripInlineMarks(nodes: Node[]): Node[] {
+  const out: Node[] = [];
+  for (const node of nodes) {
+    if (node.type === "text") {
+      out.push(node);
+      continue;
+    }
+    if (node.tag === "pre") {
+      out.push(node);
+      continue;
+    }
+    if (INLINE_MARK_TAGS.has(node.tag)) {
+      out.push(...stripInlineMarks(node.children));
+      continue;
+    }
+    out.push({ type: "el", tag: node.tag, attrs: node.attrs, children: stripInlineMarks(node.children) });
+  }
+  return out;
+}
+
+/** テキストノードを順につなぐ。画像は代替テキスト（無ければ空）。script・style などの中は含めない */
+function visibleText(nodes: Node[]): string {
+  let out = "";
+  for (const node of nodes) {
+    if (node.type === "text") {
+      out += node.text;
+      continue;
+    }
+    if (HIDDEN_TAGS.has(node.tag)) continue;
+    if (node.tag === "img") {
+      out += node.attrs.alt ?? "";
+      continue;
+    }
+    out += visibleText(node.children);
+  }
+  return out;
+}
+
+/** ブロックの境で区切った見える文字。つなげると visibleText と同じになる */
+function visibleParagraphs(nodes: Node[]): string[] {
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => {
+    parts.push(buf);
+    buf = "";
+  };
+  const visit = (list: Node[]) => {
+    for (const node of list) {
+      if (node.type === "text") {
+        buf += node.text;
+        continue;
+      }
+      if (HIDDEN_TAGS.has(node.tag)) continue;
+      if (node.tag === "img") {
+        buf += node.attrs.alt ?? "";
+        continue;
+      }
+      if (BLOCK_TAGS.has(node.tag) || node.tag === "td" || node.tag === "th") {
+        flush();
+        visit(node.children);
+        flush();
+        continue;
+      }
+      visit(node.children);
+    }
+  };
+  visit(nodes);
+  flush();
+  return parts;
+}
+
+/** 比べる前に、空白と NBSP をすべて除く */
+function comparableText(s: string): string {
+  return s.replace(/[\s\u00A0]/g, "");
+}
+
+function sameVisible(expected: string, markdown: string): boolean {
+  return comparableText(expected) === comparableText(markdownToText(markdown));
+}
+
+function normalizeHtml(html: string): string {
+  return html.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * 見える文字だけを、段落ごとにエスケープした Markdown にする。
+ * 行頭の # や > は、直後が NBSP でも見出し・引用になる。そこもエスケープしないと文字が消える。
+ */
+function plainParagraphMarkdown(nodes: Node[]): string {
+  const lines: string[] = [];
+  for (const part of visibleParagraphs(nodes)) {
+    const line = escapePlainParagraph(part);
+    if (line) lines.push(line);
+  }
+  return lines.join("\n\n");
+}
+
+function escapePlainParagraph(text: string): string {
+  // 改行は空白と同じ。残すと、次の行が見出しやフェンスとして読まれる。
+  let line = escapeInline(text).replace(/^[ \t]+/, "");
+  if (!line.trim()) return "";
+  if (/^#{1,6}(?=\s|$)/.test(line)) return `\\${line}`;
+  if (line.startsWith(">")) return `\\${line}`;
+  if (/^[-+](?=\s|$)/.test(line)) return `\\${line}`;
+  if (/^(?:`{3,}|~{3,})/.test(line)) return `\\${line}`;
+  if (/^(?:=+|-+)\s*$/.test(line)) return `\\${line}`;
+  if (/^([-*_])(?:\s*\1){2,}\s*$/.test(line)) return `\\${line}`;
+  const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+  if (ordered) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
+  return line;
+}
+
+/** 保存済みの HTML を Markdown にする。データの移行以外では使わない */
 export function htmlToMarkdown(html: string): string {
   if (!html || !html.trim()) return "";
-  const root = parseHtml(html.replace(/\r\n?/g, "\n"));
-  return collapseBlankLines(renderBlocks(root.children));
+  const root = parseHtml(normalizeHtml(html));
+  return collapseBlankLines(renderBlocks(mergeAdjacentFormats(root.children)));
+}
+
+/**
+ * タグを正規表現で除き、1 段落にエスケープする。
+ * 走査も再帰も使わない。平文の変換まで例外になったときの最後の形。
+ */
+export function htmlToMarkdownPlainest(html: string): string {
+  return escapePlainParagraph(html.replace(/<[^>]*>/g, ""));
+}
+
+/** script・style の終了タグの直後まで進める。見つからなければ末尾 */
+function skipHidden(src: string, i: number, name: string): number {
+  while (i < src.length) {
+    if (src[i] !== "<") {
+      const next = src.indexOf("<", i);
+      i = next === -1 ? src.length : next;
+      continue;
+    }
+    const tag = readTag(src, i);
+    if (!tag) {
+      i += 1;
+      continue;
+    }
+    i = tag.end;
+    if (tag.closing && tag.name === name) return i;
+  }
+  return src.length;
+}
+
+/**
+ * HTML を前から読み、再帰もスタックも使わずに平文の Markdown にする。
+ * ブロックのタグで段落を分け、script・style の中は捨て、画像は代替テキストを残す。
+ */
+function plainHtmlToMarkdown(html: string): string {
+  const src = normalizeHtml(html);
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => {
+    const line = escapePlainParagraph(buf);
+    buf = "";
+    if (line) parts.push(line);
+  };
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] !== "<") {
+      const next = src.indexOf("<", i);
+      const end = next === -1 ? src.length : next;
+      buf += decodeEntities(src.slice(i, end));
+      i = end;
+      continue;
+    }
+    if (src.startsWith("<!--", i)) {
+      const end = src.indexOf("-->", i + 4);
+      i = end === -1 ? src.length : end + 3;
+      continue;
+    }
+    if (src.startsWith("<!", i) || src.startsWith("<?", i)) {
+      const end = src.indexOf(">", i + 2);
+      i = end === -1 ? src.length : end + 1;
+      continue;
+    }
+    const tag = readTag(src, i);
+    if (!tag) {
+      buf += "<";
+      i += 1;
+      continue;
+    }
+    i = tag.end;
+    if (!tag.closing && (tag.name === "script" || tag.name === "style") && !tag.selfClosing) {
+      i = skipHidden(src, i, tag.name);
+      continue;
+    }
+    if (tag.name === "img" && !tag.closing) buf += tag.attrs.alt ?? "";
+    if (PLAIN_BREAK_TAGS.has(tag.name)) flush();
+  }
+  flush();
+  return parts.join("\n\n");
+}
+
+/**
+ * 移行で使う。変換のあと、見える文字が変わっていないかを本文ごとに確かめる。
+ * 変わっていたら行内の書式だけ外してやり直し、それでもダメなら段落ごとの平文にする。
+ * 読み取りや変換が例外になったら、再帰を使わない平文にして fallback にする。
+ */
+export function htmlToMarkdownChecked(html: string): { markdown: string; fallback: boolean } {
+  try {
+    const markdown = htmlToMarkdown(html);
+    const root = parseHtml(normalizeHtml(html));
+    const expected = visibleText(root.children);
+    if (sameVisible(expected, markdown)) return { markdown, fallback: false };
+    const loose = collapseBlankLines(renderBlocks(stripInlineMarks(mergeAdjacentFormats(root.children))));
+    if (sameVisible(expected, loose)) return { markdown: loose, fallback: true };
+    return { markdown: plainParagraphMarkdown(root.children), fallback: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    if (message && !message.includes("<")) console.warn(`HTML から Markdown への変換で例外: ${message}`);
+    return { markdown: plainHtmlToMarkdown(html), fallback: true };
+  }
 }
