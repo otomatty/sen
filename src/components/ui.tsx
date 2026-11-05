@@ -137,7 +137,7 @@ export function Popover({
   onClose: () => void;
   children: ReactNode;
   className?: string;
-  placement?: "bottom-start" | "bottom-end" | "right-start" | "center";
+  placement?: "bottom-start" | "bottom-end" | "right-start" | "center" | "top-start";
   width?: number;
   testId?: string;
 }) {
@@ -158,10 +158,12 @@ export function Popover({
     }
     const r = "width" in anchor ? anchor : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y, width: 0, height: 0 };
     let left = placement === "bottom-end" ? r.right - w : placement === "right-start" ? r.right + 4 : r.left;
-    let top = placement === "right-start" ? r.top - 4 : r.bottom + 4;
+    let top = placement === "top-start" ? r.top - h - 4 : placement === "right-start" ? r.top - 4 : r.bottom + 4;
     if (left + w > vw - 8) left = vw - w - 8;
     if (left < 8) left = 8;
-    if (top + h > vh - 8) top = Math.max(8, (placement === "right-start" ? vh - h - 8 : r.top - h - 4));
+    if (placement === "top-start") {
+      if (top < 8) top = 8;
+    } else if (top + h > vh - 8) top = Math.max(8, (placement === "right-start" ? vh - h - 8 : r.top - h - 4));
     setStyle({ left, top });
   }, [anchor, placement]);
 

@@ -5,34 +5,29 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
-  Download,
   Inbox,
   Keyboard,
   Layers,
-  LogOut,
-  Monitor,
-  Moon,
   PenSquare,
   PlayCircle,
   Plus,
   Search,
   Settings,
   Star,
-  Sun,
   UserPlus,
   RefreshCw,
   ChartColumn,
 } from "lucide-react";
 import { useData } from "../store/data";
 import { useProjects, useTeams, useUnreadCount } from "../store/selectors";
-import { openCreateIssue, setTheme, useUI } from "../store/ui";
+import { openCreateIssue, useUI } from "../store/ui";
 import { cx } from "../lib/utils";
 import { Kbd, Menu, Tooltip } from "../components/ui";
 import { CycleIcon, ProjectIcon, TeamIcon } from "../components/icons";
 import { useCurrentTeamId, useWsPath } from "./hooks";
-import { logout, refreshWorkspaces, useSession } from "./session";
-import { applyUpdate, installApp, usePWA } from "./pwa";
+import { refreshWorkspaces, useSession } from "./session";
 import type { Me } from "../../shared/types";
+import { UserMenu } from "./UserMenu";
 
 export function Sidebar() {
   const p = useWsPath();
@@ -43,12 +38,6 @@ export function Sidebar() {
   const teams = useTeams();
   const projects = useProjects();
   const unread = useUnreadCount();
-  const syncStatus = useData((s) => s.syncStatus);
-  const pendingCount = useData((s) => s.pendingCount);
-  const realtime = useData((s) => s.realtime);
-  const theme = useUI((s) => s.theme);
-  const canInstall = usePWA((s) => !!s.installPrompt);
-  const updateReady = usePWA((s) => s.updateReady);
   const currentTeamId = useCurrentTeamId();
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -166,16 +155,7 @@ export function Sidebar() {
           <span className="nav-label">ショートカット</span>
           <Kbd combo="?" />
         </button>
-        <div className={cx("sync-status", syncStatus)} data-testid="sync-status" data-realtime={realtime ? "on" : "off"} title={realtime ? "変更はリアルタイムで共有されています" : "定期的に同期しています"}>
-          <span className="sync-dot" />
-          {syncStatus === "offline"
-            ? `オフライン（${pendingCount}件の変更を保持中）`
-            : syncStatus === "syncing"
-              ? "同期中…"
-              : realtime
-                ? "同期済み"
-                : "同期済み"}
-        </div>
+        <UserMenu />
       </div>
 
       {menu && (
@@ -183,22 +163,13 @@ export function Sidebar() {
           anchor={menu}
           onClose={() => setMenu(null)}
           items={[
-            { label: "設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings")) },
+            { label: "ワークスペースの設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings")) },
             { label: "メンバーを招待", icon: <UserPlus size={14} />, onSelect: () => navigate(p("/settings/members")) },
             "divider",
             ...workspaces
               .filter((w) => w.id !== workspace?.id)
               .map((w) => ({ label: `${w.name} に切り替え`, icon: <RefreshCw size={14} />, onSelect: () => navigate(`/${w.urlKey}/my-issues`) })),
             { label: "新しいワークスペースを作成", icon: <Plus size={14} />, onSelect: () => navigate("/new-workspace") },
-            "divider",
-            {
-              label: theme === "dark" ? "テーマ：ダーク" : theme === "light" ? "テーマ：ライト" : "テーマ：システム",
-              icon: theme === "dark" ? <Moon size={14} /> : theme === "light" ? <Sun size={14} /> : <Monitor size={14} />,
-              onSelect: () => setTheme(theme === "system" ? "dark" : theme === "dark" ? "light" : "system"),
-            },
-            ...(canInstall ? [{ label: "アプリをインストール", icon: <Download size={14} />, onSelect: () => installApp() }] : []),
-            ...(updateReady ? [{ label: "新しいバージョンに更新", icon: <RefreshCw size={14} />, onSelect: applyUpdate }] : []),
-            { label: `ログアウト（${me?.name ?? ""}）`, icon: <LogOut size={14} />, onSelect: () => logout() },
           ]}
         />
       )}
