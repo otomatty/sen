@@ -81,6 +81,21 @@ function resultNote(issued: InvitationIssued, emailEnabled: boolean | null): { t
   return { text: `メールは送られていません：${issued.emailError ?? ""}`, kind: "warn" };
 }
 
+/** 招待後の案内。全員・誰も送れない・一部だけ、で文言を分ける */
+function mailNotice(results: InvitationIssued[]): { text: string; warn: boolean } {
+  const sent = results.filter((r) => r.emailSent).length;
+  if (sent === results.length) {
+    return { text: "メールが届かないときは、リンクをコピーして本人に送ってください。", warn: false };
+  }
+  if (sent === 0) {
+    return { text: "招待メールは送られていません。リンクをコピーして、本人に送ってください。", warn: true };
+  }
+  return {
+    text: "一部の人には、招待メールを送れませんでした。「メールは送られていません」と出ている人には、リンクをコピーして送ってください。",
+    warn: true,
+  };
+}
+
 export function InviteDialog({
   wsKey,
   emailEnabled,
@@ -220,8 +235,16 @@ export function InviteDialog({
     `カンマ・スペース・改行で区切ると、まとめて入れられます（${MAX_INVITATIONS_PER_REQUEST} 人まで）。` +
     (allowed.length > 0 ? `利用できるドメイン：${allowed.join("、")}` : "");
 
+  // 送信中に閉じると、1 回しか出ない参加リンクが見られなくなる。
+  const requestClose = () => {
+    if (busyRef.current) return;
+    onClose();
+  };
+
+  const notice = mailNotice(results);
+
   return (
-    <Modal onClose={onClose} width={520} className="invite-dialog" testId="invite-dialog">
+    <Modal onClose={requestClose} width={520} className="invite-dialog" testId="invite-dialog">
       <div className="modal-head">
         {phase === "done" ? (
           <h2 data-testid="invite-done">
@@ -234,7 +257,7 @@ export function InviteDialog({
           <h2>メンバーを招待</h2>
         )}
         <span className="spacer" />
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="閉じる">
+        <button type="button" className="icon-btn" onClick={requestClose} aria-label="閉じる" disabled={busy}>
           <X size={16} />
         </button>
       </div>
@@ -366,11 +389,7 @@ export function InviteDialog({
         </div>
       ) : (
         <div className="invite-dialog-body">
-          {results.every((r) => r.emailSent) ? (
-            <p className="muted">メールが届かないときは、リンクをコピーして本人に送ってください。</p>
-          ) : (
-            <p className="invite-mail-warn">招待メールは送られていません。リンクをコピーして、本人に送ってください。</p>
-          )}
+          <p className={notice.warn ? "invite-mail-warn" : "muted"}>{notice.text}</p>
           <div className="invite-done-list">
             {results.map((r) => {
               const email = r.invitation.email;
@@ -415,7 +434,7 @@ export function InviteDialog({
       <div className="invite-dialog-foot">
         {phase === "compose" ? (
           <>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="ghost" onClick={requestClose} disabled={busy}>
               キャンセル
             </Button>
             <Button type="button" variant="primary" data-testid="invite-submit" disabled={!canSubmit} onClick={() => void submit()}>

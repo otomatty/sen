@@ -344,6 +344,32 @@ test("招待の結果に「メールを送りました」と出る", async ({ pa
   await expect(result).toContainText("メールを送りました");
 });
 
+test("送信中に Esc を押しても、ダイアログは閉じず、招待後の画面が出る", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "管理 花子" });
+  const email = uniqueEmail("busy-esc");
+  await page.goto(`/${ws}/settings/members`);
+
+  // POST の応答を遅らせる。GET はそのまま通す。
+  await page.route("**/api/invitations?*", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  await dialog.getByTestId("invite-emails").fill(email);
+  await dialog.getByTestId("invite-submit").click();
+  await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("invite-done")).toBeVisible();
+  await expect(dialog.getByTestId("invite-result-link")).toBeVisible();
+});
+
 test("招待メールは、招待した人ごとに 1 日 50 通まで（ワークスペースを分けても超えられない）", async ({ page, browser }) => {
   test.setTimeout(90_000);
   const { ws } = await signupViaUi(page, { name: "管理 花子" });
