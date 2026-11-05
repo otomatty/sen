@@ -359,13 +359,27 @@ export function ViaBadge({ via }: { via: string }) {
   return <span className="via-badge" title={`${via} から AI が行った操作です`} data-testid="via-badge"><Sparkles size={11} />{via} 経由</span>;
 }
 
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  testId,
+  id,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+  testId?: string;
+  id?: string;
+}) {
   return (
     <button
+      id={id}
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      data-testid={testId}
       className={cx("switch", checked && "on")}
       onClick={() => onChange(!checked)}
     >

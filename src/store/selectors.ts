@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Activity, AppNotification, Comment, Cycle, Issue, Label, Project, Team, User, WorkflowState } from "../../shared/types";
 import { STATE_TYPE_ORDER } from "../../shared/constants";
+import { completionPercent } from "../../shared/progress";
 import { localYmd } from "../lib/utils";
 import { useData } from "./data";
 
@@ -141,7 +142,7 @@ export function projectProgress(projectId: string, issues: Issue[], states: Reco
     else if (t === "canceled") canceled++;
   }
   const total = list.length - canceled;
-  return { total, done, started, percent: total ? Math.round((done / total) * 100) : 0 };
+  return { total, done, started, percent: completionPercent(done, total) };
 }
 
 // ---------------------------------------------------------------------------
