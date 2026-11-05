@@ -212,10 +212,10 @@ export function ActivityLine({ a }: { a: Activity }) {
       ) : (
         <b>{label}</b>
       );
-      if (d.action === "created") body = <>GitHub に {ref} を作りました</>;
-      else if (d.action === "imported") body = <>GitHub の {ref} から作りました</>;
-      else if (d.action === "linked") body = <>GitHub の {ref} と紐づけました</>;
-      else if (d.action === "unlinked") body = <>GitHub の {ref} との紐づけを外しました</>;
+      if (d.action === "created") body = <>{actor}が GitHub に {ref} を作りました</>;
+      else if (d.action === "imported") body = <>{actor}が GitHub の {ref} から作りました</>;
+      else if (d.action === "linked") body = <>{actor}が GitHub の {ref} と紐づけました</>;
+      else if (d.action === "unlinked") body = <>{actor}が GitHub の {ref} との紐づけを外しました</>;
       break;
     }
   }

@@ -136,7 +136,7 @@ function toIncoming(event: string, payload: unknown): GitHubIncoming | null {
   if (event === "issues") {
     const number = body.issue?.number;
     if (typeof number !== "number" || !Number.isSafeInteger(number)) return null;
-    return { type: "issue", repoId: repo.id, number };
+    return { type: "issue", repoId: repo.id, number, sender: loginOf(body.sender ?? null) };
   }
   if (event === "issue_comment") {
     if (body.action !== "created") return null;

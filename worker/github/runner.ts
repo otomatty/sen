@@ -42,7 +42,7 @@ export const processors: Record<"issue" | "githubIssue" | "comment" | "githubCom
   githubIssue: async (ctx, job) => {
     const { reconcileIssue } = await import("./sync");
     const [repoId, number] = job.key.slice("gh:dirty:gh:".length).split(":");
-    await reconcileIssue(ctx, { repoId: Number(repoId), number: Number(number) });
+    await reconcileIssue(ctx, { repoId: Number(repoId), number: Number(number) }, { senderLogin: queuedSenderLogin(job.payload) });
   },
   comment: async (ctx, job) => {
     const { pushComment } = await import("./sync");
@@ -171,7 +171,9 @@ export class GitHubSyncRunner {
     await this.rememberWorkspace(workspaceId);
     const now = Date.now();
     if (incoming.type === "issue" && Number.isSafeInteger(incoming.repoId) && Number.isSafeInteger(incoming.number)) {
-      await this.putItem(`gh:dirty:gh:${incoming.repoId}:${incoming.number}`, now);
+      // 同じ印へ何度届いても印は一つ。送り手は最後の人を残す。無いときは、処理側が連携した管理者にする
+      const login = typeof incoming.sender?.login === "string" ? incoming.sender.login.trim() : "";
+      await this.putItem(`gh:dirty:gh:${incoming.repoId}:${incoming.number}`, now, login ? { login } : undefined);
     } else if (incoming.type === "comment" && Number.isSafeInteger(incoming.githubCommentId)) {
       await this.putItem(`gh:event:comment:${incoming.githubCommentId}`, now, incoming.payload);
     } else if (incoming.type === "pull" && Number.isSafeInteger(incoming.repoId) && Number.isSafeInteger(incoming.number)) {
@@ -569,6 +571,13 @@ async function issueIdFor(
     number,
   );
   return row?.issue_id ?? null;
+}
+
+/** 順番待ちの印に残した issues Webhook の送り手。毎日の突き合わせなど、残っていなければ null */
+function queuedSenderLogin(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const login = (payload as { login?: unknown }).login;
+  return typeof login === "string" && login.trim() ? login : null;
 }
 
 function stringList(value: unknown): string[] {

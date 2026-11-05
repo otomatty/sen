@@ -113,7 +113,7 @@ const ASSIGNEE_ERROR = /^担当者を GitHub に反映できませんでした�
 export async function reconcileIssue(
   ctx: SyncCtx,
   target: { issueId: string } | { repoId: number; number: number },
-  opts: { actor?: { user: Me; role: Role }; via?: string | null; force?: boolean } = {},
+  opts: { actor?: { user: Me; role: Role }; via?: string | null; force?: boolean; senderLogin?: string | null } = {},
 ): Promise<void> {
   await ensureMigrated(ctx.env.DB);
   const ws = await loadWorkspace(ctx.env.DB, ctx.workspaceId);
@@ -148,7 +148,7 @@ export async function reconcileIssue(
     await reconcileLinked(ctx, ws, repo, link, issue, opts);
     return;
   }
-  await importIfNew(ctx, ws, repo, target.number);
+  await importIfNew(ctx, ws, repo, target.number, opts);
 }
 
 export async function pushComment(ctx: SyncCtx, commentId: string): Promise<void> {
@@ -441,7 +441,13 @@ async function createFromSen(
   await writeGitHubActivity(ctx, ws, { actor, via: opts.via }, issue.id, "created", repo, remote.number, draft.url);
 }
 
-async function importIfNew(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>, repo: RepoRow, number: number): Promise<void> {
+async function importIfNew(
+  ctx: SyncCtx,
+  ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>,
+  repo: RepoRow,
+  number: number,
+  opts: { senderLogin?: string | null } = {},
+): Promise<void> {
   const cfg = requireConfig(ctx.env);
   const parts = splitFullName(repo.full_name);
   if (!parts) return;
@@ -471,7 +477,7 @@ async function importIfNew(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<type
     new Set(byLogin.keys()),
   );
   const issueId = crypto.randomUUID();
-  const actor = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, null);
+  const actor = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null);
   const url = remote.html_url || `https://github.com/${repo.full_name}/issues/${remote.number}`;
   await applyGitHubChanges({
     env: ctx.env,
@@ -515,7 +521,7 @@ async function reconcileLinked(
   repo: RepoRow,
   link: LinkRow,
   issue: IssueRow,
-  opts: { actor?: { user: Me; role: Role }; via?: string | null },
+  opts: { actor?: { user: Me; role: Role }; via?: string | null; senderLogin?: string | null },
 ): Promise<void> {
   const cfg = requireConfig(ctx.env);
   const parts = splitFullName(repo.full_name);
@@ -604,7 +610,7 @@ async function reconcileLinked(
     }
   }
 
-  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, null));
+  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null));
   const mutations: Mutation[] = [];
   let conflictId: string | null = null;
   if (Object.keys(patch).length) mutations.push({ type: "issue.update", args: { id: issue.id, patch } });
@@ -648,10 +654,10 @@ async function unlink(
   ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>,
   repo: RepoRow | null,
   link: LinkRow,
-  opts: { actor?: { user: Me; role: Role }; via?: string | null },
+  opts: { actor?: { user: Me; role: Role }; via?: string | null; senderLogin?: string | null },
 ): Promise<void> {
   const fullName = repo?.full_name ?? "";
-  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo?.linked_by ?? null, null));
+  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo?.linked_by ?? null, opts.senderLogin ?? null));
   await writeGitHubActivity(ctx, ws, { actor, via: opts.via }, link.issue_id, "unlinked", { full_name: fullName }, link.number, link.url);
   await deleteLink(ctx, ws, link.issue_id);
 }

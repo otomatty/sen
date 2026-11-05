@@ -27,6 +27,6 @@ export interface GitHubPullEvent {
 }
 
 export type GitHubIncoming =
-  | { type: "issue"; repoId: number; number: number }
+  | { type: "issue"; repoId: number; number: number; sender: { login: string } | null }
   | { type: "comment"; repoId: number; number: number; githubCommentId: number; payload: GitHubCommentEvent }
   | { type: "pull"; repoId: number; number: number; payload: GitHubPullEvent };

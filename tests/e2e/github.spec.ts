@@ -319,7 +319,7 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect(page.getByTestId("github-issue-link")).toHaveAttribute("href", `https://github.com/acme/widgets/issues/${remote.number}`);
     await expect(page.getByTestId("github-synced-at")).toBeVisible();
     await expect(page.getByTestId("github-unlink")).toBeVisible();
-    await expect(page.getByTestId("activity-line").filter({ hasText: "を作りました" })).toBeVisible();
+    await expect(page.getByTestId("activity-line").filter({ hasText: "が GitHub に" }).filter({ hasText: "を作りました" })).toBeVisible();
     const fits = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
     expect(fits).toBe(true);
     await page.setViewportSize({ width: 1360, height: 860 });
@@ -351,6 +351,49 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect(page.getByTestId("activity-line").filter({ hasText: "GitHub 経由" }).first()).toBeVisible();
     await page.waitForTimeout(800);
     expect(patchCount(number)).toBe(echoed);
+  });
+
+  test("GitHub でタイトルを変えた人は、登録があればそのメンバー、無ければ連携した管理者として履歴に残る", async ({ browser }) => {
+    await page.goto(`/${ws}/settings/members`);
+    const code = (await page.getByTestId("invite-link").inputValue()).split("/invite/")[1];
+    const ctx = await browser.newContext();
+    const editor = await ctx.newPage();
+    await devSignIn(editor, { name: "編集 花子" });
+    await editor.goto(`/invite/${code}`);
+    await editor.getByTestId("invite-accept").click();
+    await expect(editor.getByTestId("app")).toBeVisible();
+    await dismissWelcome(editor);
+    await editor.goto(`/${ws}/settings/profile`);
+    const input = editor.getByTestId("profile-github-login");
+    await input.fill("Title-Editor");
+    await input.blur();
+    await expect.poll(async () => (await bootstrap(editor, ws)).me.githubLogin).toBe("title-editor");
+    const editorId = (await bootstrap(editor, ws)).me.id;
+    await ctx.close();
+
+    const created = await createSenIssue(page, ws, { title: "行為者を記録する課題", description: "本文" });
+    const remote = await waitMockIssue("行為者を記録する課題");
+    await waitLink(page, ws, created.id);
+
+    remote.title = "花子が変えた";
+    remote.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "edited", "Title-Editor")).status()).toBe(202);
+    await expect.poll(async () => {
+      const activity = (await threadOf(page, ws, created.id)).activities.find((item) => item.type === "title" && item.data.to === "花子が変えた");
+      return activity ? `${activity.actorId}:${activity.via ?? ""}` : "";
+    }, { timeout: 15_000 }).toBe(`${editorId}:GitHub`);
+
+    remote.title = "未登録の人が変えた";
+    remote.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, remote.number, "edited", "stranger")).status()).toBe(202);
+    await expect.poll(async () => {
+      const activity = (await threadOf(page, ws, created.id)).activities.find((item) => item.type === "title" && item.data.to === "未登録の人が変えた");
+      return activity ? `${activity.actorId}:${activity.via ?? ""}` : "";
+    }, { timeout: 15_000 }).toBe(`${meId}:GitHub`);
+
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await expect(page.getByTestId("activity-line").filter({ hasText: "編集 花子" }).filter({ hasText: "花子が変えた" })).toBeVisible();
+    await expect(page.getByTestId("activity-line").filter({ hasText: "テスト 太郎" }).filter({ hasText: "未登録の人が変えた" })).toBeVisible();
   });
 
   test("完了とキャンセルは closed になり、GitHub の開閉は Sen のステータスになる", async () => {
@@ -590,7 +633,7 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect.poll(async () => (await bootstrap(page, ws)).githubLinks.some((link) => link.issueId === created.id), { timeout: 15_000 }).toBe(false);
     await expect.poll(async () => activityActions(page, ws, created.id)).toContain("unlinked");
     await page.goto(`/${ws}/issue/DEF-${created.number}`);
-    await expect(page.getByTestId("activity-line").filter({ hasText: "紐づけを外しました" })).toBeVisible();
+    await expect(page.getByTestId("activity-line").filter({ hasText: "が GitHub の" }).filter({ hasText: "紐づけを外しました" })).toBeVisible();
   });
 
   test("手で紐づけ、作成、解除ができ、別の課題や別リポジトリは断る", async () => {
@@ -664,7 +707,7 @@ test.describe.serial("GitHub 連携の設定", () => {
     await expect(page.getByTestId("github-create")).toBeVisible({ timeout: 15_000 });
     expect(mockIssue(createdRemote.number)?.title).toBe(titleBefore);
     await expect.poll(async () => activityActions(page, ws, older.id)).toContain("unlinked");
-    await expect(page.getByTestId("activity-line").filter({ hasText: "紐づけを外しました" })).toBeVisible();
+    await expect(page.getByTestId("activity-line").filter({ hasText: "が GitHub の" }).filter({ hasText: "紐づけを外しました" })).toBeVisible();
   });
 
   test("下書きの PR が課題を進め、レビュー待ちとマージでさらに進み、Issue を閉じる", async () => {
@@ -1238,11 +1281,13 @@ async function expectBadgesReadable(page: Page) {
   }
 }
 
-async function postIssueWebhook(page: Page, number: number, action: string) {
+async function postIssueWebhook(page: Page, number: number, action: string, senderLogin?: string) {
   const repo = widgets();
+  const body: Record<string, unknown> = { action, issue: { number }, repository: { id: repo.id, full_name: repo.full_name } };
+  if (senderLogin) body.sender = { login: senderLogin };
   return postWebhook(page.request, {
     event: "issues",
-    body: JSON.stringify({ action, issue: { number }, repository: { id: repo.id, full_name: repo.full_name } }),
+    body: JSON.stringify(body),
   });
 }
 
