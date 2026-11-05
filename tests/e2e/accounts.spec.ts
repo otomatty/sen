@@ -252,3 +252,54 @@ test("同じアカウントへの切り替えの知らせでは、読み込み�
     .poll(() => page.evaluate(() => (window as unknown as { __marker?: number }).__marker).catch(() => 1))
     .toBeUndefined();
 });
+
+test("元のアカウントに戻すのに失敗しても、変更は残り、もう一度試せる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  // 送れない変更として残す。この指定はこのページにしか効かない
+  await other.route("**/api/mutate**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+  await other.getByTestId("issue-row").first().click();
+  const title = other.getByTestId("issue-title");
+  await title.fill("アカウントの追加中に編集");
+  await title.press("Enter");
+  await expect(other.getByTestId("sync-status")).toContainText("オフライン", { timeout: 10_000 });
+  // Google から戻ってきたのと同じく、このタブだけ別のアカウントになる
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("まだ送っていない変更", { timeout: 15_000 });
+  await other.unroute("**/api/mutate**");
+  await other.route("**/api/accounts/switch", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "サーバーでエラーが発生しました" }) }),
+  );
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("confirm-dialog")).toContainText("元のアカウントに戻せませんでした");
+  await expect(other.getByTestId("confirm-ok")).toHaveText("もう一度試す");
+  await expect(other.getByTestId("issue-title")).toHaveValue("アカウントの追加中に編集");
+  await other.unroute("**/api/accounts/switch");
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("sync-status")).toContainText("同期済み", { timeout: 40_000 });
+  // 戻した知らせで、もう一方のタブが開き直して同じ知らせを返す。起動中の画面がそれを受けるとトップへ飛ぶので、届き終わってから読み込み直す
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+  await expect(other.getByTestId("issue-title")).toHaveValue("アカウントの追加中に編集");
+  await other.reload();
+  await expect(other.getByTestId("issue-title")).toHaveValue("アカウントの追加中に編集");
+});
+
+test("切り替えているあいだは、画面を操作できない", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.route("**/api/accounts/switch", async (route) => {
+    await new Promise((r) => setTimeout(r, 2000));
+    await route.continue();
+  });
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("toast")).toContainText("アカウントを切り替えています…");
+  await expect.poll(() => page.evaluate(() => document.getElementById("root")!.inert)).toBe(true);
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+  await page.unroute("**/api/accounts/switch");
+});

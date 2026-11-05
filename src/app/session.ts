@@ -6,7 +6,8 @@ import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
 import { clearSnapshots, clearSnapshotsFor } from "../store/cache";
 import { useData } from "../store/data";
-import { toast } from "../store/ui";
+import { dismissToast, toast } from "../store/ui";
+import { lockScreen, waitForSync } from "./guard";
 
 interface SessionState {
   status: "unknown" | "authed" | "anon";
@@ -72,6 +73,7 @@ let handlingAccountChange = false;
 /**
  * 別のタブでアカウントが替わった。
  * 未送信の変更がなければ開き直す。あれば、捨てる前に元のアカウントへ戻して送るか聞く。
+ * 戻せなかったときは変更を残したまま、もう一度聞く。キャンセルしたときだけ捨てて開き直す。
  */
 async function handleAccountChangedElsewhere() {
   if (handlingAccountChange) return;
@@ -85,29 +87,38 @@ async function handleAccountChangedElsewhere() {
     window.location.assign("/");
     return;
   }
-  const ok = await confirmDialog({
-    title: "別のタブでアカウントが切り替わりました",
-    message: `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。`,
-    confirmLabel: "元のアカウントに戻して送る",
-  });
-  if (!ok) {
-    engine.stop();
-    window.location.assign("/");
+  let error: string | null = null;
+  for (;;) {
+    const ok = await confirmDialog(
+      error
+        ? {
+            title: "元のアカウントに戻せませんでした",
+            message: `${error}。もう一度試しますか？ キャンセルすると、まだ送っていない変更（${pending}件）を捨てて開き直します。`,
+            confirmLabel: "もう一度試す",
+          }
+        : {
+            title: "別のタブでアカウントが切り替わりました",
+            message: `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。`,
+            confirmLabel: "元のアカウントに戻して送る",
+          },
+    );
+    if (!ok) {
+      engine.stop();
+      window.location.assign("/");
+      return;
+    }
+    try {
+      await api("/api/accounts/switch", { body: { userId: me.id } });
+    } catch (e) {
+      error = e instanceof Error ? e.message : "エラーが発生しました";
+      continue;
+    }
+    notifyOtherTabs(me.id);
+    handlingAccountChange = false;
+    engine.resume();
+    toast(`元のアカウント（${me.name}）に戻しました。変更を送っています`);
     return;
   }
-  try {
-    await api("/api/accounts/switch", { body: { userId: me.id } });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "エラーが発生しました";
-    toast(`元のアカウントに戻せませんでした：${message}`, { kind: "error" });
-    engine.stop();
-    window.location.assign("/");
-    return;
-  }
-  notifyOtherTabs(me.id);
-  handlingAccountChange = false;
-  engine.resume();
-  toast(`元のアカウント（${me.name}）に戻しました。変更を送っています`);
 }
 
 /** 他のタブの切り替えと、このタブのリクエストが別アカウントになったことを受け取る。何度呼んでも 1 回だけ */
@@ -123,8 +134,11 @@ export function initSessionSync() {
         return;
       }
       if (data?.type !== "account-changed") return;
+      const cur = useSession.getState();
+      // 起動中・ログインしていないタブは、このあと今のアカウントを読むので何もしない（開いている画面を保つ）
+      if (cur.status !== "authed") return;
       // 知らせの先が今のアカウントなら、このタブはすでにそのアカウントなので何もしない
-      if (data.userId && data.userId === useSession.getState().user?.id) return;
+      if (data.userId && data.userId === cur.user?.id) return;
       void handleAccountChangedElsewhere();
     };
   }
@@ -303,13 +317,39 @@ async function otherTabsBlocker(): Promise<string | null> {
   return null;
 }
 
-/** このブラウザに記録済みのアカウントへ切り替えて、最初から開き直す */
-export async function switchAccount(userId: string) {
+/** 切り替える前に、画面を止めて、書きかけの保存と送信が終わるのを待つ。終わったら元に戻す関数を返す */
+async function prepareAccountChange(label: string): Promise<() => void> {
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
-  const other = await otherTabsBlocker();
-  if (other) throw new Error(other);
-  await api("/api/accounts/switch", { body: { userId } });
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  lockScreen(true);
+  const progress = toast(label, { duration: Infinity });
+  const release = () => {
+    lockScreen(false);
+    dismissToast(progress);
+  };
+  try {
+    // 入力が止まってから保存する欄（説明文は 700 ミリ秒後）の送信が始まるのを待ち、送り終わるまで待つ
+    await new Promise((r) => setTimeout(r, 800));
+    if (!(await waitForSync(10_000))) throw new Error("送信できていない変更があります。同期が終わってから、もう一度お試しください");
+    const other = await otherTabsBlocker();
+    if (other) throw new Error(other);
+  } catch (e) {
+    release();
+    throw e;
+  }
+  return release;
+}
+
+/** このブラウザに記録済みのアカウントへ切り替えて、最初から開き直す */
+export async function switchAccount(userId: string) {
+  const release = await prepareAccountChange("アカウントを切り替えています…");
+  try {
+    await api("/api/accounts/switch", { body: { userId } });
+  } catch (e) {
+    release();
+    throw e;
+  }
   engine.stop();
   notifyOtherTabs(userId);
   window.location.assign("/");
@@ -318,22 +358,26 @@ export async function switchAccount(userId: string) {
 /** 今のアカウントを残したまま、別の Google アカウントを追加する */
 export async function addAccount() {
   if (DEMO) return;
-  const reason = canChangeAccount();
-  if (reason) throw new Error(reason);
-  const other = await otherTabsBlocker();
-  if (other) throw new Error(other);
-  await refreshAccounts();
-  await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
+  const release = await prepareAccountChange("Google のアカウント選択へ移ります…");
+  try {
+    await refreshAccounts();
+    await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
+  } catch (e) {
+    release();
+    throw e;
+  }
 }
 
 /** 今のアカウントだけログアウトし、残ったアカウントで開き直す */
 export async function logoutCurrentAccount() {
-  const reason = canChangeAccount();
-  if (reason) throw new Error(reason);
-  const other = await otherTabsBlocker();
-  if (other) throw new Error(other);
+  const release = await prepareAccountChange("ログアウトしています…");
   const user = useSession.getState().user;
-  await api("/api/accounts/sign-out", { body: {} });
+  try {
+    await api("/api/accounts/sign-out", { body: {} });
+  } catch (e) {
+    release();
+    throw e;
+  }
   engine.stop();
   if (user) await clearSnapshotsFor(user.id);
   writeLocal(SESSION_CACHE, null);
