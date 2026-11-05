@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// README の図（PNG）を docs/diagrams/ の HTML から docs/images/ に書き出す。
+// ガイドの図（PNG）を docs/diagrams/ の HTML から docs/images/ に書き出す。
 //   bun run diagrams
 //   bun run diagrams -- team-structure（名前で絞り込み）
 import { existsSync } from "node:fs";

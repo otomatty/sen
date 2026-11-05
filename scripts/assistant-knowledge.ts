@@ -110,6 +110,35 @@ function parseFrontMatter(raw: string): { title: string; screens: string[]; body
   return { title, screens, body, screensError };
 }
 
+function extractAlt(html: string): string {
+  const match = /\balt\s*=\s*"([^"]*)"/i.exec(html) ?? /\balt\s*=\s*'([^']*)'/i.exec(html);
+  if (!match) return "";
+  return match[1]
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
+function figureAlt(alt: string): string {
+  return alt ? `（図：${alt}）` : "（図）";
+}
+
+/** 画像を alt の文だけにする。パスやタグは残さない。囲みの中はそのまま */
+export function replaceImagesWithAlt(md: string): string {
+  const parts = md.split(/(```[\s\S]*?```)/g);
+  return parts
+    .map((part, index) => {
+      if (index % 2 === 1) return part;
+      const withoutPicture = part.replace(/<picture\b[^>]*>[\s\S]*?<\/picture>/gi, (block) => figureAlt(extractAlt(block)));
+      const withoutImg = withoutPicture.replace(/<img\b[^>]*>/gi, (tag) => figureAlt(extractAlt(tag)));
+      return withoutImg.replace(/!\[([^\]]*)\]\([^)\n]*\)/g, (_match, alt: string) => figureAlt(String(alt).trim()));
+    })
+    .join("");
+}
+
 /** `#` の見出しを 1 段下げる。囲みの中はそのまま */
 export function demoteHeadings(md: string): string {
   let fence = false;
@@ -251,7 +280,7 @@ function tutorialsSection(list: ManifestTutorial[]): { text: string; tutorials: 
 
 function guideSection(pages: GuidePage[]): string {
   if (!pages.length) return "ガイドはありません";
-  return pages.map((page) => demoteHeadings(page.body).trim()).join("\n\n");
+  return pages.map((page) => demoteHeadings(replaceImagesWithAlt(page.body)).trim()).join("\n\n");
 }
 
 export function buildAssistantKnowledge(root: string): AssistantKnowledge {
