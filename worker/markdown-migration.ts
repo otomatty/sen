@@ -2,7 +2,7 @@
 // テストから直接呼ぶため、このファイルは ./markdown 以外の Sen のモジュールを import しない。
 // db.prepare / bind / first / all / run と db.batch だけを使う。
 
-import { htmlToMarkdownChecked } from "./markdown";
+import { htmlToMarkdownChecked, htmlToMarkdownPlainest } from "./markdown";
 
 const PENDING_LIMIT = 50;
 const SNAPSHOT = "0009_markdown_bodies:snapshot";
@@ -92,7 +92,16 @@ async function convertPending(db: D1Database): Promise<void> {
         continue;
       }
       // updated_at は変えない。人の編集ではないので、並び順やスプレッドシートの日付に影響させない。
-      const converted = htmlToMarkdownChecked(byId.get(id) ?? "");
+      // 平文への切り替えまで失敗しても、この行で止めない。本文は警告に出さない。
+      const raw = byId.get(id) ?? "";
+      let converted: { markdown: string; fallback: boolean };
+      try {
+        converted = htmlToMarkdownChecked(raw);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "";
+        if (message && !message.includes("<")) console.warn(`移行の変換で例外: ${message}`);
+        converted = { markdown: htmlToMarkdownPlainest(raw), fallback: true };
+      }
       if (converted.fallback) stripped.push(`${table} ${id}`);
       const markdown = converted.markdown;
       statements.push(

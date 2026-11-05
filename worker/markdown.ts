@@ -40,6 +40,9 @@ const BLOCK_TAGS = new Set([
   "tr",
 ]);
 
+/** 再帰を使わない平文で段落を分ける。br は行が分かれ、td・th はマスごとに分かれる */
+const PLAIN_BREAK_TAGS = new Set<string>([...BLOCK_TAGS, "br", "td", "th"]);
+
 /**
  * 数値と、HTML 4 の表にある名前を 1 回だけ戻す。表に無い名前はそのまま残す。
  * 名前の大文字小文字は区別する。amp・lt・gt・quot・apos・nbsp だけは、これまで通り区別しない。
@@ -363,20 +366,57 @@ interface Block {
 function orderedListNeedsBlankLine(text: string): boolean {
   const nl = text.indexOf("\n");
   const line = nl === -1 ? text : text.slice(0, nl);
-  const marker = /^(\d{1,9})\./.exec(line);
+  const marker = /^(\d{1,9})[.)]/.exec(line);
   return marker !== null && Number(marker[1]) !== 1;
 }
 
+/** 行頭のリスト記号。番号付きは `.` か `)`、箇条書き・チェックリストは `-` か `*` */
+function listOpening(text: string): { family: "ordered" | "bullet"; marker: string } | null {
+  const line = text.split("\n").find((l) => l !== "") ?? "";
+  const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+  if (ordered) return { family: "ordered", marker: ordered[2] };
+  const bullet = /^([-*])(?=\s|$)/.exec(line);
+  if (bullet) return { family: "bullet", marker: bullet[1] };
+  return null;
+}
+
+/** 行頭の記号だけを、もう一方にする。字下げした入れ子の行はいじらない。`- [ ]` は `* [ ]` になる */
+function flipListMarkers(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const bullet = /^([-*])(?=\s|$)/.exec(line);
+      if (bullet) return (bullet[1] === "-" ? "*" : "-") + line.slice(1);
+      const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+      if (ordered) return ordered[1] + (ordered[2] === "." ? ")" : ".") + line.slice(ordered[0].length);
+      return line;
+    })
+    .join("\n");
+}
+
+/**
+ * CommonMark では、空行をはさんでも同じ記号のリストは 1 つになる。
+ * 直前が同じ種類（番号付きどうし、箇条書き・チェックリストどうし）で記号も同じなら、
+ * このブロックの行頭だけを切り替える。3 つ以上続いても、隣どうしは違う記号になる。
+ */
 function joinBlocks(parts: Block[]): string {
   let out = "";
+  let prev: { family: "ordered" | "bullet"; marker: string } | null = null;
   for (const p of parts) {
     if (!p.text) continue;
-    if (!out) {
-      out = p.text;
-      continue;
+    let text = p.text;
+    let opening = p.kind === "list" ? listOpening(text) : null;
+    if (opening && prev && opening.family === prev.family && opening.marker === prev.marker) {
+      text = flipListMarkers(text);
+      opening = listOpening(text);
     }
-    const separate = p.kind !== "list" || orderedListNeedsBlankLine(p.text);
-    out += (separate ? "\n\n" : "\n") + p.text;
+    if (!out) {
+      out = text;
+    } else {
+      const separate = p.kind !== "list" || orderedListNeedsBlankLine(text);
+      out += (separate ? "\n\n" : "\n") + text;
+    }
+    prev = opening;
   }
   return out;
 }
@@ -1017,15 +1057,99 @@ export function htmlToMarkdown(html: string): string {
 }
 
 /**
+ * タグを正規表現で除き、1 段落にエスケープする。
+ * 走査も再帰も使わない。平文の変換まで例外になったときの最後の形。
+ */
+export function htmlToMarkdownPlainest(html: string): string {
+  return escapePlainParagraph(html.replace(/<[^>]*>/g, ""));
+}
+
+/** script・style の終了タグの直後まで進める。見つからなければ末尾 */
+function skipHidden(src: string, i: number, name: string): number {
+  while (i < src.length) {
+    if (src[i] !== "<") {
+      const next = src.indexOf("<", i);
+      i = next === -1 ? src.length : next;
+      continue;
+    }
+    const tag = readTag(src, i);
+    if (!tag) {
+      i += 1;
+      continue;
+    }
+    i = tag.end;
+    if (tag.closing && tag.name === name) return i;
+  }
+  return src.length;
+}
+
+/**
+ * HTML を前から読み、再帰もスタックも使わずに平文の Markdown にする。
+ * ブロックのタグで段落を分け、script・style の中は捨て、画像は代替テキストを残す。
+ */
+function plainHtmlToMarkdown(html: string): string {
+  const src = normalizeHtml(html);
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => {
+    const line = escapePlainParagraph(buf);
+    buf = "";
+    if (line) parts.push(line);
+  };
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] !== "<") {
+      const next = src.indexOf("<", i);
+      const end = next === -1 ? src.length : next;
+      buf += decodeEntities(src.slice(i, end));
+      i = end;
+      continue;
+    }
+    if (src.startsWith("<!--", i)) {
+      const end = src.indexOf("-->", i + 4);
+      i = end === -1 ? src.length : end + 3;
+      continue;
+    }
+    if (src.startsWith("<!", i) || src.startsWith("<?", i)) {
+      const end = src.indexOf(">", i + 2);
+      i = end === -1 ? src.length : end + 1;
+      continue;
+    }
+    const tag = readTag(src, i);
+    if (!tag) {
+      buf += "<";
+      i += 1;
+      continue;
+    }
+    i = tag.end;
+    if (!tag.closing && (tag.name === "script" || tag.name === "style") && !tag.selfClosing) {
+      i = skipHidden(src, i, tag.name);
+      continue;
+    }
+    if (tag.name === "img" && !tag.closing) buf += tag.attrs.alt ?? "";
+    if (PLAIN_BREAK_TAGS.has(tag.name)) flush();
+  }
+  flush();
+  return parts.join("\n\n");
+}
+
+/**
  * 移行で使う。変換のあと、見える文字が変わっていないかを本文ごとに確かめる。
  * 変わっていたら行内の書式だけ外してやり直し、それでもダメなら段落ごとの平文にする。
+ * 読み取りや変換が例外になったら、再帰を使わない平文にして fallback にする。
  */
 export function htmlToMarkdownChecked(html: string): { markdown: string; fallback: boolean } {
-  const markdown = htmlToMarkdown(html);
-  const root = parseHtml(normalizeHtml(html));
-  const expected = visibleText(root.children);
-  if (sameVisible(expected, markdown)) return { markdown, fallback: false };
-  const loose = collapseBlankLines(renderBlocks(stripInlineMarks(mergeAdjacentFormats(root.children))));
-  if (sameVisible(expected, loose)) return { markdown: loose, fallback: true };
-  return { markdown: plainParagraphMarkdown(root.children), fallback: true };
+  try {
+    const markdown = htmlToMarkdown(html);
+    const root = parseHtml(normalizeHtml(html));
+    const expected = visibleText(root.children);
+    if (sameVisible(expected, markdown)) return { markdown, fallback: false };
+    const loose = collapseBlankLines(renderBlocks(stripInlineMarks(mergeAdjacentFormats(root.children))));
+    if (sameVisible(expected, loose)) return { markdown: loose, fallback: true };
+    return { markdown: plainParagraphMarkdown(root.children), fallback: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    if (message && !message.includes("<")) console.warn(`HTML から Markdown への変換で例外: ${message}`);
+    return { markdown: plainHtmlToMarkdown(html), fallback: true };
+  }
 }

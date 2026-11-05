@@ -267,8 +267,8 @@ test("HTML の本文を Markdown にし、2 回目は何も変えない", async 
   expect(rich?.value).toContain("**太字**");
   expect(rich?.value).toContain("`code`");
   expect(rich?.value).toContain("- 項目");
-  expect(rich?.value).toContain("- [x] 済み");
-  expect(rich?.value).toContain("- [ ] 未");
+  expect(rich?.value).toContain("* [x] 済み");
+  expect(rich?.value).toContain("* [ ] 未");
   expect(rich?.value).toContain("[Sen](https://example.com)");
   expect(rich?.value).not.toContain("<p>");
   expect(rich?.value).not.toContain("<strong>");
@@ -517,4 +517,56 @@ test("壊れる行内は書式を外して保存し、警告には行の ID だ�
   expect(warned).not.toContain("acです");
   expect(warned).not.toContain("<code>");
   expect(warned).not.toContain("<strong>");
+});
+
+test("深い本文で例外になっても移行は終わり、普通の本文は書式付きのまま残る", async () => {
+  const deepDiv = "<div>".repeat(20000) + "x";
+  const deepBold = "<b>".repeat(20000) + "x";
+  const plain = "<p>普通 <strong>太字</strong></p>";
+  const db = await openDb();
+  await insertWorkspace(db, "ws");
+  await insertIssue(db, { id: "issue-rich", ws: "ws", description: plain, updatedAt: 11, number: 1 });
+  await insertIssue(db, { id: "issue-deep", ws: "ws", description: deepDiv, updatedAt: 22, number: 2 });
+  await insertComment(db, { id: "comment-deep", ws: "ws", body: deepBold, updatedAt: 33 });
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    await migrateBodiesToMarkdown(db as never, markerFor(db).write);
+  } finally {
+    console.warn = original;
+  }
+
+  const rich = await value(db, "SELECT description AS value, updated_at FROM issues WHERE id = ?", "issue-rich");
+  expect(rich?.value).toBe(htmlToMarkdown(plain));
+  expect(rich?.value).toContain("**太字**");
+  expect(rich?.updated_at).toBe(11);
+
+  const deepIssue = await value(db, "SELECT description AS value, updated_at FROM issues WHERE id = ?", "issue-deep");
+  expect(deepIssue?.value).toBe("x");
+  expect(markdownToText(deepIssue?.value ?? "")).toBe("x");
+  expect(deepIssue?.value).not.toContain("<div>");
+  expect(deepIssue?.updated_at).toBe(22);
+
+  const deepComment = await value(db, "SELECT body AS value, updated_at FROM comments WHERE id = ?", "comment-deep");
+  expect(deepComment?.value).toBe("x");
+  expect(markdownToText(deepComment?.value ?? "")).toBe("x");
+  expect(deepComment?.value).not.toContain("<b>");
+  expect(deepComment?.updated_at).toBe(33);
+
+  expect(await names(db)).toContain("0009_markdown_bodies");
+  expect(await pendingCount(db)).toBe(0);
+
+  const warned = warnings.join("\n");
+  expect(warned).toContain("issue-deep");
+  expect(warned).toContain("issues");
+  expect(warned).toContain("comment-deep");
+  expect(warned).toContain("comments");
+  expect(warned).not.toContain("issue-rich");
+  expect(warned).not.toContain(deepDiv);
+  expect(warned).not.toContain(deepBold);
+  expect(warned).not.toContain("<div>");
+  expect(warned).not.toContain("<b>");
 });
