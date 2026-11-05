@@ -1,20 +1,33 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { AlertTriangle, Check, Link2Off } from "lucide-react";
 import { api } from "../../lib/api";
-import { Button, Spinner } from "../../components/ui";
+import { Avatar, Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
 import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, pickWorkspaceKey, signInWithGoogle, signOut, useSession } from "../../app/session";
 import { formatDateTime } from "../../lib/utils";
-import type { InvitePreview, PendingInvitation } from "../../../shared/types";
+import type { InvitePreview, PendingInvitation, Role } from "../../../shared/types";
 
 const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
+const DAY_MS = 86_400_000;
 
-function AuthLayout({ title, subtitle, children }: { title: string; subtitle?: React.ReactNode; children: React.ReactNode }) {
+function AuthLayout({
+  title,
+  subtitle,
+  icon,
+  children,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  /** ロゴの代わりに出すアイコン。渡さないときはロゴ */
+  icon?: ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="auth-page">
       <div className="auth-glow" />
       <div className="auth-card">
-        <Logo size={36} />
+        {icon ?? <Logo size={36} />}
         <h1>{title}</h1>
         {subtitle && <p className="muted">{subtitle}</p>}
         {children}
@@ -63,14 +76,22 @@ function writeJoinMark(token: string | null) {
   }
 }
 
-function inviteSubtitle(invite: InvitePreview): string {
-  const until = formatDateTime(invite.expiresAt);
-  const who = invite.invitedByName ? `${invite.invitedByName} さんからの招待です` : "招待です";
-  return `${who}（${invite.maskedEmail} あて・${until}まで）`;
+function roleLabel(role: Role): string {
+  return role === "admin" ? "管理者" : "メンバー";
 }
 
-function pendingLabel(inv: PendingInvitation): string {
-  return inv.invitedByName ? `${inv.workspaceName}（${inv.invitedByName} さんから）` : inv.workspaceName;
+/** 残り時間を日で切り上げる。過ぎていても 1 日とする */
+function daysLeft(expiresAt: number, now = Date.now()): number {
+  return Math.max(1, Math.ceil((expiresAt - now) / DAY_MS));
+}
+
+function inviteLead(invite: InvitePreview): string {
+  return invite.invitedByName ? `${invite.invitedByName} さんから招待されました` : "招待されました";
+}
+
+function pendingMeta(inv: PendingInvitation, now = Date.now()): string {
+  const rest = `${roleLabel(inv.role)} ・ あと ${daysLeft(inv.expiresAt, now)} 日`;
+  return inv.invitedByName ? `${inv.invitedByName} さんから ・ ${rest}` : rest;
 }
 
 /** アプリ内のパスだけを戻り先にする（外部サイトへのリダイレクトを防ぐ） */
@@ -80,6 +101,7 @@ function safePath(path: string | null): string | null {
 
 function GoogleSignInButton({
   label = "Google でログイン",
+  variant = "secondary",
   callbackURL,
   errorCallbackURL,
   error: initialError,
@@ -87,6 +109,8 @@ function GoogleSignInButton({
   beforeSignIn,
 }: {
   label?: string;
+  /** primary は白い丸の上に Google のアイコン。link は文字だけのリンク */
+  variant?: "primary" | "secondary" | "link";
   callbackURL: string;
   errorCallbackURL: string;
   error?: string | null;
@@ -108,9 +132,25 @@ function GoogleSignInButton({
       setBusy(false);
     }
   };
+  const icon = busy ? (
+    <Spinner size={14} />
+  ) : variant === "link" ? undefined : variant === "primary" ? (
+    <span className="google-icon-badge">
+      <GoogleIcon size={13} />
+    </span>
+  ) : (
+    <GoogleIcon />
+  );
   return (
     <>
-      <Button variant="secondary" onClick={start} disabled={busy || disabled} icon={busy ? <Spinner size={14} /> : <GoogleIcon />} data-testid="google-sign-in">
+      <Button
+        variant={variant === "link" ? "ghost" : variant}
+        className={variant === "link" ? "auth-link-btn" : undefined}
+        onClick={start}
+        disabled={busy || disabled}
+        icon={icon}
+        data-testid="google-sign-in"
+      >
         {label}
       </Button>
       {error && (
@@ -119,6 +159,27 @@ function GoogleSignInButton({
         </div>
       )}
     </>
+  );
+}
+
+function InviteDetails({ invite, showEmail }: { invite: InvitePreview; showEmail: boolean }) {
+  return (
+    <dl className="invite-details" data-testid="invite-details">
+      {showEmail && (
+        <div>
+          <dt>招待されたアドレス</dt>
+          <dd>{invite.maskedEmail}</dd>
+        </div>
+      )}
+      <div>
+        <dt>権限</dt>
+        <dd>{roleLabel(invite.role)}</dd>
+      </div>
+      <div>
+        <dt>有効期限</dt>
+        <dd>{formatDateTime(invite.expiresAt)} まで</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -217,51 +278,79 @@ export function InvitePage() {
   }, [autoJoin, authed, invite, join]);
 
   if (inviteError) {
+    const loggedIn = session.status === "authed";
     return (
-      <AuthLayout title="招待リンクが無効です" subtitle="期限が切れたか、取り消された可能性があります。招待した人に、もう一度招待してもらってください。">
-        <Link to="/login">ログイン画面へ</Link>
+      <AuthLayout
+        icon={
+          <span className="invite-dead-icon" aria-hidden>
+            <Link2Off size={22} />
+          </span>
+        }
+        title="この招待リンクは使えません"
+        subtitle="期限が切れたか、取り消されたか、すでに使われています。招待した人に、もう一度招待してもらってください。"
+      >
+        {session.status !== "unknown" && (
+          <div className="auth-form">
+            <Link to={loggedIn ? "/" : "/login"} className="btn btn-secondary btn-md auth-wide-btn">
+              {loggedIn ? "Sen を開く" : "ログイン画面へ"}
+            </Link>
+          </div>
+        )}
       </AuthLayout>
     );
   }
 
+  const googleLabel = !authed ? "Google でログインして参加" : wrongAccount ? "招待されたアカウントでログインし直す" : "別の Google アカウントで参加";
+
   return (
-    <AuthLayout title={invite ? `${invite.workspaceName} に参加` : "招待を確認中…"} subtitle={invite ? inviteSubtitle(invite) : undefined}>
-      <div className="auth-form">
-        {wrongAccount && invite && (
-          <>
-            <p className="invite-wrong-account" data-testid="invite-wrong-account">
-              {session.user?.email} でログイン中です。この招待は {invite.maskedEmail} あてです。
-            </p>
-            {error && <div className="form-error">{error}</div>}
-          </>
-        )}
-        {authed && invite && !wrongAccount && (
-          <>
-            <p className="muted small">
-              {session.user?.name}（{session.user?.email}）としてログイン中です。
-            </p>
-            <Button variant="primary" onClick={join} disabled={busy || !invite} data-testid="invite-accept">
-              {busy ? <Spinner size={14} /> : "このアカウントで参加する"}
-            </Button>
-            {error && <div className="form-error">{error}</div>}
-            <div className="auth-divider">または</div>
-          </>
-        )}
-        {/* ログアウトしてから Google へ移るときも、ボタンが作り直されないよう同じ位置に置く */}
-        {session.status !== "unknown" && (
+    <AuthLayout title={invite ? `${invite.workspaceName} に参加` : "招待を確認中…"} subtitle={invite ? inviteLead(invite) : undefined}>
+      {invite && session.status !== "unknown" && (
+        <div className="auth-form invite-form">
+          {wrongAccount && (
+            <div className="invite-wrong-account" data-testid="invite-wrong-account">
+              <AlertTriangle size={16} aria-hidden />
+              <span className="invite-wrong-account-text">
+                <b>この招待は {invite.maskedEmail} あてです</b>
+                <span>今は {session.user?.email} でログインしています。このアカウントでは参加できません。</span>
+              </span>
+            </div>
+          )}
+          <InviteDetails invite={invite} showEmail={!wrongAccount} />
+          {authed && !wrongAccount && session.user && (
+            <>
+              <div className="invite-account" data-testid="invite-account">
+                <Avatar user={session.user} size={32} />
+                <span className="invite-account-body">
+                  <b>{session.user.name}</b>
+                  <span>{session.user.email}</span>
+                </span>
+                <span className="invite-account-status">
+                  <Check size={12} strokeWidth={2.6} />
+                  ログイン中
+                </span>
+              </div>
+              <Button variant="primary" onClick={join} disabled={busy} data-testid="invite-accept" icon={busy ? <Spinner size={14} /> : undefined}>
+                このアカウントで参加する
+              </Button>
+            </>
+          )}
+          {error && <div className="form-error">{error}</div>}
+          {/* ログアウトしてから Google へ移るときも、ボタンが作り直されないよう同じ位置に置く */}
           <GoogleSignInButton
-            label={authed ? (wrongAccount ? "別の Google アカウントでログインして参加" : "別の Google アカウントで参加") : "Google でログインして参加"}
+            variant={authed && !wrongAccount ? "link" : "primary"}
+            label={googleLabel}
             callbackURL={`/invite/${token}?join=1`}
             errorCallbackURL={`/invite/${token}`}
             error={authed ? null : authErrorMessage(params.get("error"))}
-            disabled={busy || !invite}
+            disabled={busy}
             beforeSignIn={async () => {
               writeJoinMark(token);
               if (authed) await signOut();
             }}
           />
-        )}
-      </div>
+          {session.status === "anon" && <p className="invite-hint">{invite.maskedEmail} の Google アカウントでログインしてください。</p>}
+        </div>
+      )}
     </AuthLayout>
   );
 }
@@ -277,6 +366,13 @@ export function NewWorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
+  const hasInvitations = invitations.length > 0;
+  const [creating, setCreating] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const showCreateForm = !hasInvitations || creating;
+  useEffect(() => {
+    if (creating) nameRef.current?.focus();
+  }, [creating]);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -308,19 +404,26 @@ export function NewWorkspacePage() {
   };
   return (
     <AuthLayout
-      title={firstTime ? "ワークスペースを作成" : "新しいワークスペース"}
+      title={hasInvitations ? "招待が届いています" : firstTime ? "ワークスペースを作成" : "新しいワークスペース"}
       subtitle={
-        firstTime
-          ? "ワークスペースと、使い方を学べるサンプル課題が用意されます。チームに参加する場合は、招待メールのリンクを開いてください。"
-          : "チームや組織ごとにワークスペースを分けられます。課題の入っていないワークスペースが作られます。"
+        hasInvitations
+          ? "参加するワークスペースを選んでください。"
+          : firstTime
+            ? "ワークスペースと、使い方を学べるサンプル課題が用意されます。チームに参加する場合は、招待メールのリンクを開いてください。"
+            : "チームや組織ごとにワークスペースを分けられます。課題の入っていないワークスペースが作られます。"
       }
     >
-      {invitations.length > 0 && (
+      {hasInvitations && (
         <div className="pending-invitations">
-          <p className="pending-invitations-title">招待されているワークスペース</p>
           {invitations.map((inv) => (
             <div key={inv.id} className="pending-invitation" data-testid="pending-invitation">
-              <span className="pending-invitation-label">{pendingLabel(inv)}</span>
+              <span className="pending-invitation-mark" aria-hidden>
+                {Array.from(inv.workspaceName)[0] ?? ""}
+              </span>
+              <span className="pending-invitation-main">
+                <b>{inv.workspaceName}</b>
+                <span>{pendingMeta(inv)}</span>
+              </span>
               <Button
                 type="button"
                 variant="primary"
@@ -337,24 +440,32 @@ export function NewWorkspacePage() {
           ))}
         </div>
       )}
-      <form onSubmit={submit} className="auth-form" data-testid="new-workspace-form">
-        <label>
-          ワークスペース名
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            autoFocus
-            maxLength={60}
-            placeholder="例：ミライ株式会社"
-            data-testid="new-workspace-name"
-          />
-        </label>
-        {error && <div className="form-error">{error}</div>}
-        <Button variant="primary" type="submit" disabled={busy || !name.trim()} data-testid="new-workspace-submit">
-          {firstTime ? "はじめる" : "作成する"}
+      {hasInvitations && <div className="auth-or">または</div>}
+      {showCreateForm ? (
+        <form onSubmit={submit} className="auth-form" data-testid="new-workspace-form">
+          <label>
+            ワークスペース名
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoFocus
+              maxLength={60}
+              placeholder="例：ミライ株式会社"
+              data-testid="new-workspace-name"
+            />
+          </label>
+          {error && <div className="form-error">{error}</div>}
+          <Button variant="primary" type="submit" disabled={busy || !name.trim()} data-testid="new-workspace-submit">
+            {firstTime ? "はじめる" : "作成する"}
+          </Button>
+        </form>
+      ) : (
+        <Button type="button" variant="secondary" className="auth-wide-btn" data-testid="new-workspace-toggle" onClick={() => setCreating(true)}>
+          新しいワークスペースを作る
         </Button>
-      </form>
+      )}
       {firstTime ? (
         <p className="auth-switch">
           {session.user?.email} でログイン中 ・{" "}

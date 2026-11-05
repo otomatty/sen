@@ -113,7 +113,7 @@ async function expectInvalidInvite(browser: Browser, link: string) {
   const page = await context.newPage();
   try {
     await page.goto(invitePath(link));
-    await expect(page.getByRole("heading", { name: "招待リンクが無効です" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "この招待リンクは使えません" })).toBeVisible();
   } finally {
     await context.close();
   }
@@ -171,7 +171,7 @@ test("招待リンクは参加後にもう一度開けない", async ({ page, br
   const guest = await joinByInvite(browser, link, { email, name: "一度 参加" });
   try {
     await guest.page.goto(invitePath(link));
-    await expect(guest.page.getByRole("heading", { name: "招待リンクが無効です" })).toBeVisible();
+    await expect(guest.page.getByRole("heading", { name: "この招待リンクは使えません" })).toBeVisible();
   } finally {
     await guest.context.close();
   }
@@ -316,8 +316,10 @@ test("ワークスペースを持たない人は、作成画面から招待に�
   try {
     await devSignIn(p2, { email, name: "未参加 花子" });
     await p2.goto("/");
+    await expect(p2.getByRole("heading", { name: "招待が届いています" })).toBeVisible();
+    await expect(p2.getByTestId("new-workspace-form")).toHaveCount(0);
+    await p2.getByTestId("new-workspace-toggle").click();
     await expect(p2.getByTestId("new-workspace-form")).toBeVisible();
-    await expect(p2.getByText("招待されているワークスペース")).toBeVisible();
     const card = p2.getByTestId("pending-invitation");
     await expect(card).toContainText("招待先のチーム");
     await card.getByTestId("pending-invitation-accept").click();
