@@ -438,3 +438,36 @@ test("画面と違うアカウントからの『切り替え』は止め、元�
   const after = await page.request.get("/api/me");
   expect(((await after.json()) as { user: { id: string } }).user.id).toBe(hanakoId);
 });
+
+test("ワークスペースの無いアカウントを追加しても、作成の画面から元のアカウントに戻れる", async ({ page }) => {
+  await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+  const switchLink = page.locator('[data-testid^="new-workspace-switch-"]');
+  await expect(switchLink).toHaveCount(1);
+  await expect(switchLink).toContainText("山田 花子");
+  await switchLink.click();
+  await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+  await page.getByTestId("user-menu").click();
+  await expect(accountRows(page)).toHaveCount(2);
+  await expect(accountRows(page).filter({ hasText: "佐藤 次郎" })).toHaveCount(1);
+});
+
+test("ワークスペースの無いアカウントを追加しても、作成の画面からそのアカウントだけログアウトできる", async ({ page }) => {
+  await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+  await expect(page.getByTestId("new-workspace-logout-current")).toBeVisible();
+  await page.getByTestId("new-workspace-logout-current").click();
+  await expect(page.getByTestId("app")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+  await page.getByTestId("user-menu").click();
+  await expect(accountRows(page)).toHaveCount(0);
+});

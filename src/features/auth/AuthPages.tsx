@@ -4,7 +4,7 @@ import { AlertTriangle, Check, Link2Off } from "lucide-react";
 import { api } from "../../lib/api";
 import { Avatar, Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
-import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, pickWorkspaceKey, refreshAccounts, signInWithGoogle, useSession } from "../../app/session";
+import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, logoutCurrentAccount, pickWorkspaceKey, refreshAccounts, signInWithGoogle, switchAccount, useSession } from "../../app/session";
 import { formatDateTime } from "../../lib/utils";
 import type { InvitePreview, PendingInvitation, Role } from "../../../shared/types";
 
@@ -368,6 +368,8 @@ export function NewWorkspacePage() {
   const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
   const hasInvitations = invitations.length > 0;
   const [creating, setCreating] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const others = (session.accounts ?? []).filter((a) => !a.current);
   const nameRef = useRef<HTMLInputElement>(null);
   const showCreateForm = !hasInvitations || creating;
   useEffect(() => {
@@ -467,18 +469,51 @@ export function NewWorkspacePage() {
         </Button>
       )}
       {firstTime ? (
-        <p className="auth-switch">
-          {session.user?.email} でログイン中 ・{" "}
-          <a
-            href="/login"
-            onClick={(e) => {
-              e.preventDefault();
-              logout();
-            }}
-          >
-            別のアカウントでログイン
-          </a>
-        </p>
+        others.length === 0 ? (
+          <p className="auth-switch">
+            {session.user?.email} でログイン中 ・{" "}
+            <a
+              href="/login"
+              onClick={(e) => {
+                e.preventDefault();
+                logout();
+              }}
+            >
+              別のアカウントでログイン
+            </a>
+          </p>
+        ) : (
+          <>
+            <p className="auth-switch">
+              {session.user?.email} でログイン中 ・{" "}
+              <a
+                href="/"
+                data-testid="new-workspace-logout-current"
+                onClick={(e) => {
+                  e.preventDefault();
+                  logoutCurrentAccount().catch((err) => setAccountError((err as Error).message));
+                }}
+              >
+                このアカウントからログアウト
+              </a>
+            </p>
+            {others.map((a) => (
+              <p key={a.id} className="auth-switch">
+                <a
+                  href="/"
+                  data-testid={`new-workspace-switch-${a.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    switchAccount(a.id).catch((err) => setAccountError((err as Error).message));
+                  }}
+                >
+                  {a.name}（{a.email}）に切り替え
+                </a>
+              </p>
+            ))}
+            {accountError && <div className="form-error">{accountError}</div>}
+          </>
+        )
       ) : (
         lastWorkspaceKey() && (
           <p className="auth-switch">
