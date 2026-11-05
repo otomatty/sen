@@ -452,8 +452,8 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
               placeholder="説明を追加…（Markdown 記法が使えます）"
               className="detail-description"
               testId="issue-description"
-              onChange={(html) => {
-                pendingDesc.current = html;
+              onChange={(markdown) => {
+                pendingDesc.current = markdown;
                 if (descTimer.current) clearTimeout(descTimer.current);
                 descTimer.current = setTimeout(flushDesc, 700);
               }}

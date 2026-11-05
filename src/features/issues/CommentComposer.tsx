@@ -3,7 +3,8 @@ import type { Editor as TiptapEditor } from "@tiptap/react";
 import { ArrowUp } from "lucide-react";
 import { addComment } from "../../store/actions";
 import { useMembers } from "../../store/selectors";
-import { cx, fuzzyMatch, isHtmlEmpty, MOD } from "../../lib/utils";
+import { isMarkdownBlank } from "../../../shared/markdown";
+import { cx, fuzzyMatch, MOD } from "../../lib/utils";
 import { Editor } from "../../components/Editor";
 import { Avatar } from "../../components/ui";
 
@@ -14,19 +15,19 @@ export function hasCommentDraft() {
 }
 
 export function CommentComposer({ issueId }: { issueId: string }) {
-  const [html, setHtml] = useState("");
+  const [markdown, setMarkdown] = useState("");
   const [key, setKey] = useState(0);
   const editorRef = useRef<TiptapEditor | null>(null);
   const members = useMembers();
   const [mention, setMention] = useState<{ q: string; from: number; to: number; active: number } | null>(null);
 
   useEffect(() => {
-    if (isHtmlEmpty(html)) return;
+    if (isMarkdownBlank(markdown)) return;
     writing.add(issueId);
     return () => {
       writing.delete(issueId);
     };
-  }, [html, issueId]);
+  }, [markdown, issueId]);
 
   const candidates = mention ? members.filter((m) => fuzzyMatch(`${m.name} ${m.email}`, mention.q)).slice(0, 6) : [];
 
@@ -49,9 +50,9 @@ export function CommentComposer({ issueId }: { issueId: string }) {
   };
 
   const submit = () => {
-    if (isHtmlEmpty(html)) return;
-    addComment(issueId, html);
-    setHtml("");
+    if (isMarkdownBlank(markdown)) return;
+    addComment(issueId, markdown);
+    setMarkdown("");
     setKey((k) => k + 1);
     setMention(null);
   };
@@ -82,8 +83,8 @@ export function CommentComposer({ issueId }: { issueId: string }) {
         value=""
         editorRef={editorRef}
         placeholder="コメントを書く…（@ でメンバーをメンション）"
-        onChange={(h) => {
-          setHtml(h);
+        onChange={(next) => {
+          setMarkdown(next);
           detectMention();
         }}
         onSubmit={submit}
@@ -109,7 +110,7 @@ export function CommentComposer({ issueId }: { issueId: string }) {
       )}
       <div className="composer-actions">
         <span className="muted small">{MOD} + Enter で送信</span>
-        <button className="send-btn" onClick={submit} disabled={isHtmlEmpty(html)} aria-label="コメントを送信" data-testid="comment-submit">
+        <button className="send-btn" onClick={submit} disabled={isMarkdownBlank(markdown)} aria-label="コメントを送信" data-testid="comment-submit">
           <ArrowUp size={15} />
         </button>
       </div>

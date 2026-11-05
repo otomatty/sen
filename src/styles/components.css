@@ -864,6 +864,21 @@ select:focus {
   font-size: 1.08em;
   margin: 0.9em 0 0.3em;
 }
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-weight: 650;
+  margin: 0.8em 0 0.25em;
+}
+.prose h4 {
+  font-size: 1em;
+}
+.prose h5 {
+  font-size: 0.95em;
+}
+.prose h6 {
+  font-size: 0.9em;
+}
 .prose ul,
 .prose ol {
   padding-left: 1.5em;
@@ -925,6 +940,191 @@ select:focus {
 }
 .prose ul[data-type="taskList"] input {
   accent-color: var(--accent);
+}
+.prose .tableWrapper,
+.comment-body,
+.editor > .prose {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.prose .tableWrapper {
+  width: 100%;
+}
+.prose table {
+  border-collapse: collapse;
+  width: auto;
+  margin: 0.6em 0;
+}
+/* 操作バーは表の 36px 上。その高さ分、カーソルのある表だけ上を空ける */
+.prose .tableWrapper.table-active {
+  margin-top: 40px;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+.prose th {
+  background: var(--panel-3);
+  font-weight: 650;
+}
+.prose th[data-align="center"],
+.prose td[data-align="center"] {
+  text-align: center;
+}
+.prose th[data-align="right"],
+.prose td[data-align="right"] {
+  text-align: right;
+}
+.prose th p,
+.prose td p {
+  margin: 0;
+}
+.ProseMirror td.selectedCell,
+.ProseMirror th.selectedCell {
+  background: var(--accent-soft);
+}
+.prose img {
+  max-width: 100%;
+  height: auto;
+}
+.ProseMirror img.ProseMirror-selectednode,
+.ProseMirror .ProseMirror-selectednode.md-image-fallback {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+.prose .md-alert {
+  margin: 0.6em 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--alert-note);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--alert-note) 14%, transparent);
+}
+.prose .md-alert::before {
+  content: attr(data-alert-label);
+  display: block;
+  font-weight: 650;
+  font-size: 0.85em;
+  margin-bottom: 0.2em;
+  color: var(--alert-note);
+}
+.prose .md-alert[data-alert="note"] {
+  border-left-color: var(--alert-note);
+  background: color-mix(in srgb, var(--alert-note) 14%, transparent);
+}
+.prose .md-alert[data-alert="note"]::before {
+  color: var(--alert-note);
+}
+.prose .md-alert[data-alert="tip"] {
+  border-left-color: var(--alert-tip);
+  background: color-mix(in srgb, var(--alert-tip) 14%, transparent);
+}
+.prose .md-alert[data-alert="tip"]::before {
+  color: var(--alert-tip);
+}
+.prose .md-alert[data-alert="important"] {
+  border-left-color: var(--alert-important);
+  background: color-mix(in srgb, var(--alert-important) 14%, transparent);
+}
+.prose .md-alert[data-alert="important"]::before {
+  color: var(--alert-important);
+}
+.prose .md-alert[data-alert="warning"] {
+  border-left-color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+}
+.prose .md-alert[data-alert="warning"]::before {
+  color: var(--alert-warning);
+}
+.prose .md-alert[data-alert="caution"] {
+  border-left-color: var(--alert-caution);
+  background: color-mix(in srgb, var(--alert-caution) 14%, transparent);
+}
+.prose .md-alert[data-alert="caution"]::before {
+  color: var(--alert-caution);
+}
+.prose sup.md-footnote-ref {
+  font-size: 0.75em;
+  line-height: 0;
+  color: var(--accent-text);
+  cursor: default;
+}
+.prose .md-footnote {
+  font-size: 0.88em;
+  color: var(--text-secondary);
+  margin: 0.5em 0;
+  padding-top: 0.35em;
+  border-top: 1px solid var(--border);
+}
+.prose .md-footnote::before {
+  content: "[" attr(data-label) "] ";
+  font-weight: 650;
+  color: var(--text);
+}
+.prose .md-footnote > :first-child {
+  display: inline;
+}
+.prose pre.md-raw-html {
+  position: relative;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--panel-2);
+  white-space: pre-wrap;
+}
+.prose pre.md-raw-html::before,
+.prose code.md-raw-html::before {
+  content: "HTML";
+  font-family: inherit;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.prose pre.md-raw-html::before {
+  display: inline-block;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-bottom: 6px;
+}
+.prose code.md-raw-html::before {
+  font-size: 0.72em;
+  margin-right: 4px;
+}
+.table-toolbar {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: calc(100% - 8px);
+  padding: 3px;
+  background: var(--overlay);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.table-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.table-toolbar button:hover:not(:disabled),
+.table-toolbar button.on {
+  background: var(--hover);
+  color: var(--text);
+}
+.table-toolbar button.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.table-toolbar button:disabled {
+  opacity: 0.35;
 }
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);

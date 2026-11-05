@@ -96,17 +96,6 @@ export function dueStatus(due: string | null): "overdue" | "soon" | "normal" | n
   return "normal";
 }
 
-export function htmlToText(html: string): string {
-  if (!html) return "";
-  const div = document.createElement("div");
-  div.innerHTML = html.replace(/<\/(p|li|h\d)>/g, "$& ");
-  return (div.textContent ?? "").replace(/\s+/g, " ").trim();
-}
-
-export function isHtmlEmpty(html: string): boolean {
-  return !htmlToText(html) && !/<img|<hr/i.test(html);
-}
-
 export function pluralCount(n: number, unit = "件"): string {
   return `${n}${unit}`;
 }
