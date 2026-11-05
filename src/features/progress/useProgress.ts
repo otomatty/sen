@@ -26,7 +26,6 @@ export interface ProgressModel {
  */
 export function useProgress(): ProgressModel {
   const wsKey = useData((s) => s.workspace?.urlKey ?? "");
-  const workspace = useData((s) => s.workspace);
   const projects = useData((s) => s.projects);
   const issues = useData((s) => s.issues);
   const states = useData((s) => s.states);
@@ -55,12 +54,10 @@ export function useProgress(): ProgressModel {
           id: issue.id,
           identifier: team ? `${team.key}-${issue.number}` : String(issue.number),
           title: issue.title,
-          descriptionText: "",
           projectId: issue.projectId!,
           stateName: state?.name ?? "",
           stateType: state?.type ?? "unstarted",
           priority: issue.priority ?? 0,
-          assigneeName: issue.assigneeId ? (users[issue.assigneeId]?.name ?? null) : null,
           labelNames: issue.labelIds.flatMap((id) => {
             const name = labels[id]?.name;
             return name ? [name] : [];
@@ -71,11 +68,7 @@ export function useProgress(): ProgressModel {
         };
       });
     const summary = summarizeProgress({
-      workspaceName: workspace?.name ?? "",
-      urlKey: workspace?.urlKey ?? "",
-      origin: null,
       today,
-      now: Date.now(),
       projects: projectList.map((project) => ({ id: project.id, name: project.name })),
       issues: reportIssues,
     });
@@ -90,7 +83,7 @@ export function useProgress(): ProgressModel {
       users,
       assigneeIdByIssue,
     };
-  }, [workspace, projects, issues, states, teams, users, labels, meId, members, startedOn, today]);
+  }, [projects, issues, states, teams, users, labels, meId, members, startedOn, today]);
 }
 
 const JST_OFFSET_MINUTES = 540;

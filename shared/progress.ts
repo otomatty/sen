@@ -7,14 +7,8 @@ import type { StateType } from "./types";
 const PROCESS_PREFIX = /^工程[:：](.*)$/;
 
 export interface ReportInput {
-  workspaceName: string;
-  urlKey: string;
-  /** アプリの公開 URL（リンク用）。null ならリンクなしの文字列にする */
-  origin: string | null;
   /** 日本時間の今日 'YYYY-MM-DD' */
   today: string;
-  /** 現在時刻（UNIX ミリ秒） */
-  now: number;
   /** 表示順に並んだ、アーカイブされていないプロジェクト */
   projects: { id: string; name: string }[];
   issues: ReportIssueInput[];
@@ -25,13 +19,10 @@ export interface ReportIssueInput {
   /** 'ENG-12' */
   identifier: string;
   title: string;
-  /** 説明を平文にしたもの */
-  descriptionText: string;
   projectId: string;
   stateName: string;
   stateType: StateType;
   priority: number;
-  assigneeName: string | null;
   labelNames: string[];
   /** 'YYYY-MM-DD' */
   dueDate: string | null;

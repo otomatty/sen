@@ -155,14 +155,9 @@ function reportInputFromBootstrap(data: BootstrapPayload): ReportInput {
   const projectIds = new Set(projects.map((project) => project.id));
   const teamKey = new Map(data.teams.map((team) => [team.id, team.key]));
   const stateById = new Map(data.states.map((state) => [state.id, state]));
-  const userName = new Map(data.users.map((user) => [user.id, user.name]));
   const labelName = new Map(data.labels.map((label) => [label.id, label.name]));
   return {
-    workspaceName: data.workspace.name,
-    urlKey: data.workspace.urlKey,
-    origin: null,
     today: todayYmd(540),
-    now: Date.now(),
     projects: projects.map((project) => ({ id: project.id, name: project.name })),
     issues: data.issues
       .filter((issue) => !issue.archivedAt && issue.projectId && projectIds.has(issue.projectId))
@@ -173,12 +168,10 @@ function reportInputFromBootstrap(data: BootstrapPayload): ReportInput {
           id: issue.id,
           identifier: key ? `${key}-${issue.number}` : String(issue.number),
           title: issue.title,
-          descriptionText: "",
           projectId: issue.projectId!,
           stateName: state?.name ?? "",
           stateType: state?.type ?? "unstarted",
           priority: issue.priority ?? 0,
-          assigneeName: issue.assigneeId ? (userName.get(issue.assigneeId) ?? null) : null,
           labelNames: issue.labelIds.flatMap((id) => {
             const name = labelName.get(id);
             return name ? [name] : [];
@@ -1066,10 +1059,8 @@ function sampleIssue(partial: Pick<ReportIssueInput, "id" | "projectId" | "state
   return {
     identifier: "ENG-1",
     title: "課題",
-    descriptionText: "",
     stateName: "状態",
     priority: 0,
-    assigneeName: null,
     labelNames: [],
     dueDate: null,
     startedOn: null,
@@ -1080,11 +1071,7 @@ function sampleIssue(partial: Pick<ReportIssueInput, "id" | "projectId" | "state
 
 function sampleInput(projects: ReportInput["projects"], issues: ReportIssueInput[]): ReportInput {
   return {
-    workspaceName: "テスト",
-    urlKey: "progress-rules",
-    origin: null,
     today: RULE_TODAY,
-    now: Date.UTC(2026, 10, 10),
     projects,
     issues,
   };
