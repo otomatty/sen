@@ -1,11 +1,11 @@
 // 招待メール（Cloudflare Email Service）。
 // EMAIL と INVITE_EMAIL_FROM が両方そろったときだけ送る。失敗しても招待自体は残す。
+// 直近 24 時間に送れる数は、ワークスペースごと・招待した人ごとに 50 通まで。
 
-import { first } from "./db";
 import type { Env } from "./env";
 
 const DAY_MS = 86_400_000;
-/** ワークスペースごとに、直近 24 時間に送れる招待メールの数 */
+/** ワークスペースごと・招待した人ごとに、直近 24 時間に送れる招待メールの数 */
 const MAX_EMAILS_PER_DAY = 50;
 
 const NOT_CONFIGURED = "招待メールの送信が設定されていません。リンクをコピーして本人に送ってください";
@@ -17,6 +17,8 @@ export function emailEnabled(env: Env): boolean {
 }
 
 export interface InvitationMail {
+  invitationId: string;
+  inviterId: string;
   to: string;
   workspaceName: string;
   inviterName: string;
@@ -24,7 +26,7 @@ export interface InvitationMail {
   expiresAt: number;
 }
 
-export type InvitationMailResult = { sent: true } | { sent: false; error: string };
+export type InvitationMailResult = { sent: true; sentAt: number } | { sent: false; error: string };
 
 /** 件名に改行を残すとヘッダーを分割できるので、空白に置き換える */
 function oneLine(s: string): string {
@@ -89,7 +91,7 @@ function bodies(mail: InvitationMail): { subject: string; text: string; html: st
 
 /**
  * 招待メールを送る。未設定・上限超過・送信エラーは例外にせず、理由を返す。
- * 直近 24 時間に email_sent_at が入った招待の数で、ワークスペースごとの上限を数える。
+ * 送る前に 1 文の UPDATE で枠を確保する。直近 24 時間の email_sent_at で、ワークスペースごと・招待した人ごとの上限を数える。
  */
 export async function sendInvitationEmail(
   env: Env,
@@ -99,14 +101,18 @@ export async function sendInvitationEmail(
 ): Promise<InvitationMailResult> {
   if (!env.EMAIL || !env.INVITE_EMAIL_FROM) return { sent: false, error: NOT_CONFIGURED };
   const from = env.INVITE_EMAIL_FROM;
-  const since = Date.now() - DAY_MS;
-  const count = await first<{ c: number }>(
-    db,
-    "SELECT COUNT(*) AS c FROM invitations WHERE workspace_id = ? AND email_sent_at IS NOT NULL AND email_sent_at >= ?",
-    workspaceId,
-    since,
-  );
-  if ((count?.c ?? 0) >= MAX_EMAILS_PER_DAY) return { sent: false, error: OVER_LIMIT };
+  const sentAt = Date.now();
+  const since = sentAt - DAY_MS;
+  const reserved = await db
+    .prepare(
+      `UPDATE invitations SET email_sent_at = ?
+       WHERE id = ? AND email_sent_at IS NULL
+         AND (SELECT COUNT(*) FROM invitations WHERE workspace_id = ? AND email_sent_at >= ?) < ?
+         AND (SELECT COUNT(*) FROM invitations WHERE invited_by = ? AND email_sent_at >= ?) < ?`,
+    )
+    .bind(sentAt, mail.invitationId, workspaceId, since, MAX_EMAILS_PER_DAY, mail.inviterId, since, MAX_EMAILS_PER_DAY)
+    .run();
+  if (reserved.meta.changes === 0) return { sent: false, error: OVER_LIMIT };
   const { subject, text, html } = bodies(mail);
   try {
     await env.EMAIL.send({
@@ -116,9 +122,10 @@ export async function sendInvitationEmail(
       text,
       html,
     });
-    return { sent: true };
+    return { sent: true, sentAt };
   } catch (e) {
     console.error("招待メールを送れませんでした", e);
+    await db.prepare("UPDATE invitations SET email_sent_at = NULL WHERE id = ?").bind(mail.invitationId).run();
     return { sent: false, error: SEND_FAILED };
   }
 }

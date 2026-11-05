@@ -102,7 +102,7 @@ async function revokePending(db: D1Database, workspaceId: string, email: string,
   );
 }
 
-/** 招待を 1 件作り、メールを送れたら email_sent_at を入れる。リンクはこの戻り値にだけ載る */
+/** 招待を 1 件作る。メールを送れたときは email_sent_at が入っている。リンクはこの戻り値にだけ載る */
 async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): Promise<InvitationIssued> {
   const db = c.env.DB;
   const ws = c.get("workspace");
@@ -126,17 +126,14 @@ async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): P
   );
   const link = `${publicOrigin(c)}/invite/${token}`;
   const sent = await sendInvitationEmail(c.env, db, ws.id, {
+    invitationId: id,
+    inviterId: user.id,
     to: email,
     workspaceName: ws.name,
     inviterName: user.name,
     link,
     expiresAt,
   });
-  let emailSentAt: number | null = null;
-  if (sent.sent) {
-    emailSentAt = Date.now();
-    await run(db, "UPDATE invitations SET email_sent_at = ? WHERE id = ?", emailSentAt, id);
-  }
   const invitation: InvitationSummary = {
     id,
     email,
@@ -144,7 +141,7 @@ async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): P
     invitedBy: { id: user.id, name: user.name },
     createdAt,
     expiresAt,
-    emailSentAt,
+    emailSentAt: sent.sent ? sent.sentAt : null,
     status: "pending",
   };
   return sent.sent ? { invitation, link, emailSent: true } : { invitation, link, emailSent: false, emailError: sent.error };
@@ -223,16 +220,19 @@ export async function createInvitations(c: Context<AppEnv>) {
   }
   if (blocked.length) return err(c, `次のアドレスは招待できません：${blocked.join("、")}`);
 
+  const now = Date.now();
   const pending = await first<{ c: number }>(
     db,
-    "SELECT COUNT(*) AS c FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+    "SELECT COUNT(*) AS c FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
     ws.id,
+    now,
   );
   const replacing = await first<{ c: number }>(
     db,
     `SELECT COUNT(*) AS c FROM invitations
-     WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND email IN (${emails.map(() => "?").join(",")})`,
+     WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? AND email IN (${emails.map(() => "?").join(",")})`,
     ws.id,
+    now,
     ...emails,
   );
   // 同じアドレスの作り直しは件数を増やさない
@@ -240,7 +240,6 @@ export async function createInvitations(c: Context<AppEnv>) {
     return err(c, `未承諾の招待は${MAX_PENDING}件までです`);
   }
 
-  const now = Date.now();
   const results: InvitationIssued[] = [];
   for (const email of emails) {
     await revokePending(db, ws.id, email, now);
@@ -322,20 +321,16 @@ async function acceptInvitation(c: Context<AppEnv>, row: InviteRow | null) {
   }
   const domains = parseAllowedDomains(row.allowed_domains);
   if (!isEmailAllowed(user.email, domains)) return err(c, domainMessage(domains), 403);
-  const updated = await c.env.DB.prepare(
-    "UPDATE invitations SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
-  )
-    .bind(now, user.id, row.id, now)
-    .run();
+  const [updated] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE invitations SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+    ).bind(now, user.id, row.id, now),
+    c.env.DB.prepare(
+      `INSERT OR IGNORE INTO members (workspace_id, user_id, role, created_at)
+       SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM invitations WHERE id = ? AND accepted_by = ? AND accepted_at = ?)`,
+    ).bind(row.workspace_id, user.id, asRole(row.role), now, row.id, user.id, now),
+  ]);
   if (updated.meta.changes === 0) return err(c, INVALID_INVITE, 404);
-  await run(
-    c.env.DB,
-    "INSERT OR IGNORE INTO members (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)",
-    row.workspace_id,
-    user.id,
-    asRole(row.role),
-    now,
-  );
   const last = await writeChanges(c.env.DB, row.workspace_id, [{ entity: "user", entityId: user.id, op: "upsert" }]);
   c.executionCtx?.waitUntil?.(notifyRealtime(c.env, row.workspace_id, last));
   return c.json({ ok: true, workspaceKey: row.url_key });

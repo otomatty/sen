@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
-import type { Mutation } from "../../shared/types";
+import type { InvitationCreateResponse, Mutation } from "../../shared/types";
 import { devSignIn, dismissWelcome, inviteByEmail, invitePath, inviteToken, joinByInvite, seedDemo, signupViaUi, uniqueEmail } from "./helpers";
 
 const CLIENT = { "x-sen-client": "1" };
@@ -294,6 +294,61 @@ test("招待の結果に「メールを送りました」と出る", async ({ pa
   await inviteByEmail(page, ws, email);
   const result = page.locator(`[data-testid="invite-result"][data-email="${email}"]`);
   await expect(result).toContainText("メールを送りました");
+});
+
+test("招待メールは、招待した人ごとに 1 日 50 通まで（ワークスペースを分けても超えられない）", async ({ page, browser }) => {
+  test.setTimeout(90_000);
+  const { ws } = await signupViaUi(page, { name: "管理 花子" });
+
+  const invite = async (workspace: string, emails: string[]) => {
+    const res = await page.request.post(`/api/invitations?ws=${encodeURIComponent(workspace)}`, {
+      headers: CLIENT,
+      data: { emails, role: "member" },
+    });
+    const text = await res.text();
+    expect(res.ok(), text).toBeTruthy();
+    return JSON.parse(text) as InvitationCreateResponse;
+  };
+
+  let n = 0;
+  for (const count of [20, 20, 10]) {
+    const body = await invite(
+      ws,
+      Array.from({ length: count }, () => uniqueEmail(`cap-${n++}`)),
+    );
+    expect(body.results).toHaveLength(count);
+    for (const result of body.results) expect(result.emailSent).toBe(true);
+  }
+
+  const created = await page.request.post("/api/workspaces", {
+    headers: CLIENT,
+    data: { name: "二つ目のワークスペース" },
+  });
+  const createdText = await created.text();
+  expect(created.ok(), createdText).toBeTruthy();
+  const wsB = (JSON.parse(createdText) as { workspaceKey: string }).workspaceKey;
+
+  const over = await invite(wsB, [uniqueEmail("over")]);
+  expect(over.results).toHaveLength(1);
+  expect(over.results[0]?.link).toContain("/invite/");
+  expect(over.results[0]?.emailSent).toBe(false);
+  expect(over.results[0]?.emailError).toContain("上限（50通）");
+
+  const ctx = await browser.newContext();
+  const p2 = await ctx.newPage();
+  try {
+    const { ws: wsC } = await signupViaUi(p2, { name: "別の管理者" });
+    const res = await p2.request.post(`/api/invitations?ws=${encodeURIComponent(wsC)}`, {
+      headers: CLIENT,
+      data: { emails: [uniqueEmail("other-admin")], role: "member" },
+    });
+    const text = await res.text();
+    expect(res.ok(), text).toBeTruthy();
+    const body = JSON.parse(text) as InvitationCreateResponse;
+    expect(body.results[0]?.emailSent).toBe(true);
+  } finally {
+    await ctx.close();
+  }
 });
 
 test("利用できるドメインを保存すると、確認に許可外の人が出て、一覧に印が付く", async ({ page, browser }) => {
