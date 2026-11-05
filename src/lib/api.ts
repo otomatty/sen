@@ -1,8 +1,10 @@
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -60,7 +62,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     const body = data as { error?: string; message?: string; code?: string } | null;
     if (res.status === 409 && body?.code === "account-switched") accountSwitchedHandler?.();
     const msg = body?.error ?? body?.message ?? `エラーが発生しました (${res.status})`;
-    throw new ApiError(msg, res.status);
+    throw new ApiError(msg, res.status, body?.code);
   }
   return data as T;
 }

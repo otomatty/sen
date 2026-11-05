@@ -1,10 +1,12 @@
 import { create } from "zustand";
 import type { DeviceAccount, Me, PendingInvitation, WorkspaceSummary } from "../../shared/types";
 import { api, ApiError, setAccountSwitchedHandler, setBearerToken, setCurrentUserId } from "../lib/api";
+import { confirmDialog } from "../components/ConfirmDialog";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
 import { clearSnapshots, clearSnapshotsFor } from "../store/cache";
 import { useData } from "../store/data";
+import { toast } from "../store/ui";
 
 interface SessionState {
   status: "unknown" | "authed" | "anon";
@@ -52,7 +54,7 @@ const sessionChannel: BroadcastChannel | null = (() => {
 })();
 
 type SessionMessage =
-  | { type: "account-changed" }
+  | { type: "account-changed"; userId?: string }
   | { type: "pending-query"; id: string }
   | { type: "pending-reply"; id: string; pending: number };
 
@@ -60,11 +62,53 @@ function postSession(message: SessionMessage) {
   sessionChannel?.postMessage(message);
 }
 
-function notifyOtherTabs() {
-  postSession({ type: "account-changed" });
+function notifyOtherTabs(userId?: string) {
+  postSession(userId ? { type: "account-changed", userId } : { type: "account-changed" });
 }
 
 let sessionSyncReady = false;
+let handlingAccountChange = false;
+
+/**
+ * 別のタブでアカウントが替わった。
+ * 未送信の変更がなければ開き直す。あれば、捨てる前に元のアカウントへ戻して送るか聞く。
+ */
+async function handleAccountChangedElsewhere() {
+  if (handlingAccountChange) return;
+  handlingAccountChange = true;
+  // 409 のときは api がこの関数を呼んだあとで engine の catch に入る。先に止めて、変更が捨てられないようにする
+  engine.pause();
+  const pending = useData.getState().pendingCount;
+  const me = useSession.getState().user;
+  if (pending === 0 || !me) {
+    engine.stop();
+    window.location.assign("/");
+    return;
+  }
+  const ok = await confirmDialog({
+    title: "別のタブでアカウントが切り替わりました",
+    message: `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。`,
+    confirmLabel: "元のアカウントに戻して送る",
+  });
+  if (!ok) {
+    engine.stop();
+    window.location.assign("/");
+    return;
+  }
+  try {
+    await api("/api/accounts/switch", { body: { userId: me.id } });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "エラーが発生しました";
+    toast(`元のアカウントに戻せませんでした：${message}`, { kind: "error" });
+    engine.stop();
+    window.location.assign("/");
+    return;
+  }
+  notifyOtherTabs(me.id);
+  handlingAccountChange = false;
+  engine.resume();
+  toast(`元のアカウント（${me.name}）に戻しました。変更を送っています`);
+}
 
 /** 他のタブの切り替えと、このタブのリクエストが別アカウントになったことを受け取る。何度呼んでも 1 回だけ */
 export function initSessionSync() {
@@ -79,13 +123,13 @@ export function initSessionSync() {
         return;
       }
       if (data?.type !== "account-changed") return;
-      engine.stop();
-      window.location.assign("/");
+      // 知らせの先が今のアカウントなら、このタブはすでにそのアカウントなので何もしない
+      if (data.userId && data.userId === useSession.getState().user?.id) return;
+      void handleAccountChangedElsewhere();
     };
   }
   setAccountSwitchedHandler(() => {
-    engine.stop();
-    window.location.assign("/");
+    void handleAccountChangedElsewhere();
   });
 }
 
@@ -111,7 +155,7 @@ export async function loadSession() {
     const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
     // Google から戻ってきたときなど、ほかのタブが古いアカウントのままにならないよう知らせる
     const previousId = readLocal<{ user?: { id?: string } } | null>(SESSION_CACHE, null)?.user?.id;
-    if (previousId && previousId !== res.user.id) notifyOtherTabs();
+    if (previousId && previousId !== res.user.id) notifyOtherTabs(res.user.id);
     writeSessionCache(res.user, res.workspaces, defaultWorkspaceId, invitations);
     setCurrentUserId(res.user.id);
     useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces, invitations, defaultWorkspaceId });
@@ -267,7 +311,7 @@ export async function switchAccount(userId: string) {
   if (other) throw new Error(other);
   await api("/api/accounts/switch", { body: { userId } });
   engine.stop();
-  notifyOtherTabs();
+  notifyOtherTabs(userId);
   window.location.assign("/");
 }
 

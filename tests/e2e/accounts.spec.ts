@@ -197,3 +197,58 @@ test("別のタブに未送信の変更があるときは、切り替えない",
   await other.unroute("**/api/mutate**");
   await other.close();
 });
+
+test("アカウントを追加しているあいだにほかのタブでできた変更は、元のアカウントに戻して送れる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  // 送れない変更として残す。この指定はこのページにしか効かない
+  await other.route("**/api/mutate**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+  await other.getByTestId("issue-row").first().click();
+  const title = other.getByTestId("issue-title");
+  await title.fill("アカウントの追加中に編集");
+  await title.press("Enter");
+  await expect(other.getByTestId("sync-status")).toContainText("オフライン", { timeout: 10_000 });
+  // Google から戻ってきたのと同じく、このタブだけ別のアカウントになる
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("まだ送っていない変更", { timeout: 15_000 });
+  await other.unroute("**/api/mutate**");
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("sync-status")).toContainText("同期済み", { timeout: 40_000 });
+  await expect(other.getByTestId("user-menu")).toContainText("山田 花子");
+  await other.reload();
+  await expect(other.getByTestId("issue-title")).toHaveValue("アカウントの追加中に編集");
+});
+
+test("同じアカウントへの切り替えの知らせでは、読み込み直さない", async ({ page }) => {
+  await signupViaUi(page, { name: "山田 花子" });
+  await waitForSynced(page);
+  const me = (await (await page.request.get("/api/me")).json()) as { user: { id: string } };
+  await page.evaluate(() => {
+    (window as unknown as { __marker?: number }).__marker = 1;
+  });
+  const other = await page.context().newPage();
+  await other.goto("/");
+  await expect(other.getByTestId("app")).toBeVisible();
+  await other.evaluate((id) => {
+    const ch = new BroadcastChannel("sen:session");
+    ch.postMessage({ type: "account-changed", userId: id });
+    ch.close();
+  }, me.user.id);
+  await page.waitForTimeout(1500);
+  expect(await page.evaluate(() => (window as unknown as { __marker?: number }).__marker)).toBe(1);
+  await expect(page.getByTestId("confirm-dialog")).toHaveCount(0);
+  await other.evaluate(() => {
+    const ch = new BroadcastChannel("sen:session");
+    ch.postMessage({ type: "account-changed" });
+    ch.close();
+  });
+  // 読み込み直しの途中は実行コンテキストが消える。落ち着いて印が消えるまで待つ
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __marker?: number }).__marker).catch(() => 1))
+    .toBeUndefined();
+});
