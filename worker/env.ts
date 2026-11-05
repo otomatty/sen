@@ -8,6 +8,10 @@ export interface Env {
   DB: D1Database;
   REALTIME?: DurableObjectNamespace;
   ASSETS?: Fetcher;
+  /** 招待メールの送信に使う（Cloudflare Email Service）。送信元のドメインを Email Sending に登録し、INVITE_EMAIL_FROM を設定したときだけ送る */
+  EMAIL?: SendEmail;
+  /** 招待メールの送信元アドレス（例: noreply@sen.example.com）。EMAIL と両方そろったときだけ送る */
+  INVITE_EMAIL_FROM?: string;
   /** "1" のとき /api/dev/* を有効化（ローカル開発・動画収録・デモ用） */
   DEV_TOOLS?: string;
   /** "1" のとき Authorization: Bearer でのセッションを許可（ブラウザ内デモ用） */
@@ -47,13 +51,16 @@ export interface WorkspaceRow {
   id: string;
   name: string;
   url_key: string;
-  invite_code: string;
+  /** 利用できるメールドメインの JSON 配列。空配列なら制限なし */
+  allowed_domains: string;
   created_at: number;
   updated_at: number;
 }
 
 export type AppVars = {
   user: Me;
+  /** Google（または開発用ログイン）がメールアドレスを確認済みか */
+  emailVerified: boolean;
   workspace: WorkspaceRow;
   role: Role;
 };

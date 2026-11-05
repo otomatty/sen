@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useParams } from "react-router";
-import { ChevronLeft, ChevronRight, Copy, Download, LayoutGrid, Plus, RefreshCw, SlidersHorizontal, Sparkles, Tag, Trash2, User, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, LayoutGrid, Plus, RefreshCw, SlidersHorizontal, Sparkles, Tag, Trash2, User, Users } from "lucide-react";
 import type { StateType } from "../../../shared/types";
 import { AVATAR_COLORS, PALETTE, STATE_TYPES } from "../../../shared/constants";
 import { useData } from "../../store/data";
@@ -10,19 +10,16 @@ import {
   createTeam,
   deleteLabel,
   deleteState,
-  regenerateInvite,
-  removeMember,
   restoreIssues,
-  setMemberRole,
   updateLabel,
   updateMe,
   updateState,
   updateTeam,
   updateWorkspaceName,
 } from "../../store/actions";
-import { useLabels, useMembers, useStates, useTeams } from "../../store/selectors";
+import { useLabels, useStates, useTeams } from "../../store/selectors";
 import { setTheme, toast, useUI, type Theme } from "../../store/ui";
-import { appUrl, copyText, cx, identifier, timeAgo } from "../../lib/utils";
+import { cx, identifier, timeAgo } from "../../lib/utils";
 import { Avatar, Button, Popover, Switch } from "../../components/ui";
 import { TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
@@ -36,6 +33,7 @@ import type { Me } from "../../../shared/types";
 import { AiSettings } from "./AiSettings";
 import { SheetsSection } from "./SheetsSettings";
 import { Field, Section } from "./parts";
+import { MembersSettings } from "./MembersSettings";
 
 function ColorPicker({ value, onChange, colors = PALETTE }: { value: string; onChange: (c: string) => void; colors?: string[] }) {
   return (
@@ -268,9 +266,9 @@ function DevTools() {
 function WorkspaceSettings() {
   const ws = useData((s) => s.workspace);
   const admin = useIsAdmin();
+  const p = useWsPath();
   const [name, setName] = useState(ws?.name ?? "");
   if (!ws) return null;
-  const invite = appUrl(`/invite/${ws.inviteCode}`);
   return (
     <>
       <Section title="ワークスペース">
@@ -282,86 +280,15 @@ function WorkspaceSettings() {
             {location.host}/{ws.urlKey}
           </code>
         </Field>
+        <div className="members-hint-row">
+          <p>メンバーの招待と、利用できるドメインの設定は「メンバー」にあります。</p>
+          <Link to={p("/settings/members")} className="settings-inline-link">
+            メンバーの設定
+          </Link>
+        </div>
       </Section>
-      <InviteSection invite={invite} admin={admin} />
       <SheetsSection />
       <DevTools />
-    </>
-  );
-}
-
-function InviteSection({ invite, admin }: { invite: string; admin: boolean }) {
-  return (
-    <Section title="メンバーを招待" description="このリンクを知っている人は、アカウントを作成してワークスペースに参加できます。">
-      <div className="invite-row">
-        <input className="input" readOnly value={invite} onFocus={(e) => e.target.select()} data-testid="invite-link" />
-        <Button icon={<Copy size={14} />} onClick={() => copyText(invite).then(() => toast("招待リンクをコピーしました"))}>
-          コピー
-        </Button>
-        {admin && (
-          <Button
-            variant="ghost"
-            icon={<RefreshCw size={14} />}
-            onClick={async () => {
-              const ok = await confirmDialog({ title: "招待リンクを作り直しますか？", message: "今のリンクは使えなくなります。", confirmLabel: "作り直す" });
-              if (ok) regenerateInvite();
-            }}
-          >
-            作り直す
-          </Button>
-        )}
-      </div>
-    </Section>
-  );
-}
-
-function MembersSettings() {
-  const members = useMembers();
-  const meId = useData((s) => s.meId);
-  const ws = useData((s) => s.workspace);
-  const admin = useIsAdmin();
-  return (
-    <>
-      <Section title={`メンバー（${members.length}人）`}>
-        {members.map((m) => (
-          <div key={m.id} className="member-row">
-            <Avatar user={m} size={28} />
-            <div className="member-info">
-              <b>
-                {m.name}
-                {m.id === meId && <span className="muted">（あなた）</span>}
-              </b>
-              <span className="muted small">{m.email}</span>
-            </div>
-            <span className="spacer" />
-            {admin && m.id !== meId ? (
-              <>
-                <select value={m.role} onChange={(e) => setMemberRole(m.id, e.target.value as "admin" | "member")}>
-                  <option value="admin">管理者</option>
-                  <option value="member">メンバー</option>
-                </select>
-                <button
-                  className="icon-btn"
-                  aria-label="メンバーを削除"
-                  onClick={async () =>
-                    (await confirmDialog({
-                      title: `${m.name} さんをワークスペースから外しますか？`,
-                      message: "担当している課題は「担当者なし」になります。",
-                      confirmLabel: "外す",
-                      danger: true,
-                    })) && removeMember(m.id)
-                  }
-                >
-                  <Trash2 size={14} />
-                </button>
-              </>
-            ) : (
-              <span className="pill">{m.role === "admin" ? "管理者" : "メンバー"}</span>
-            )}
-          </div>
-        ))}
-      </Section>
-      {ws && <InviteSection invite={appUrl(`/invite/${ws.inviteCode}`)} admin={admin} />}
     </>
   );
 }

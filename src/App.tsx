@@ -69,7 +69,7 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   useEffect(() => {
-    loadSession().catch(() => useSession.setState({ status: "anon", defaultWorkspaceId: null }));
+    loadSession().catch(() => useSession.setState({ status: "anon", invitations: [], defaultWorkspaceId: null }));
   }, []);
   return (
     <>
@@ -85,7 +85,7 @@ function AppRoutes() {
         />
         {/* ログインは Google のみ。初めての人もログイン画面からアカウントを作る */}
         <Route path="/signup" element={<Navigate to="/login" replace />} />
-        <Route path="/invite/:code" element={<InvitePage />} />
+        <Route path="/invite/:token" element={<InvitePage />} />
         <Route
           path="/new-workspace"
           element={

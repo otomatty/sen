@@ -4,7 +4,8 @@ import relationsSql from "../migrations/0003_issue_relations.sql?raw";
 import googleAuthSql from "../migrations/0004_google_auth.sql?raw";
 import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
 import defaultWorkspaceSql from "../migrations/0006_default_workspace.sql?raw";
-import assistantUsageSql from "../migrations/0007_assistant_usage.sql?raw";
+import invitationsSql from "../migrations/0007_invitations.sql?raw";
+import assistantUsageSql from "../migrations/0008_assistant_usage.sql?raw";
 
 type Param = string | number | null;
 
@@ -43,7 +44,8 @@ const MIGRATIONS: { name: string; sql: string }[] = [
   { name: "0004_google_auth.sql", sql: googleAuthSql },
   { name: "0005_ai_tokens.sql", sql: aiTokensSql },
   { name: "0006_default_workspace.sql", sql: defaultWorkspaceSql },
-  { name: "0007_assistant_usage.sql", sql: assistantUsageSql },
+  { name: "0007_invitations.sql", sql: invitationsSql },
+  { name: "0008_assistant_usage.sql", sql: assistantUsageSql },
 ];
 
 export function splitSql(sql: string): string[] {
