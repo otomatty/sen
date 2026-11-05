@@ -608,14 +608,14 @@ function blockPiece(token: Token): string {
       return "";
     case "code":
     case "codespan":
-      return token.text;
+      return softenNbsp(token.text);
     case "heading":
     case "paragraph":
     case "strong":
     case "em":
     case "del":
     case "link":
-      return inlinePlain(token.tokens);
+      return plainInline(token.tokens);
     case "blockquote":
     case "alert":
     case "footnoteDefinition":
@@ -627,14 +627,14 @@ function blockPiece(token: Token): string {
     case "table": {
       const table = token as Tokens.Table;
       const cells = [...table.header, ...table.rows.flat()];
-      return cells.map((cell) => inlinePlain(cell.tokens)).filter(Boolean).join(" ");
+      return cells.map((cell) => plainInline(cell.tokens)).filter(Boolean).join(" ");
     }
     case "html":
-      return htmlToPlain(token.text);
+      return htmlPlain(token.text);
     case "text":
-      return token.tokens?.length ? inlinePlain(token.tokens) : token.text;
+      return token.tokens?.length ? plainInline(token.tokens) : decodePlainText(token.text);
     default:
-      if (token.type === "inlineHtml") return htmlToPlain(token.raw);
+      if (token.type === "inlineHtml") return htmlPlain(token.raw);
       return (token as Tokens.Generic).tokens ? blocksText((token as Tokens.Generic).tokens ?? []) : "";
   }
 }
@@ -683,9 +683,70 @@ function endOfTag(src: string, index: number): number {
   return index;
 }
 
+/** コードと生の HTML でも、`&nbsp;` だけは従来どおり普通の空白にする */
+function softenNbsp(s: string): string {
+  return s.replace(/&nbsp;/gi, " ");
+}
+
+/** 平文の文字参照。戻した改行は行を増やさないよう空白にする */
+function decodePlainText(s: string): string {
+  return decodeEntities(s, " ").replace(/[\n\r]/g, " ");
+}
+
+function htmlPlain(src: string): string {
+  return softenNbsp(htmlToPlain(src));
+}
+
+/**
+ * 検索・シート用の行内文字。表示が文字参照を戻す所だけ戻す。
+ * 通常の文字（リンクや見出し、行内 HTML のタグの間を含む）と画像の代替テキストは戻し、コードは戻さない。
+ * 行内 HTML のタグそのものは文字を残さない。
+ */
+function plainInline(tokens: Token[] | undefined): string {
+  if (!tokens?.length) return "";
+  let out = "";
+  for (const token of tokens) out += plainPiece(token);
+  return out;
+}
+
+function plainPiece(token: Token): string {
+  switch (token.type) {
+    case "text":
+      if (token.tokens?.length) return plainInline(token.tokens);
+      return decodePlainText(token.text);
+    case "codespan":
+      return softenNbsp(token.text);
+    case "escape":
+      return token.text === "&" ? ESCAPED_AMP : token.text;
+    case "br":
+      return "\n";
+    case "image":
+      return token.tokens?.length ? plainInline(token.tokens) : decodePlainText((token as Tokens.Image).text);
+    case "link":
+    case "strong":
+    case "em":
+    case "del":
+      return plainInline(token.tokens);
+    case "html":
+      return htmlPlain(token.text);
+    case "footnoteReference":
+    case "checkbox":
+      return "";
+    default: {
+      if (token.type === "inlineHtml") return htmlPlain(String((token as Tokens.Generic).raw ?? ""));
+      const children = (token as Tokens.Generic).tokens;
+      if (children?.length) return plainInline(children);
+      const text = typeof (token as Tokens.Generic).text === "string" ? (token as Tokens.Text).text : "";
+      return decodePlainText(text);
+    }
+  }
+}
+
 function hasImageOrRule(tokens: Token[]): boolean {
   for (const token of tokens) {
-    if (token.type === "image" || token.type === "hr") return true;
+    if (token.type === "hr") return true;
+    // 表示と同じく、src の文字参照を戻したあと http(s) の画像だけを中身とみなす。
+    if (token.type === "image" && isSafeImageSrc(decodeEntities((token as Tokens.Image).href, "\u00A0"))) return true;
     if (token.type === "list") {
       const list = token as Tokens.List;
       if (list.items.some((item) => hasImageOrRule(item.tokens))) return true;
@@ -724,9 +785,9 @@ export function markdownTextCacheSize(): { entries: number; chars: number } {
   return { entries: textCache.size, chars: textCacheChars };
 }
 
-/** 文字参照を戻したあと、エスケープしていた & を文字に戻す */
+/** エスケープしていた & を文字に戻す。文字参照は、戻すトークン側で処理してある */
 function restorePlain(s: string): string {
-  return decodeEntities(s, " ").replaceAll(ESCAPED_AMP, "&");
+  return s.replaceAll(ESCAPED_AMP, "&");
 }
 
 /** 検索・メンション・抜粋用の文字だけ。同じ文字列は、2000 件かつ長さの合計 400 万文字まで覚えておく */
@@ -760,14 +821,14 @@ function plainBlockLines(token: Token): string[] {
       return [];
     case "code":
     case "codespan":
-      return token.text.replace(/\n$/, "").split("\n");
+      return softenNbsp(token.text).replace(/\n$/, "").split("\n");
     case "heading":
     case "paragraph":
     case "strong":
     case "em":
     case "del":
     case "link":
-      return inlinePlain(token.tokens).split("\n");
+      return plainInline(token.tokens).split("\n");
     case "blockquote":
     case "alert":
     case "footnoteDefinition":
@@ -779,18 +840,18 @@ function plainBlockLines(token: Token): string[] {
     case "table":
       return tableLines(token as Tokens.Table);
     case "html":
-      return htmlToPlain(token.text).split("\n");
+      return htmlPlain(token.text).split("\n");
     case "text":
-      return (token.tokens?.length ? inlinePlain(token.tokens) : token.text).split("\n");
+      return (token.tokens?.length ? plainInline(token.tokens) : decodePlainText(token.text)).split("\n");
     default:
-      if (token.type === "inlineHtml") return htmlToPlain(String(token.raw ?? "")).split("\n");
+      if (token.type === "inlineHtml") return htmlPlain(String(token.raw ?? "")).split("\n");
       return (token as Tokens.Generic).tokens ? plainLines((token as Tokens.Generic).tokens ?? []) : [];
   }
 }
 
 function tableLines(table: Tokens.Table): string[] {
   return [table.header, ...table.rows].flatMap((row) => {
-    const cells = row.map((cell) => inlinePlain(cell.tokens).split("\n"));
+    const cells = row.map((cell) => plainInline(cell.tokens).split("\n"));
     const height = Math.max(1, ...cells.map((lines) => lines.length));
     const lines: string[] = [];
     for (let i = 0; i < height; i++) lines.push(cells.map((cell) => cell[i] ?? "").join(" | "));
@@ -810,7 +871,7 @@ export function markdownToPlainLines(md: string): string {
     .join("\n");
 }
 
-/** 空白だけ、または文字が無く画像も水平線も無いとき */
+/** 空白だけ、または文字が無く、表示される画像も水平線も無いとき */
 export function isMarkdownBlank(md: string): boolean {
   if (md.trim() === "") return true;
   if (markdownToText(md) !== "") return false;

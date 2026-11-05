@@ -115,7 +115,8 @@ test("markdownToText は検索に使う文字だけを残す", () => {
   expect(markdownToText("<div>タグの中</div>")).toBe("タグの中");
   expect(markdownToText("a <!-- x --> b")).toBe("a b");
   expect(markdownToText("<!-- メモ -->")).toBe("");
-  expect(markdownToText("<div>&amp;</div>")).toBe("&");
+  // 生の HTML はソースのまま。タグを除くと &amp; が残る（末尾でまとめて戻していた頃は & だった）。
+  expect(markdownToText("<div>&amp;</div>")).toBe("&amp;");
   expect(markdownToText("A &amp; B &lt; C &gt; D &quot; E &#39; F &apos; G &#123; H &#x1F600;")).toBe('A & B < C > D " E \' F \' G { H 😀');
   expect(markdownToText("a&nbsp;&nbsp;b")).toBe("a b");
   expect(markdownToText("a&nbsp;&nbsp;b").includes("\u00A0")).toBe(false);
@@ -137,6 +138,7 @@ test("markdownToPlainLines はブロックの区切りを改行で残す", () =>
   expect(markdownToPlainLines("```\ncode1\ncode2\n```")).toBe("code1\ncode2");
   expect(markdownToPlainLines("[文字](https://secret.example/path)")).toBe("文字");
   expect(markdownToPlainLines("<div>タグの中</div>")).toBe("タグの中");
+  expect(markdownToPlainLines("<div>&amp;</div>")).toBe("&amp;");
 });
 
 test("isMarkdownBlank は文字も画像も水平線も無いときだけ真", () => {
@@ -145,8 +147,29 @@ test("isMarkdownBlank は文字も画像も水平線も無いときだけ真", (
   expect(isMarkdownBlank("<!-- メモ -->")).toBe(true);
   expect(isMarkdownBlank("![図](https://e.com/a.png)")).toBe(false);
   expect(isMarkdownBlank("![](https://e.com/a.png)")).toBe(false);
+  expect(isMarkdownBlank("![](/image.png)")).toBe(true);
+  expect(isMarkdownBlank("![](javascript:alert(1))")).toBe(true);
+  expect(isMarkdownBlank("![](data:image/png;base64,AAAA)")).toBe(true);
+  expect(isMarkdownBlank("![図](/a.png)")).toBe(false);
   expect(isMarkdownBlank("---")).toBe(false);
   expect(isMarkdownBlank("a")).toBe(false);
+});
+
+test("平文は、表示が文字参照を戻す所だけ戻す", () => {
+  const samples: [string, string][] = [
+    ["`&amp;` と &amp;", "&amp; と &"],
+    ["```\n&lt;div&gt;\n```", "&lt;div&gt;"],
+    ["[a &amp; b](https://e.com)", "a & b"],
+    ["# A &amp; B", "A & B"],
+    ["![a &amp; b](https://e.com/x.png)", "a & b"],
+    ["\\&amp;", "&amp;"],
+    ["<kbd>&amp;</kbd>", "&"],
+    ["a <b>&#64;Alice</b> b", "a @Alice b"],
+  ];
+  for (const [md, text] of samples) {
+    expect(markdownToText(md), md).toBe(text);
+    expect(markdownToPlainLines(md), md).toBe(text);
+  }
 });
 
 test("markdownToHtml は構文を安全な HTML にする", () => {
