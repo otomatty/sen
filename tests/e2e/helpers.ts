@@ -76,21 +76,26 @@ export function inviteToken(link: string): string {
 }
 
 /**
- * 設定 → メンバーからメールで招待し、結果に出た招待リンクを返す。
- * 招待中の一覧に載るまで待つ。
+ * 設定 → メンバーの「メンバーを招待」からメールで招待し、結果に出た招待リンクを返す。
+ * 招待中の一覧に載るまで待ち、ダイアログを閉じてから返す。
  */
 export async function inviteByEmail(page: Page, ws: string, email: string, role: "admin" | "member" = "member"): Promise<string> {
   await page.goto(`/${ws}/settings/members`);
-  await expect(page.getByTestId("invite-emails")).toBeVisible();
-  await page.getByTestId("invite-emails").fill(email);
-  if (role !== "member") await page.getByTestId("invite-role").selectOption(role);
-  await page.getByTestId("invite-submit").click();
-  const result = page.locator(`[data-testid="invite-result"][data-email="${email}"]`);
+  await page.getByTestId("invite-open").click();
+  const dialog = page.getByTestId("invite-dialog");
+  const input = dialog.getByTestId("invite-emails");
+  await expect(input).toBeVisible();
+  await input.fill(email);
+  if (role === "admin") await dialog.getByTestId("invite-role-admin").click();
+  await dialog.getByTestId("invite-submit").click();
+  const result = dialog.locator(`[data-testid="invite-result"][data-email="${email}"]`);
   const link = result.getByTestId("invite-result-link");
   await expect(link).toBeVisible();
   const value = await link.inputValue();
   expect(value).toContain("/invite/");
   await expect(page.locator(`[data-testid="invitation-row"][data-email="${email}"]`)).toBeVisible();
+  await dialog.getByTestId("invite-done-close").click();
+  await expect(dialog).toBeHidden();
   return value;
 }
 

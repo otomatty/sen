@@ -167,7 +167,7 @@ export function Sidebar() {
           onClose={() => setMenu(null)}
           items={[
             { label: "ワークスペースの設定", icon: <Settings size={14} />, combo: "g s", onSelect: () => navigate(p("/settings")) },
-            { label: "メンバーを招待", icon: <UserPlus size={14} />, onSelect: () => navigate(p("/settings/members")) },
+            { label: "メンバーを招待", icon: <UserPlus size={14} />, onSelect: () => navigate(p("/settings/members?invite=1")) },
             "divider",
             ...invitations.map((inv) => ({
               label: `${inv.workspaceName} に参加（招待）`,
