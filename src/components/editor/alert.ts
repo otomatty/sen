@@ -4,6 +4,7 @@ import { Plugin } from "@tiptap/pm/state";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { ALERT_LABELS, ALERT_TYPES, type AlertType, matchAlert } from "../../../shared/markdown";
+import { readBlockTokens } from "./tokens";
 
 const ALERT_MARKER = /^\[!(note|tip|important|warning|caution)\]$/i;
 
@@ -67,7 +68,7 @@ export const Alert = Node.create({
         type: "alert",
         raw: match.raw,
         alert: match.type,
-        tokens: lexer.blockTokens(match.body),
+        tokens: readBlockTokens(lexer, match.body),
       };
     },
   },

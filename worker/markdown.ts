@@ -82,31 +82,100 @@ function escapeInline(s: string): string {
         if (/[A-Za-z0-9]/.test(prev) && /[A-Za-z0-9]/.test(next)) return match;
         return "\\_";
       })
-      .replace(/~~/g, "\\~\\~")
+      // GFM は ~ が 1 つでも取り消し線になる。
+      .replace(/~/g, "\\~")
   );
+}
+
+interface Piece {
+  text: string;
+  /** 元の HTML のテキストノード。行頭のエスケープはここだけにかける。 */
+  fromText: boolean;
+}
+
+function piecesToString(pieces: Piece[]): string {
+  let out = "";
+  for (const piece of pieces) out += piece.text;
+  return out;
+}
+
+function pieceMask(pieces: Piece[]): boolean[] {
+  const mask: boolean[] = [];
+  for (const piece of pieces) {
+    for (let i = 0; i < piece.text.length; i++) mask.push(piece.fromText);
+  }
+  return mask;
+}
+
+/** String.prototype.trim と同じ範囲。全部空白なら [0, 0] */
+function trimOffsets(text: string): [number, number] {
+  const trimmed = text.trim();
+  if (!trimmed) return [0, 0];
+  const start = text.indexOf(trimmed);
+  return [start, start + trimmed.length];
+}
+
+function slicePieces(pieces: Piece[], start: number, end: number): Piece[] {
+  const out: Piece[] = [];
+  let offset = 0;
+  for (const piece of pieces) {
+    const pieceEnd = offset + piece.text.length;
+    if (pieceEnd > start && offset < end) {
+      const text = piece.text.slice(Math.max(0, start - offset), Math.min(piece.text.length, end - offset));
+      if (text) out.push({ text, fromText: piece.fromText });
+    }
+    offset = pieceEnd;
+  }
+  return out;
+}
+
+function trimPieces(pieces: Piece[]): Piece[] {
+  const raw = piecesToString(pieces);
+  const [start, end] = trimOffsets(raw);
+  if (start === 0 && end === raw.length) return pieces;
+  return slicePieces(pieces, start, end);
 }
 
 /**
  * 段落の各行を、見出し・リスト・引用・フェンス・水平線・下線見出しとして読まれないようにする。
  * 行頭の空白は HTML では見えないので取り除く（4 個以上残るとコードブロックになる）。
+ * エスケープはテキストノード由来の文字だけ。行内コードの区切りや太字・斜体・リンクの記号にはかけない。
  */
-function protectLines(s: string): string {
-  return s
-    .split("\n")
-    .map((line) => escapeLineStart(line.replace(/^[ \t]+/, "")))
-    .join("\n");
+function protectPieces(pieces: Piece[]): string {
+  const raw = piecesToString(pieces);
+  const mask = pieceMask(pieces);
+  const [start, end] = trimOffsets(raw);
+  if (start === end) return "";
+  const text = raw.slice(start, end);
+  const fromText = mask.slice(start, end);
+  const lines: string[] = [];
+  let lineStart = 0;
+  for (let i = 0; i <= text.length; i++) {
+    if (i !== text.length && text[i] !== "\n") continue;
+    let skip = 0;
+    while (lineStart + skip < i && (text[lineStart + skip] === " " || text[lineStart + skip] === "\t")) skip++;
+    const from = lineStart + skip;
+    lines.push(escapeLineStart(text.slice(from, i), fromText.slice(from, i)));
+    lineStart = i + 1;
+  }
+  return lines.join("\n");
 }
 
-function escapeLineStart(line: string): string {
+function escapeLineStart(line: string, fromText: boolean[]): string {
   // `1.` の数字の前に \ を置いてもエスケープにならない。点か括弧の前に置く。
   const ordered = /^(\d{1,9})([.)])(?=[ \t]|$)/.exec(line);
-  if (ordered) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
-  if (/^#{1,6}(?:[ \t]|$)/.test(line)) return `\\${line}`;
-  if (line.startsWith(">")) return `\\${line}`;
-  if (/^[-+*](?:[ \t]|$)/.test(line)) return `\\${line}`;
-  if (/^(?:`{3,}|~{3,})/.test(line)) return `\\${line}`;
-  if (/^(?:=+|-+)[ \t]*$/.test(line)) return `\\${line}`;
-  if (/^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) return `\\${line}`;
+  if (ordered) {
+    if (fromText[ordered[1].length]) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
+    return line;
+  }
+  const atStart =
+    /^#{1,6}(?:[ \t]|$)/.test(line) ||
+    line.startsWith(">") ||
+    /^[-+*](?:[ \t]|$)/.test(line) ||
+    /^(?:`{3,}|~{3,})/.test(line) ||
+    /^(?:=+|-+)[ \t]*$/.test(line) ||
+    /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line);
+  if (atStart && fromText[0]) return `\\${line}`;
   return line;
 }
 
@@ -247,11 +316,15 @@ function fenceFor(text: string, ch: string, min: number): string {
   return ch.repeat(n);
 }
 
-function renderCodeSpan(el: El): string {
+/** 区切りは変換が作った記法。中の文字はテキストノードなので、行が分かれたときだけ行頭をエスケープする。 */
+function codeSpanPieces(el: El): Piece[] {
   const text = rawText(el);
   const fence = fenceFor(text, "`", 1);
   const pad = /^`|`$|^\s|\s$/.test(text) ? " " : "";
-  return `${fence}${pad}${text}${pad}${fence}`;
+  const pieces: Piece[] = [{ text: fence + pad, fromText: false }];
+  if (text) pieces.push({ text, fromText: true });
+  pieces.push({ text: pad + fence, fromText: false });
+  return pieces;
 }
 
 function renderPre(el: El): string {
@@ -279,13 +352,76 @@ function joinBlocks(parts: Block[]): string {
   return out;
 }
 
-function renderInline(nodes: Node[]): string {
-  let out = "";
+function renderPieces(nodes: Node[]): Piece[] {
+  const out: Piece[] = [];
   for (const n of nodes) {
-    if (n.type === "text") out += escapeInline(n.text);
-    else out += renderElement(n);
+    if (n.type === "text") {
+      if (n.text) out.push({ text: escapeInline(n.text), fromText: true });
+      continue;
+    }
+    const inline = inlinePieces(n);
+    if (inline) {
+      out.push(...inline);
+      continue;
+    }
+    const text = renderElement(n);
+    if (text) out.push({ text, fromText: false });
   }
   return out;
+}
+
+function renderInline(nodes: Node[]): string {
+  return piecesToString(renderPieces(nodes));
+}
+
+function wrapMarked(marker: string, children: Node[]): Piece[] {
+  const inner = renderPieces(children);
+  if (!piecesToString(inner)) return [];
+  return [{ text: marker, fromText: false }, ...inner, { text: marker, fromText: false }];
+}
+
+function linkPieces(el: El): Piece[] {
+  const href = (el.attrs.href ?? "").trim();
+  const inner = trimPieces(renderPieces(el.children));
+  const text = piecesToString(inner);
+  const plain = rawText(el).replace(/\s+/g, " ").trim();
+  if (!href) return inner;
+  // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
+  if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return [{ text: `<${href}>`, fromText: false }];
+  return [{ text: "[", fromText: false }, ...inner, { text: `](${linkDestination(href)})`, fromText: false }];
+}
+
+/** インライン要素を、テキストと変換が作った記法に分けて返す。ブロックなら null */
+function inlinePieces(el: El): Piece[] | null {
+  switch (el.tag) {
+    case "br":
+      return [{ text: "\n", fromText: false }];
+    case "strong":
+    case "b":
+      return wrapMarked("**", el.children);
+    case "em":
+    case "i":
+      return wrapMarked("*", el.children);
+    case "s":
+    case "del":
+    case "strike":
+      return wrapMarked("~~", el.children);
+    case "u":
+    case "span":
+    case "label":
+      return renderPieces(el.children);
+    case "code":
+      return codeSpanPieces(el);
+    case "a":
+      return linkPieces(el);
+    case "img":
+      return [{ text: escapeInline((el.attrs.alt ?? "").trim() || el.attrs.src || ""), fromText: true }];
+    case "input":
+      return [];
+    default:
+      if (BLOCK_TAGS.has(el.tag) || hasBlock(el.children)) return null;
+      return renderPieces(el.children);
+  }
 }
 
 function hasBlock(nodes: Node[]): boolean {
@@ -303,7 +439,7 @@ function collect(nodes: Node[]): Block[] {
 
   const flushInline = () => {
     if (!inline.length) return;
-    const text = protectLines(renderInline(inline).trim());
+    const text = protectPieces(renderPieces(inline));
     inline = [];
     if (!text) return;
     parts.push({ text, kind: "other" });
@@ -396,6 +532,8 @@ function linkDestination(href: string): string {
 }
 
 function renderElement(el: El): string {
+  const inline = inlinePieces(el);
+  if (inline) return piecesToString(inline);
   switch (el.tag) {
     case "h1":
     case "h2":
@@ -407,31 +545,7 @@ function renderElement(el: El): string {
       return `${"#".repeat(Number(el.tag[1]))} ${text}`.trimEnd();
     }
     case "p":
-      return protectLines(renderInline(el.children).trim());
-    case "br":
-      return "\n";
-    case "strong":
-    case "b": {
-      const inner = renderInline(el.children);
-      return inner ? `**${inner}**` : "";
-    }
-    case "em":
-    case "i": {
-      const inner = renderInline(el.children);
-      return inner ? `*${inner}*` : "";
-    }
-    case "s":
-    case "del":
-    case "strike": {
-      const inner = renderInline(el.children);
-      return inner ? `~~${inner}~~` : "";
-    }
-    case "u":
-    case "span":
-    case "label":
-      return renderInline(el.children);
-    case "code":
-      return renderCodeSpan(el);
+      return protectPieces(renderPieces(el.children));
     case "pre":
       return renderPre(el);
     case "blockquote": {
@@ -447,23 +561,10 @@ function renderElement(el: El): string {
       return renderList(el);
     case "li":
       return renderBlocks(listItemNodes(el));
-    case "a": {
-      const href = (el.attrs.href ?? "").trim();
-      const text = renderInline(el.children).trim();
-      const plain = rawText(el).replace(/\s+/g, " ").trim();
-      if (!href) return text;
-      // <href> は自動リンクになる http / https / mailto だけ。/docs や #goal は [文字](href) に戻す
-      if ((plain === href || text === href) && /^(https?:|mailto:)/i.test(href)) return `<${href}>`;
-      return `[${text}](${linkDestination(href)})`;
-    }
     case "hr":
       return "---";
     case "div":
       return renderBlocks(el.children);
-    case "input":
-      return "";
-    case "img":
-      return escapeInline((el.attrs.alt ?? "").trim() || el.attrs.src || "");
     default:
       return hasBlock(el.children) ? renderBlocks(el.children) : renderInline(el.children);
   }

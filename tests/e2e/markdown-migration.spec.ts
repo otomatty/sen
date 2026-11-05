@@ -75,14 +75,17 @@ class Stmt {
   }
 
   async all<T>() {
+    this.shim.queries.push(this.sql);
     return { results: this.runSync().results as T[] };
   }
 
   async first<T>() {
+    this.shim.queries.push(this.sql);
     return (this.runSync().results[0] as T | undefined) ?? null;
   }
 
   async run() {
+    this.shim.queries.push(this.sql);
     this.runSync();
     return { success: true as const };
   }
@@ -90,6 +93,7 @@ class Stmt {
 
 class MiniD1 {
   batchCount = 0;
+  queries: string[] = [];
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -103,6 +107,7 @@ class MiniD1 {
 
   batch(statements: Stmt[]) {
     const run = this.queue.then(() => {
+      this.queries.push("batch");
       this.batchCount += 1;
       this.beforeBatch?.(this.batchCount);
       this.sqlite.run("BEGIN");
@@ -355,4 +360,56 @@ test("同時に走らせても、途中で失敗しても、本文は 1 回し�
   expect((await retry.prepare("SELECT pruned_before FROM sync_meta WHERE workspace_id = ?").bind("ws").first<{ pruned_before: number }>())?.pruned_before).toBe(
     retryMarker.returned.get("ws"),
   );
+});
+
+/** 一覧の取得、表ごとの読み取り、batch。1 ページ分の回数 */
+function pageQueryCounts(queries: string[]): number[] {
+  const counts: number[] = [];
+  let current: number | null = null;
+  const isList = (sql: string) => sql.includes("FROM markdown_pending ORDER BY");
+  const isRead = (sql: string) => /^SELECT id, \w+ AS value FROM (?:issues|projects|comments) WHERE id IN \(/.test(sql);
+  for (const sql of queries) {
+    if (isList(sql)) {
+      if (current !== null) counts.push(current);
+      current = 1;
+      continue;
+    }
+    if (current === null) continue;
+    if (sql === "batch" || isRead(sql)) current += 1;
+  }
+  if (current !== null) counts.push(current);
+  return counts;
+}
+
+test("100 行の移行は、1 ページあたり一覧・表の読み取り・batch が 5 回以下", async () => {
+  const db = await openDb();
+  await insertWorkspace(db, "ws");
+  for (let i = 0; i < 10; i++) {
+    const id = `c${String(i).padStart(2, "0")}`;
+    await insertComment(db, { id, ws: "ws", body: `<p>コメント ${i}</p>`, updatedAt: 1000 + i });
+  }
+  for (let i = 0; i < 10; i++) {
+    const id = `i${String(i).padStart(2, "0")}`;
+    await insertIssue(db, { id, ws: "ws", description: `<p>課題 ${i}</p>`, updatedAt: 2000 + i, number: i + 1 });
+  }
+  for (let i = 0; i < 80; i++) {
+    const id = `p${String(i).padStart(2, "0")}`;
+    await insertProject(db, { id, ws: "ws", description: `<p>計画 ${i}</p>`, updatedAt: 3000 + i });
+  }
+  const marker = markerFor(db);
+  db.queries.length = 0;
+  await migrateBodiesToMarkdown(db as never, marker.write);
+  const counts = pageQueryCounts(db.queries);
+  expect(counts.length).toBeGreaterThan(0);
+  for (const count of counts) expect(count).toBeLessThanOrEqual(5);
+  expect(await pendingCount(db)).toBe(0);
+  const comment = await value(db, "SELECT body AS value, updated_at FROM comments WHERE id = ?", "c00");
+  const issue = await value(db, "SELECT description AS value, updated_at FROM issues WHERE id = ?", "i00");
+  const project = await value(db, "SELECT description AS value, updated_at FROM projects WHERE id = ?", "p79");
+  expect(comment?.value).toBe(htmlToMarkdown("<p>コメント 0</p>"));
+  expect(comment?.updated_at).toBe(1000);
+  expect(issue?.value).toBe(htmlToMarkdown("<p>課題 0</p>"));
+  expect(issue?.updated_at).toBe(2000);
+  expect(project?.value).toBe(htmlToMarkdown("<p>計画 79</p>"));
+  expect(project?.updated_at).toBe(3079);
 });

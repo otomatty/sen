@@ -139,6 +139,22 @@ function tagCount(html: string, re: RegExp): number {
   return html.match(re)?.length ?? 0;
 }
 
+test("段落の先頭でも、行内コードと装飾は記法のまま残る", () => {
+  expect(markdownToHtml(htmlToMarkdown("<p><code>a``b</code></p>"))).toContain("<code>a``b</code>");
+  expect(markdownToHtml(htmlToMarkdown("<p><code>`x`</code> 後</p>"))).toContain("<code>`x`</code>");
+  expect(markdownToHtml(htmlToMarkdown("<p><strong>#</strong> と</p>"))).toContain("<strong>#</strong>");
+  expect(markdownToHtml(htmlToMarkdown("<p><em>-</em> と</p>"))).toContain("<em>-</em>");
+});
+
+test("テキストの ~ は 1 つでもエスケープし、コードの中はそのまま残す", () => {
+  expect(markdownToHtml(htmlToMarkdown("<p>月~金、土~日</p>"))).toBe("<p>月~金、土~日</p>");
+  expect(markdownToHtml(htmlToMarkdown("<p>~~二重~~</p>"))).toBe("<p>~~二重~~</p>");
+  expect(markdownToHtml(htmlToMarkdown("<p>a ~ b</p>"))).toBe("<p>a ~ b</p>");
+  expect(markdownToHtml(htmlToMarkdown("<p><code>~/.ssh</code></p>"))).toContain("<code>~/.ssh</code>");
+  expect(markdownToHtml(htmlToMarkdown("<p>月~金、土~日</p>"))).not.toContain("<s>");
+  expect(markdownToHtml(htmlToMarkdown("<p>~~二重~~</p>"))).not.toContain("<s>");
+});
+
 test("文字だったものは、変換後も同じ文字のまま残る", () => {
   const samples = [
     "<p>&lt;div&gt; と a_b</p>",
@@ -166,6 +182,14 @@ test("文字だったものは、変換後も同じ文字のまま残る", () =>
     "<pre><code>&lt;div&gt;</code></pre>",
     '<pre><code class="language-html">&lt;div class="x"&gt;a&lt;/div&gt;</code></pre>',
     "<p><code>&lt;div&gt;</code></p>",
+    "<p><code>a``b</code></p>",
+    "<p><code>`x`</code> 後</p>",
+    "<p><strong>#</strong> と</p>",
+    "<p><em>-</em> と</p>",
+    "<p>月~金、土~日</p>",
+    "<p>~~二重~~</p>",
+    "<p>a ~ b</p>",
+    "<p><code>~/.ssh</code></p>",
     // Tiptap（StarterKit・TaskList）が出す形
     "<p>段落です</p>",
     "<p>1行目<br>2行目</p>",

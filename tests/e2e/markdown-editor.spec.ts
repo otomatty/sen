@@ -158,6 +158,28 @@ test("変換中の Enter では、パイプの行が表にならない", async (
   await expect(description).toContainText("| 名前 | 年齢 |");
 });
 
+test("リストの中の注記と脚注は、開いただけでは保存し直されない", async ({ page }) => {
+  const { ws } = await signupViaUi(page);
+  const note = "- 項目\n\n  > [!NOTE]\n  > リストの中の注記";
+  const noteIssue = await createIssue(page, ws, "リストの注記", note);
+  const noteEditor = await openIssue(page, ws, noteIssue.ident);
+  await expect(noteEditor.locator(".md-alert")).toHaveAttribute("data-alert", "note");
+  await expect(noteEditor.locator(".md-alert")).toContainText("リストの中の注記");
+  await noteEditor.click();
+  await page.getByTestId("issue-title").click();
+  await page.waitForTimeout(1500);
+  expect(await storedDescription(page, ws, noteIssue.id)).toBe(note);
+
+  const footnote = "- 項目\n\n  [^1]: リストの中の脚注";
+  const footIssue = await createIssue(page, ws, "リストの脚注", footnote);
+  const footEditor = await openIssue(page, ws, footIssue.ident);
+  await expect(footEditor.locator(".md-footnote")).toContainText("リストの中の脚注");
+  await footEditor.click();
+  await page.getByTestId("issue-title").click();
+  await page.waitForTimeout(1500);
+  expect(await storedDescription(page, ws, footIssue.id)).toBe(footnote);
+});
+
 test("段落の途中の脚注定義は、エディタでも表示でも定義にならない", async ({ page }) => {
   const { ws } = await signupViaUi(page);
   const description = "本文\n[^1]: 続き";

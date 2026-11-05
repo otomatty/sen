@@ -9,16 +9,17 @@ const SNAPSHOT = "0006_markdown_bodies:snapshot";
 const DONE = "0006_markdown_bodies";
 
 type PendingRow = { table_name: string; row_id: string };
-type ValueRow = { value: string | null };
+type FoundRow = { id: string; value: string | null };
 
-function readSql(table: string): string {
+function readSql(table: string, count: number): string {
+  const marks = Array.from({ length: count }, () => "?").join(", ");
   switch (table) {
     case "issues":
-      return "SELECT description AS value FROM issues WHERE id = ?";
+      return `SELECT id, description AS value FROM issues WHERE id IN (${marks})`;
     case "projects":
-      return "SELECT description AS value FROM projects WHERE id = ?";
+      return `SELECT id, description AS value FROM projects WHERE id IN (${marks})`;
     case "comments":
-      return "SELECT body AS value FROM comments WHERE id = ?";
+      return `SELECT id, body AS value FROM comments WHERE id IN (${marks})`;
     default:
       throw new Error(`markdown_pending に未知の表があります: ${table}`);
   }
@@ -65,17 +66,32 @@ async function convertPending(db: D1Database): Promise<void> {
       .all<PendingRow>();
     const rows = listed.results ?? [];
     if (!rows.length) return;
+    // 1 行ずつ first() すると、batch の前に D1 のクエリ上限（Free は 50）を超える。
+    // 表ごとに IN で読むので、1 ページは一覧・表の読み取り・batch で最大 5 回。
+    const idsByTable = new Map<string, string[]>();
+    for (const row of rows) {
+      const ids = idsByTable.get(row.table_name);
+      if (ids) ids.push(row.row_id);
+      else idsByTable.set(row.table_name, [row.row_id]);
+    }
+    const foundByTable = new Map<string, Map<string, string | null>>();
+    for (const [table, ids] of idsByTable) {
+      const found = await db.prepare(readSql(table, ids.length)).bind(...ids).all<FoundRow>();
+      const byId = new Map<string, string | null>();
+      for (const item of found.results ?? []) byId.set(item.id, item.value);
+      foundByTable.set(table, byId);
+    }
     const statements: D1PreparedStatement[] = [];
     for (const row of rows) {
       const table = row.table_name;
       const id = row.row_id;
-      const current = await db.prepare(readSql(table)).bind(id).first<ValueRow>();
-      if (!current) {
+      const byId = foundByTable.get(table);
+      if (!byId?.has(id)) {
         statements.push(db.prepare("DELETE FROM markdown_pending WHERE table_name = ? AND row_id = ?").bind(table, id));
         continue;
       }
       // updated_at は変えない。人の編集ではないので、並び順やスプレッドシートの日付に影響させない。
-      const markdown = htmlToMarkdown(current.value ?? "");
+      const markdown = htmlToMarkdown(byId.get(id) ?? "");
       statements.push(
         db.prepare(updateSql(table)).bind(markdown, id, table, id),
         db.prepare("DELETE FROM markdown_pending WHERE table_name = ? AND row_id = ?").bind(table, id),
