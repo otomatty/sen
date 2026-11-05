@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router";
-import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Box, Plus } from "lucide-react";
@@ -148,7 +148,11 @@ export function ProjectsPage() {
   const p = useWsPath();
   const createOpen = useUI((s) => s.projectCreateOpen);
   useDocumentTitle(team ? `${team.name} のプロジェクト` : "プロジェクト");
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // 指はすぐ動かすと一覧をスクロールしたいので、長押ししてからドラッグにする。マウスは少し動かしたらドラッグ。
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+  );
 
   const selectTab = (next: ProjectTab) => {
     setParams((prev) => {
