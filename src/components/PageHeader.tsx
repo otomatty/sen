@@ -10,7 +10,7 @@ export function HelpVideoButton({ screen }: { screen: ScreenKey }) {
   if (!t) return null;
   return (
     <Tooltip label="この画面の使い方を動画で見る">
-      <button className="toolbar-btn help-video-btn" onClick={() => useUI.setState({ videoId: t.id })} data-testid="help-video-button">
+      <button className="toolbar-btn help-video-btn" onClick={() => useUI.setState({ videoId: t.id, videoStart: null })} data-testid="help-video-button">
         <PlayCircle size={14} />
         <span>使い方</span>
       </button>

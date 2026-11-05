@@ -52,7 +52,7 @@ export function HelpPage() {
           ) : (
             <div className="tutorial-grid">
               {tutorials.map((t, i) => (
-                <button key={t.id} className="tutorial-card" onClick={() => useUI.setState({ videoId: t.id })} data-testid="tutorial-card">
+                <button key={t.id} className="tutorial-card" onClick={() => useUI.setState({ videoId: t.id, videoStart: null })} data-testid="tutorial-card">
                   <div className="tutorial-thumb">
                     <img src={tutorialAsset(t.poster)} alt="" loading="lazy" />
                     <span className="tutorial-play">

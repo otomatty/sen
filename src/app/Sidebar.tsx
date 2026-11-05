@@ -32,6 +32,7 @@ import { CycleIcon, ProjectIcon, TeamIcon } from "../components/icons";
 import { useCurrentTeamId, useWsPath } from "./hooks";
 import { acceptPendingInvitation, logout, refreshWorkspaces, useSession } from "./session";
 import { applyUpdate, installApp, usePWA } from "./pwa";
+import { AssistantNav } from "../features/assistant/AssistantPanel";
 import type { Me } from "../../shared/types";
 
 export function Sidebar() {
@@ -159,6 +160,7 @@ export function Sidebar() {
       </nav>
 
       <div className="sidebar-bottom">
+        <AssistantNav />
         {link(p("/help"), <PlayCircle size={15} />, "使い方動画", null, "nav-help")}
         <button className="nav-item" onClick={() => useUI.setState({ shortcutsOpen: true })} data-testid="nav-shortcuts">
           <span className="nav-icon">

@@ -50,3 +50,33 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   }
   return data as T;
 }
+
+/** NDJSON など、本文を呼び出し側で読む POST。ヘッダーと transport は api() と同じ */
+export async function apiStream(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  const headers: Record<string, string> = { "x-sen-client": "1", "content-type": "application/json" };
+  if (bearer) headers.authorization = `Bearer ${bearer}`;
+  let res: Response;
+  try {
+    res = await transport(path, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      signal,
+    });
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw e;
+    throw new ApiError("ネットワークに接続できません", 0);
+  }
+  if (!res.ok) {
+    let data: unknown = null;
+    try {
+      data = await res.json();
+    } catch {
+      // 本文なし
+    }
+    const msg = (data as { error?: string } | null)?.error ?? `エラーが発生しました (${res.status})`;
+    throw new ApiError(msg, res.status);
+  }
+  return res;
+}

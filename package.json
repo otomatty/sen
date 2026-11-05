@@ -11,6 +11,8 @@
     "test:e2e": "playwright test",
     "tutorials": "tsx tutorials/run.ts",
     "tutorials:check": "tsx tutorials/check.ts",
+    "assistant:check": "tsx scripts/assistant-check.ts",
+    "assistant:knowledge": "tsx scripts/assistant-check.ts --write",
     "cf:setup": "node scripts/cf-setup.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "diagrams": "node scripts/render-diagrams.mjs",
@@ -19,6 +21,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply sen-db --remote"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
