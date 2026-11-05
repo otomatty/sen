@@ -18,7 +18,7 @@ import { Picker } from "../../components/Picker";
 import { confirmDialog } from "../../components/ConfirmDialog";
 import { useDocumentTitle, useWsPath } from "../../app/hooks";
 import { IssuesView } from "../issues/IssuesView";
-import { ProjectTabs, StatusChip } from "./ProjectsPage";
+import { ProjectTabs, StatusChip, projectsListPath } from "./ProjectsPage";
 import type { Me } from "../../../shared/types";
 
 export function ProjectPage() {
@@ -57,7 +57,7 @@ export function ProjectPage() {
   };
   const title = (
     <span className="page-title-text">
-      <Link to={p("/projects")} className="crumb">
+      <Link to={p(projectsListPath(project.status))} className="crumb">
         プロジェクト
       </Link>
       <span className="crumb-sep">›</span>

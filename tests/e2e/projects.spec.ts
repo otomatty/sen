@@ -71,4 +71,24 @@ test.describe("プロジェクト一覧", () => {
     await expect(page.getByTestId("project-row").filter({ hasText: "パフォーマンス改善 Q4" })).toHaveCount(0);
     await expect(page.getByTestId("project-row")).toHaveCount(4);
   });
+
+  test("詳細のパンくずは、そのプロジェクトがあるタブの一覧に戻る", async ({ page }) => {
+    await page.goto(`/${ws}/team/ENG/projects?status=planned`);
+    await page.getByTestId("project-row").filter({ hasText: "パフォーマンス改善 Q4" }).click();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+
+    await page.getByTestId("project-page").locator("a.crumb").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/projects\\?status=planned$`));
+    await expect(page.getByTestId("projects-tab-planned")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("project-row").filter({ hasText: "パフォーマンス改善 Q4" })).toBeVisible();
+
+    await page.getByTestId("projects-tab-active").click();
+    await page.getByTestId("project-row").filter({ hasText: "モバイルアプリ v2.0" }).click();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+
+    await page.getByTestId("project-page").locator("a.crumb").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/projects$`));
+    await expect(page.getByTestId("projects-tab-active")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("project-row").filter({ hasText: "モバイルアプリ v2.0" })).toBeVisible();
+  });
 });

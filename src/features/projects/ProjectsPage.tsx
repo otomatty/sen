@@ -49,6 +49,13 @@ function projectInTab(status: ProjectStatus, tab: ProjectTab) {
   return TAB_STATUSES[tab].includes(status);
 }
 
+/** そのステータスのプロジェクトが並ぶ一覧タブのパス（ワークスペース相対）。進行中ならクエリは付けない */
+export function projectsListPath(status: ProjectStatus): string {
+  const tab = PROJECT_TABS.find((t) => projectInTab(status, t.key))?.key;
+  if (!tab || tab === "active") return "/projects";
+  return `/projects?status=${tab}`;
+}
+
 /** 選択中以外で件数があるタブを「計画中に 2 件、完了に 1 件あります。」の形で案内する */
 function ProjectTabHints({
   tab,
