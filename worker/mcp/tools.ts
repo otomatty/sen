@@ -1,10 +1,10 @@
 // MCP のツール定義。書き込みは applyMutation だけを通す（検証・履歴・通知・権限はそちらに任せる）。
 
-import { PRIORITY_ORDER } from "../../shared/constants";
+import { ISSUE_TITLE_MAX_LENGTH, MARKDOWN_MAX_LENGTH, PRIORITY_ORDER } from "../../shared/constants";
+import { isMarkdownBlank, markdownToText } from "../../shared/markdown";
 import { fuzzyMatch } from "../../shared/text";
 import type { ApiTokenScope, IssuePatch, Mutation } from "../../shared/types";
-import { applyMutation, htmlToText, MutationError, type MutationCtx } from "../mutations";
-import { htmlToMarkdown, markdownToHtml } from "../markdown";
+import { applyMutation, MutationError, type MutationCtx } from "../mutations";
 import {
   cycleLabel,
   isCleared,
@@ -103,16 +103,19 @@ function cleanTitle(v: unknown): string {
   if (typeof v !== "string") throw new ToolError("タイトルは文字列で指定してください");
   const t = v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim();
   if (!t) throw new ToolError("タイトルを入力してください");
-  if (t.length > 500) throw new ToolError("タイトルは500文字以内で入力してください");
+  if (t.length > ISSUE_TITLE_MAX_LENGTH) throw new ToolError(`タイトルは${ISSUE_TITLE_MAX_LENGTH}文字以内で入力してください`);
   return t;
 }
 
-function markdownHtml(v: unknown, label: string): string {
+function markdownBody(v: unknown, label: string): string {
   if (typeof v !== "string") throw new ToolError(`${label}は Markdown の文字列で指定してください`);
-  const html = markdownToHtml(v);
-  if (html.length > 200_000) throw new ToolError("本文が長すぎます");
-  return html;
+  if (v.length > MARKDOWN_MAX_LENGTH) {
+    throw new ToolError(`${label}は${MARKDOWN_MAX_LENGTH.toLocaleString("en-US")}文字以内で指定してください`);
+  }
+  return v;
 }
+
+const markdownGuide = `GitHub と同じ Markdown（GFM）。見出し（h1〜h6）・箇条書き・チェックリスト・コード・リンク・表・画像（https の URL）・注記（\`> [!NOTE]\` など）・脚注が使えます。書いた文字列をそのまま保存します。最大 ${MARKDOWN_MAX_LENGTH.toLocaleString("en-US")} 文字`;
 
 async function mutate(ctx: ToolContext, m: Mutation): Promise<void> {
   ctx.mutation.now = Date.now();
@@ -134,7 +137,7 @@ const str = (description: string) => ({ type: "string", description });
 const strNull = (description: string) => ({ type: ["string", "null"], description });
 
 const fieldProps = {
-  description: str("説明（Markdown）。見出し・箇条書き・チェックリスト・コード・リンクが使えます。表と画像は使えません"),
+  description: str(`説明。${markdownGuide}`),
   status: str("ステータスの名前（例: 進行中）または種類（未着手、started、done、キャンセルなど）。省略すると未着手"),
   priority: {
     type: ["integer", "string"],
@@ -163,7 +166,7 @@ const subIssueSchema = {
   description: "サブ課題。team を省略すると親のチーム、project を省略すると親のプロジェクトになります",
   properties: {
     team: str("チームのキーまたは名前。省略すると親課題のチーム"),
-    title: str("タイトル（1〜500文字）"),
+    title: str(`タイトル（1〜${ISSUE_TITLE_MAX_LENGTH}文字）`),
     ...fieldProps,
   },
 };
@@ -174,7 +177,7 @@ const createIssueSchema = {
   required: ["title"],
   properties: {
     team: str("チームのキー（例: ENG）または名前。parent を指定したときは省略でき、親課題のチームになります"),
-    title: str("タイトル（1〜500文字）"),
+    title: str(`タイトル（1〜${ISSUE_TITLE_MAX_LENGTH}文字）`),
     ...fieldProps,
     subIssues: {
       type: "array",
@@ -261,7 +264,7 @@ async function searchIssues(ctx: ToolContext, args: unknown): Promise<unknown> {
   const byId = new Map(rows.map((r) => [r.id, r]));
   let list = rows.filter((r) => r.archived_at == null);
   if (query.trim()) {
-    list = list.filter((r) => fuzzyMatch(`${resolver.ident(r)}\n${r.title}\n${htmlToText(r.description ?? "")}`, query));
+    list = list.filter((r) => fuzzyMatch(`${resolver.ident(r)}\n${r.title}\n${markdownToText(r.description ?? "")}`, query));
   }
   if (team) list = list.filter((r) => r.team_id === team.id);
   if (statusFilters) list = list.filter((r) => resolver.matchesStatus(r.state_id, statusFilters));
@@ -318,7 +321,7 @@ async function getIssue(ctx: ToolContext, args: unknown): Promise<unknown> {
   }
   const detail: Record<string, unknown> = {
     ...resolver.summarize(row, parents),
-    description: htmlToMarkdown(row.description ?? ""),
+    description: row.description ?? "",
     creator: await resolver.userName(row.creator_id),
     createdAt: new Date(row.created_at).toISOString(),
     branchName: resolver.branchName(row),
@@ -412,8 +415,7 @@ async function resolveCreateItem(
   let description: string | undefined;
   if ("description" in obj && obj.description !== undefined && obj.description !== null) {
     try {
-      const html = markdownHtml(obj.description, "説明");
-      if (html) description = html;
+      description = markdownBody(obj.description, "説明");
     } catch (e) {
       fail("説明", e);
     }
@@ -812,9 +814,9 @@ async function planUpdate(resolver: Resolver, raw: unknown, index: number, error
 
   if ("description" in raw && raw.description !== undefined) {
     try {
-      const html = raw.description === null ? "" : markdownHtml(raw.description, "説明");
-      if (html !== (row.description ?? "")) {
-        patch.description = html;
+      const next = raw.description === null ? "" : markdownBody(raw.description, "説明");
+      if (next !== (row.description ?? "")) {
+        patch.description = next;
         changes.push("説明を更新");
       }
     } catch (e) {
@@ -1161,11 +1163,9 @@ async function addComment(ctx: ToolContext, args: unknown): Promise<unknown> {
   const row = await resolver.resolveIssue(raw.issue);
   const ident = resolver.ident(row);
   if (row.archived_at != null) throw new ToolError(`${ident} は削除されています`);
-  if (typeof raw.body !== "string" || !raw.body.trim()) throw new ToolError("コメントを入力してください");
-  const html = markdownToHtml(raw.body);
-  if (html.length > 100_000) throw new ToolError("本文が長すぎます");
-  if (!htmlToText(html)) throw new ToolError("コメントを入力してください");
-  await mutate(ctx, { type: "comment.create", args: { id: crypto.randomUUID(), issueId: row.id, body: html } });
+  const body = markdownBody(raw.body, "コメント");
+  if (isMarkdownBlank(body)) throw new ToolError("コメントを入力してください");
+  await mutate(ctx, { type: "comment.create", args: { id: crypto.randomUUID(), issueId: row.id, body } });
   return { summary: `${ident} にコメントしました`, issue: ident, url: resolver.issueUrl(ident) };
 }
 
@@ -1280,7 +1280,7 @@ export const TOOLS: McpTool[] = [
     name: "get_issue",
     title: "課題の詳細",
     description:
-      "課題 1 件の説明（Markdown）、サブ課題、関係、最新 30 件のコメント、ブランチ名を返します。課題は「ENG-12」、課題の URL、UUID のどれでも指定できます。削除済みの課題は archived が true になります。",
+      "課題 1 件の説明、サブ課題、関係、最新 30 件のコメント、ブランチ名を返します。説明とコメントは、保存されている Markdown をそのまま返します。課題は「ENG-12」、課題の URL、UUID のどれでも指定できます。削除済みの課題は archived が true になります。",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -1328,7 +1328,7 @@ export const TOOLS: McpTool[] = [
             properties: {
               issue: str("課題の ID（例: ENG-12）、課題の URL、または UUID"),
               team: str("移動先のチームのキーまたは名前。指定すると課題の ID が変わります"),
-              title: str("新しいタイトル（1〜500文字）"),
+              title: str(`新しいタイトル（1〜${ISSUE_TITLE_MAX_LENGTH}文字）`),
               ...fieldProps,
               addLabels: { type: "array", items: { type: "string" }, description: "追加するラベル名。labels とは同時に指定できません" },
               removeLabels: { type: "array", items: { type: "string" }, description: "外すラベル名。labels とは同時に指定できません" },
@@ -1343,14 +1343,14 @@ export const TOOLS: McpTool[] = [
   {
     name: "add_comment",
     title: "コメントを追加",
-    description: "課題にコメントを Markdown で追加します。本文に「@名前」と書くと、そのメンバーへ通知します。空のコメントは追加できません。削除済みの課題にはコメントできません。",
+    description: `課題にコメントを追加します。${markdownGuide}。本文に「@名前」と書くと、そのメンバーへ通知します。空のコメントは追加できません。削除済みの課題にはコメントできません。`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
       required: ["issue", "body"],
       properties: {
         issue: str("課題の ID（例: ENG-12）、課題の URL、または UUID"),
-        body: str("コメント本文（Markdown）。空にはできません"),
+        body: str(`コメント。${markdownGuide}。空にはできません`),
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },

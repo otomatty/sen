@@ -27,9 +27,9 @@ async function uniqueUrlKey(db: Db, base: string): Promise<string> {
   return `ws-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-const p = (...xs: string[]) => xs.map((x) => `<p>${x}</p>`).join("");
-const ul = (...xs: string[]) => `<ul>${xs.map((x) => `<li><p>${x}</p></li>`).join("")}</ul>`;
-const h = (x: string) => `<h3>${x}</h3>`;
+const p = (...xs: string[]) => xs.join("\n\n");
+const ul = (...xs: string[]) => xs.map((x) => `- ${x}`).join("\n");
+const h = (x: string) => `### ${x}`;
 
 /** どのワークスペースでも最初に作るチーム */
 const DEFAULT_TEAM = { name: "デフォルト", key: "DEF", color: "#6470e8" } as const;
@@ -149,15 +149,16 @@ async function insertOnboardingSamples(
       assign: true,
       project: true,
       cycle: cycle1,
-      desc:
-        p("Sen は、<strong>速さ</strong>と<strong>キーボード操作</strong>を大切にした課題管理ツールです。") +
-        h("3つの原則") +
+      desc: [
+        p("Sen は、**速さ**と**キーボード操作**を大切にした課題管理ツールです。"),
+        h("3つの原則"),
         ul(
-          "<strong>速く動く</strong> — 画面はすべて手元のデータから即座に描画され、変更はあとからサーバーに同期されます。",
-          "<strong>キーボードで完結</strong> — ほぼすべての操作にショートカットがあります。<code>?</code> で一覧を表示できます。",
-          "<strong>決まった流れで進める</strong> — バックログ → 未着手 → 進行中 → 完了 の流れに沿って、チームのリズムを作ります。",
-        ) +
+          "**速く動く** — 画面はすべて手元のデータから即座に描画され、変更はあとからサーバーに同期されます。",
+          "**キーボードで完結** — ほぼすべての操作にショートカットがあります。`?` で一覧を表示できます。",
+          "**決まった流れで進める** — バックログ → 未着手 → 進行中 → 完了 の流れに沿って、チームのリズムを作ります。",
+        ),
         p("まずは左下の「使い方動画」から、実際の操作を見てみましょう。"),
+      ].join("\n\n"),
     },
     {
       title: "C キーで課題を作成してみよう",
@@ -168,7 +169,7 @@ async function insertOnboardingSamples(
       cycle: cycle1,
       labels: ["feature"],
       estimate: 1,
-      desc: p("どの画面でも <code>C</code> を押すと課題作成ダイアログが開きます。タイトルを入力して <code>⌘ Enter</code>（Windows は <code>Ctrl Enter</code>）で作成できます。"),
+      desc: p("どの画面でも `C` を押すと課題作成ダイアログが開きます。タイトルを入力して `⌘ Enter`（Windows は `Ctrl Enter`）で作成できます。"),
     },
     {
       title: "⌘K でコマンドパレットを開く",
@@ -178,7 +179,7 @@ async function insertOnboardingSamples(
       cycle: cycle1,
       project: true,
       estimate: 1,
-      desc: p("<code>⌘K</code>（<code>Ctrl K</code>）でコマンドパレットが開きます。画面の移動、課題の作成、ステータス変更など、ほとんどの操作をここから実行できます。"),
+      desc: p("`⌘K`（`Ctrl K`）でコマンドパレットが開きます。画面の移動、課題の作成、ステータス変更など、ほとんどの操作をここから実行できます。"),
     },
     {
       title: "キーボードだけで課題を操作する",
@@ -189,16 +190,17 @@ async function insertOnboardingSamples(
       project: true,
       labels: ["improvement"],
       estimate: 2,
-      desc:
-        p("一覧で <code>J</code> / <code>K</code> を押すとフォーカスが上下に移動します。フォーカス中の課題に対して：") +
+      desc: [
+        p("一覧で `J` / `K` を押すとフォーカスが上下に移動します。フォーカス中の課題に対して："),
         ul(
-          "<code>S</code> ステータス変更",
-          "<code>P</code> 優先度変更",
-          "<code>A</code> 担当者変更",
-          "<code>L</code> ラベル変更",
-          "<code>X</code> 選択（まとめて操作）",
-          "<code>Enter</code> 詳細を開く",
+          "`S` ステータス変更",
+          "`P` 優先度変更",
+          "`A` 担当者変更",
+          "`L` ラベル変更",
+          "`X` 選択（まとめて操作）",
+          "`Enter` 詳細を開く",
         ),
+      ].join("\n\n"),
     },
     {
       title: "⌘B でボード表示に切り替える",
@@ -206,7 +208,7 @@ async function insertOnboardingSamples(
       priority: 4,
       labels: ["feature"],
       estimate: 1,
-      desc: p("課題一覧で <code>⌘B</code> を押すと、リストとボード（カンバン）を切り替えられます。ボードではカードをドラッグしてステータスを変更できます。"),
+      desc: p("課題一覧で `⌘B` を押すと、リストとボード（カンバン）を切り替えられます。ボードではカードをドラッグしてステータスを変更できます。"),
     },
     {
       title: "プロジェクトで大きな目標を管理する",
@@ -329,12 +331,13 @@ const ENG_ISSUES: DemoIssue[] = [
     e: 3,
     d: 2,
     ago: 4,
-    desc:
-      p("iOS 18 以降の端末で、アプリがバックグラウンドにあるとプッシュ通知が届かない報告が複数件あります。") +
-      h("再現手順") +
-      ul("iOS 18.2 の端末でログインする", "アプリをバックグラウンドにする", "別端末からメッセージを送る") +
-      h("期待する動作") +
+    desc: [
+      p("iOS 18 以降の端末で、アプリがバックグラウンドにあるとプッシュ通知が届かない報告が複数件あります。"),
+      h("再現手順"),
+      ul("iOS 18.2 の端末でログインする", "アプリをバックグラウンドにする", "別端末からメッセージを送る"),
+      h("期待する動作"),
       p("数秒以内に通知が表示されること。"),
+    ].join("\n\n"),
     comments: [
       [1, "APNs のログを確認したところ、トークンの更新が反映されていないようです。", 30],
       [0, "ありがとうございます。トークン更新時の処理を見直します。", 26],
