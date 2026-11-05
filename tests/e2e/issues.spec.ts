@@ -1,5 +1,5 @@
 import { devices, expect, test } from "@playwright/test";
-import { row, seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
+import { dismissWelcome, row, seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
 
 test.describe("課題の操作", () => {
   test.beforeEach(async ({ page }) => {
@@ -94,6 +94,33 @@ test.describe("課題の操作", () => {
     await expect(title).toHaveValue("書き直した下書き");
     await page.keyboard.press("Escape");
     await expect(modal).toBeHidden();
+  });
+
+  test("別のタブで下書きから課題を作ると、元のタブで開き直しても下書きは出ない", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    await page.getByTestId("create-title").fill("タブをまたぐ下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    const other = await page.context().newPage();
+    await other.goto(page.url());
+    await expect(other.getByTestId("issue-list")).toBeVisible();
+    await dismissWelcome(other);
+
+    await other.locator("body").click({ position: { x: 5, y: 5 } });
+    await other.keyboard.press("c");
+    const otherTitle = other.getByTestId("create-title");
+    await expect(otherTitle).toHaveValue("タブをまたぐ下書き");
+    await other.keyboard.press("Control+Enter");
+    await expect(other.getByTestId("create-issue-modal")).toBeHidden();
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(page.getByTestId("create-title")).toHaveValue("");
+    await other.close();
   });
 
   test("キーボードでフォーカスしてステータスと優先度を変更できる", async ({ page }) => {

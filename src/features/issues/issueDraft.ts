@@ -1,7 +1,7 @@
 import { isHtmlEmpty, readLocal } from "../../lib/utils";
 
 // 課題作成の下書き。ワークスペースとユーザーごとに、読み込み直しても残す。
-// localStorage が使えない環境でも、閉じて開き直すだけなら残るよう、メモリにも控えを置く。
+// メモリの控えは localStorage に保存できなかった下書きだけを持つ。保存できた下書きを控えに残すと、別のタブで作成・削除したあとによみがえるため。
 
 export interface Draft {
   teamId: string;
@@ -90,11 +90,13 @@ export function saveIssueDraft(workspaceId: string, userId: string, draft: Draft
     forget(key);
     return;
   }
-  memory.set(key, draft);
   try {
     localStorage.setItem(key, JSON.stringify({ v: DRAFT_VERSION, draft }));
+    // 保存できた下書きは控えに残さない。別タブで作成・削除したあとによみがえるため
+    memory.delete(key);
   } catch {
-    // 書き込めないと古い値が残り、読み込みがメモリの最新を隠す。消してメモリを使わせる
+    // 保存できなかった下書きだけメモリに残す。古い値が残ると読み込みがメモリの最新を隠すので消す
+    memory.set(key, draft);
     try {
       localStorage.removeItem(key);
     } catch {
