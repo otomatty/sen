@@ -1,5 +1,5 @@
-import { devices, expect, test, type Page } from "@playwright/test";
-import { seedDemo, signupViaUi, waitForSynced } from "./helpers";
+import { devices, expect, test } from "@playwright/test";
+import { seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
 
 test.describe("プロジェクト一覧", () => {
   let ws: string;
@@ -131,22 +131,6 @@ test.describe("プロジェクト一覧", () => {
   });
 });
 
-async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, holdMs: number) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from.x, y: from.y }] });
-  if (holdMs) await page.waitForTimeout(holdMs);
-  const steps = 15;
-  for (let i = 1; i <= steps; i++) {
-    await cdp.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }],
-    });
-    await page.waitForTimeout(16);
-  }
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await cdp.detach();
-}
-
 test.describe("プロジェクト一覧（スマホ）", () => {
   const { defaultBrowserType: _browser, ...pixel } = devices["Pixel 7"];
   test.use(pixel);
@@ -172,7 +156,7 @@ test.describe("プロジェクト一覧（スマホ）", () => {
       page,
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
       { x: to.x + to.width / 2, y: to.y + 8 },
-      400,
+      { holdMs: 400 },
     );
 
     const movedFirst = [before[before.length - 1], ...before.slice(0, -1)];
@@ -196,7 +180,7 @@ test.describe("プロジェクト一覧（スマホ）", () => {
       page,
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
       { x: to.x + to.width / 2, y: to.y + 8 },
-      0,
+      { holdMs: 0 },
     );
     await page.waitForTimeout(500);
     await expect(names).toHaveText(before);
