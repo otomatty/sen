@@ -55,7 +55,10 @@ export async function refreshWorkspaces(): Promise<void> {
   if (workspacesRefresh) return workspacesRefresh;
   workspacesRefresh = (async () => {
     try {
-      const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me");
+      // 応答が無いまま待ち続けると、使い回す Promise が終わらず次回も取り直せない。
+      const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me", {
+        signal: AbortSignal.timeout(10_000),
+      });
       if (!res.user) return;
       const cur = useSession.getState();
       if (cur.status !== "authed" || cur.user?.id !== res.user.id) return;

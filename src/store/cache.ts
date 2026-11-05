@@ -1,7 +1,8 @@
 // ワークスペースのデータを IndexedDB に保存しておき、次回の起動で即座に表示するためのキャッシュ。
 // 起動時はキャッシュから描画 → 差分（/api/sync）だけを取得して最新にする。
 
-export const CACHE_VERSION = 3;
+// 参加一覧 workspaces をスナップショットから外した。古い版のクライアントが新しい形を読んで落ちないよう、版を分ける。
+export const CACHE_VERSION = 4;
 
 export interface Snapshot {
   v: number;
