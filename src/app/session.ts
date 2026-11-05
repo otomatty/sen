@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Me, WorkspaceSummary } from "../../shared/types";
+import type { Me, PendingInvitation, WorkspaceSummary } from "../../shared/types";
 import { api, ApiError, setBearerToken } from "../lib/api";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
@@ -9,9 +9,21 @@ interface SessionState {
   status: "unknown" | "authed" | "anon";
   user: Me | null;
   workspaces: WorkspaceSummary[];
+  /** ログイン中の人あての招待。古いキャッシュには無いので、無いときは [] */
+  invitations: PendingInvitation[];
 }
 
-export const useSession = create<SessionState>(() => ({ status: "unknown", user: null, workspaces: [] }));
+interface MeResponse {
+  user: Me | null;
+  workspaces: WorkspaceSummary[];
+  invitations?: PendingInvitation[];
+}
+
+export const useSession = create<SessionState>(() => ({ status: "unknown", user: null, workspaces: [], invitations: [] }));
+
+function pendingInvitations(list: PendingInvitation[] | undefined): PendingInvitation[] {
+  return Array.isArray(list) ? list : [];
+}
 
 const DEMO = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 
@@ -23,28 +35,38 @@ function writeSessionCache(user: { id: string; name: string }, workspaces: Works
 
 export async function loadSession() {
   try {
-    const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me");
+    const res = await api<MeResponse>("/api/me");
     if (!res.user) {
       writeLocal(SESSION_CACHE, null);
-      useSession.setState({ status: "anon", user: null, workspaces: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [] });
       return null;
     }
     writeSessionCache(res.user, res.workspaces);
-    useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces });
-    return res;
+    const invitations = pendingInvitations(res.invitations);
+    useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces, invitations });
+    return { ...res, invitations };
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      useSession.setState({ status: "anon", user: null, workspaces: [] });
+      useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [] });
       return null;
     }
-    // オフライン：前回ログインしていた情報で起動し、手元のデータを表示する
-    const cached = readLocal<{ user: Me; workspaces: WorkspaceSummary[] } | null>(SESSION_CACHE, null);
+    // オフライン：前回ログインしていた情報で起動し、手元のデータを表示する。
+    // 招待一覧はキャッシュに入れていないので、無ければ空にする
+    const cached = readLocal<{ user: Me; workspaces: WorkspaceSummary[]; invitations?: PendingInvitation[] } | null>(SESSION_CACHE, null);
     if (e instanceof ApiError && e.status === 0 && cached) {
-      useSession.setState({ status: "authed", user: cached.user, workspaces: cached.workspaces });
-      return cached;
+      const invitations = pendingInvitations(cached.invitations);
+      useSession.setState({ status: "authed", user: cached.user, workspaces: cached.workspaces, invitations });
+      return { ...cached, invitations };
     }
     throw e;
   }
+}
+
+/** ログイン中の人あての招待を受け、参加したワークスペースのキーを返す */
+export async function acceptPendingInvitation(id: string): Promise<string> {
+  const res = await api<{ workspaceKey: string }>(`/api/me/invitations/${id}/accept`, { body: {} });
+  await loadSession();
+  return res.workspaceKey;
 }
 
 let workspacesRefresh: Promise<void> | null = null;
@@ -56,14 +78,14 @@ export async function refreshWorkspaces(): Promise<void> {
   workspacesRefresh = (async () => {
     try {
       // 応答が無いまま待ち続けると、使い回す Promise が終わらず次回も取り直せない。
-      const res = await api<{ user: Me | null; workspaces: WorkspaceSummary[] }>("/api/me", {
+      const res = await api<MeResponse>("/api/me", {
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.user) return;
       const cur = useSession.getState();
       if (cur.status !== "authed" || cur.user?.id !== res.user.id) return;
       writeSessionCache(res.user, res.workspaces);
-      useSession.setState({ workspaces: res.workspaces });
+      useSession.setState({ workspaces: res.workspaces, invitations: pendingInvitations(res.invitations) });
     } catch {
       // 通信エラー（オフライン含む）のときは今の一覧をそのまま使う
     } finally {
@@ -115,7 +137,7 @@ export async function signOut() {
     writeLocal("sen:demo-token", null);
     writeLocal("sen:demo-logged-out", true);
   }
-  useSession.setState({ status: "anon", user: null, workspaces: [] });
+  useSession.setState({ status: "anon", user: null, workspaces: [], invitations: [] });
 }
 
 export async function logout() {

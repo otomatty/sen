@@ -555,6 +555,168 @@
 .member-info {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+.member-name-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.member-name-line b,
+.invite-result-email {
+  overflow-wrap: anywhere;
+}
+.members-hint-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 0;
+  line-height: 1.7;
+}
+.members-hint-row p {
+  margin: 0;
+}
+.settings-inline-link {
+  color: var(--accent-text);
+}
+.settings-inline-link:hover {
+  text-decoration: underline;
+}
+.invite-emails {
+  width: 100%;
+  min-height: 76px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  resize: vertical;
+  line-height: 1.5;
+}
+.invite-emails:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+.invite-banner,
+.domain-hint,
+.form-warn,
+.settings-card > .form-error {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+.invite-banner,
+.form-warn {
+  color: var(--warn);
+  font-size: 13px;
+}
+.invite-actions,
+.domain-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 12px;
+}
+.invite-role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.invitation-row {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 0;
+}
+.invitation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  overflow-wrap: anywhere;
+}
+.invitation-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.invite-results {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.invite-results-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+.invite-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.invite-result:last-child {
+  border-bottom: 0;
+}
+.invite-result p {
+  margin: 0;
+}
+.invite-result-link-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.invite-result-link-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.domain-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 0 4px;
+}
+.domain-chip {
+  flex-shrink: 1;
+  max-width: 100%;
+}
+.chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -4px -6px -4px 0;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+}
+.chip-x:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.settings-loading {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0;
+}
+.member-name-line {
+  width: 100%;
+  min-width: 0;
+}
+.pill.warn {
+  white-space: normal;
+  height: auto;
+  min-height: 20px;
+  max-width: 100%;
+  line-height: 1.35;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 .label-add {
   display: flex;
@@ -567,6 +729,10 @@
 .label-add .input {
   flex: 1;
   min-width: 160px;
+}
+.label-add.domain-add {
+  border-bottom: 0;
+  padding-bottom: 4px;
 }
 .label-row,
 .state-row {
@@ -1133,6 +1299,45 @@
   margin: 0;
   line-height: 1.7;
 }
+.pending-invitations {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  text-align: left;
+}
+.pending-invitations-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.pending-invitation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.pending-invitation-label {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.pending-invitation .btn {
+  margin-left: auto;
+}
+.pending-invitation .form-error {
+  flex: 1 1 100%;
+}
+.invite-wrong-account {
+  margin: 0;
+  line-height: 1.7;
+}
 .auth-form {
   width: 100%;
   display: flex;
@@ -1163,8 +1368,13 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .auth-form .btn {
-  height: 38px;
+  height: auto;
+  min-height: 38px;
+  max-width: 100%;
   margin-top: 6px;
+  white-space: normal;
+  padding: 8px 14px;
+  text-align: center;
 }
 .form-error {
   color: var(--danger);
@@ -1305,8 +1515,26 @@
   }
   /* iPhone は 16px 未満の入力欄をタップすると画面を拡大する */
   .settings-content .input,
-  .settings-content select {
+  .settings-content select,
+  .settings-content textarea {
     font-size: 16px;
+  }
+  .invite-actions .btn,
+  .domain-save .btn,
+  .invitation-actions .btn {
+    min-height: 40px;
+  }
+  .invitation-actions {
+    width: 100%;
+  }
+  .invitation-actions .btn {
+    flex: 1;
+  }
+  .invite-result-link-row {
+    flex-wrap: wrap;
+  }
+  .invite-result-link-row .btn {
+    min-height: 40px;
   }
   /* 狭い幅ではチーム名と識別子とボタンをそれぞれ 1 行にする */
   .team-add .input,

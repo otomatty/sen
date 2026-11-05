@@ -42,6 +42,7 @@ export async function createWorkspace(
   const now = Date.now();
   const wsId = crypto.randomUUID();
   const urlKey = await uniqueUrlKey(db, slugify(opts.urlKey ?? opts.name));
+  // invite_code は使っていない列。NOT NULL UNIQUE のため値は入れ続ける（SQLite では UNIQUE 列を簡単に消せない）
   await batch(db, [
     stmt(
       db,

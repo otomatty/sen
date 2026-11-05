@@ -16,7 +16,7 @@ import type {
 import { addDays, mondayOf } from "../../shared/dates";
 import { DEFAULT_STATES } from "../../shared/constants";
 import { localYmd, uuid } from "../lib/utils";
-import { getData } from "./data";
+import { getData, useData } from "./data";
 import { engine, type Effect } from "./engine";
 import { toast } from "./ui";
 
@@ -574,8 +574,24 @@ export function updateWorkspaceName(name: string) {
   m({ type: "workspace.update", args: { name } });
 }
 
-export function regenerateInvite() {
-  m({ type: "workspace.regenerateInvite", args: {} });
+function sameDomains(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((d, i) => d === b[i]);
+}
+
+/** 利用できるドメインを保存する。手元のワークスペースにも先に反映し、失敗したら戻す */
+export function setAllowedDomains(domains: string[]) {
+  const next = [...domains];
+  const prev = getData().workspace;
+  if (prev) useData.setState({ workspace: { ...prev, allowedDomains: next } });
+  return m({ type: "workspace.setAllowedDomains", args: { domains: next } }).then((ok) => {
+    if (!ok && prev) {
+      const cur = getData().workspace;
+      if (cur && cur.id === prev.id && sameDomains(cur.allowedDomains ?? [], next)) {
+        useData.setState({ workspace: { ...cur, allowedDomains: prev.allowedDomains ?? [] } });
+      }
+    }
+    return ok;
+  });
 }
 
 export function updateMe(patch: { name?: string; avatarColor?: string; settings?: UserSettings }) {

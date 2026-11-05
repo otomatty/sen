@@ -1,9 +1,16 @@
 import { DEFAULT_STATES, PALETTE, AVATAR_COLORS } from "../shared/constants";
 import { addDays, isValidYmd, mondayOf, todayYmd } from "../shared/dates";
+import {
+  emailDomain,
+  isEmailAllowed,
+  isValidDomain,
+  MAX_ALLOWED_DOMAINS,
+  normalizeDomain,
+  normalizeEmail,
+} from "../shared/domains";
 import type { ActivityType, IssueRelation, Me, Mutation, NotificationType, RelationType, Role, StateType } from "../shared/types";
 import { all, first, run, stmt, batch } from "./db";
 import type { WorkspaceRow } from "./env";
-import { randomToken } from "./auth";
 import type { Change } from "./sync";
 
 export class MutationError extends Error {
@@ -996,10 +1003,40 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       return;
     }
 
-    case "workspace.regenerateInvite": {
+    case "workspace.setAllowedDomains": {
       assertAdmin(ctx);
-      await run(db, "UPDATE workspaces SET invite_code = ?, updated_at = ? WHERE id = ?", randomToken(12), now, ws.id);
+      if (!Array.isArray(a.domains)) fail("ドメインの指定が不正です");
+      const domains: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of a.domains) {
+        if (typeof raw !== "string") fail("ドメインの指定が不正です");
+        const domain = normalizeDomain(raw);
+        if (!domain || seen.has(domain)) continue;
+        if (!isValidDomain(domain)) fail(`ドメインの形式が正しくありません：${domain}`);
+        seen.add(domain);
+        domains.push(domain);
+      }
+      if (domains.length > MAX_ALLOWED_DOMAINS) fail(`利用できるドメインは${MAX_ALLOWED_DOMAINS}個までです`);
+      if (domains.length > 0) {
+        const mine = emailDomain(user.email);
+        if (!domains.includes(mine)) fail(`あなたのメールアドレスのドメイン（${mine}）を含めてください`);
+      }
+      await run(db, "UPDATE workspaces SET allowed_domains = ?, updated_at = ? WHERE id = ?", JSON.stringify(domains), now, ws.id);
+      ws.allowed_domains = JSON.stringify(domains);
       touch(ctx, "workspace", ws.id);
+      // 許可外になった宛先の、まだ使われていない招待は取り消す。メンバーは残す（許可に戻せば再び使える）
+      if (domains.length > 0) {
+        const pending = await all<{ id: string; email: string }>(
+          db,
+          "SELECT id, email FROM invitations WHERE workspace_id = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+          ws.id,
+        );
+        for (const inv of pending) {
+          if (!isEmailAllowed(inv.email, domains)) {
+            await run(db, "UPDATE invitations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", now, inv.id);
+          }
+        }
+      }
       return;
     }
 
@@ -1063,9 +1100,20 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       assertAdmin(ctx);
       const uid = await assertMember(ctx, a.userId);
       if (uid === user.id) fail("自分自身は削除できません");
+      const removed = await first<{ email: string }>(db, "SELECT email FROM users WHERE id = ?", uid);
       await run(db, "DELETE FROM members WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
       // このワークスペースで発行した AI 連携トークンも無効にする
       await run(db, "DELETE FROM api_tokens WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
+      if (removed) {
+        // 外した人あての、まだ使われていない招待も取り消す
+        await run(
+          db,
+          "UPDATE invitations SET revoked_at = ? WHERE workspace_id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL",
+          now,
+          ws.id,
+          normalizeEmail(removed.email),
+        );
+      }
       const assigned = await all<Row>(
         db,
         "SELECT id FROM issues WHERE workspace_id = ? AND assignee_id = ?",

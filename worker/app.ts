@@ -12,8 +12,9 @@ import type {
   Role,
   SheetSyncStatus,
 } from "../shared/types";
-import { getAuth, getSessionUser, isGoogleConfigured } from "./auth";
-import { all, ensureMigrated, first, run } from "./db";
+import { isEmailAllowed, parseAllowedDomains } from "../shared/domains";
+import { getAuth, getSession, isGoogleConfigured } from "./auth";
+import { all, ensureMigrated, first } from "./db";
 import type { AppEnv, Env, WorkspaceRow } from "./env";
 import { applyMutation, MutationError, type MutationCtx } from "./mutations";
 import { createWorkspace, seedDemo } from "./seed";
@@ -33,6 +34,16 @@ import {
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
 import { handleMcp } from "./mcp/server";
 import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
+import {
+  acceptInvitationById,
+  acceptInvitationByToken,
+  createInvitations,
+  deleteInvitation,
+  listInvitations,
+  listPendingInvitations,
+  previewInvitation,
+  resendInvitation,
+} from "./invitations";
 import { loadStartedOn } from "./progress";
 import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
 
@@ -75,9 +86,10 @@ export function createApp() {
   });
 
   const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
-    const user = await getSessionUser(c);
-    if (!user) return err(c, "ログインが必要です", 401);
-    c.set("user", user);
+    const session = await getSession(c);
+    if (!session) return err(c, "ログインが必要です", 401);
+    c.set("user", session.user);
+    c.set("emailVerified", session.emailVerified);
     await next();
   };
 
@@ -86,25 +98,34 @@ export function createApp() {
     if (!key) return err(c, "ワークスペースを指定してください");
     const ws = await first<WorkspaceRow>(c.env.DB, "SELECT * FROM workspaces WHERE url_key = ?", key);
     if (!ws) return err(c, "ワークスペースが見つかりません", 404);
+    const user = c.get("user");
     const m = await first<{ role: Role }>(
       c.env.DB,
       "SELECT role FROM members WHERE workspace_id = ? AND user_id = ?",
       ws.id,
-      c.get("user").id,
+      user.id,
     );
     if (!m) return err(c, "このワークスペースへのアクセス権がありません", 403);
+    const domains = parseAllowedDomains(ws.allowed_domains);
+    if (!isEmailAllowed(user.email, domains)) {
+      return err(c, `このワークスペースは ${domains.join("、")} のメールアドレスだけが利用できます`, 403);
+    }
     c.set("workspace", ws);
     c.set("role", m.role);
     await next();
   };
 
-  const listWorkspaces = (c: Context<AppEnv>, userId: string) =>
-    all<{ id: string; name: string; url_key: string }>(
+  const listWorkspaces = async (c: Context<AppEnv>, userId: string, email: string) => {
+    const rows = await all<{ id: string; name: string; url_key: string; allowed_domains: string }>(
       c.env.DB,
-      `SELECT w.id, w.name, w.url_key FROM workspaces w JOIN members m ON m.workspace_id = w.id
+      `SELECT w.id, w.name, w.url_key, w.allowed_domains FROM workspaces w JOIN members m ON m.workspace_id = w.id
        WHERE m.user_id = ? ORDER BY m.created_at`,
       userId,
-    ).then((rows) => rows.map((r) => ({ id: r.id, name: r.name, urlKey: r.url_key })));
+    );
+    return rows
+      .filter((r) => isEmailAllowed(email, parseAllowedDomains(r.allowed_domains)))
+      .map((r) => ({ id: r.id, name: r.name, urlKey: r.url_key }));
+  };
 
   app.get("/health", (c) => c.json({ ok: true, devTools: c.env.DEV_TOOLS === "1" }));
 
@@ -118,9 +139,14 @@ export function createApp() {
   app.on(["GET", "POST"], "/auth/*", (c) => getAuth(c).handler(c.req.raw));
 
   app.get("/me", async (c) => {
-    const user = await getSessionUser(c);
-    if (!user) return c.json({ user: null, workspaces: [] });
-    return c.json({ user, workspaces: await listWorkspaces(c, user.id) });
+    const session = await getSession(c);
+    if (!session) return c.json({ user: null, workspaces: [], invitations: [] });
+    const { user } = session;
+    const [workspaces, invitations] = await Promise.all([
+      listWorkspaces(c, user.id, user.email),
+      listPendingInvitations(c.env.DB, user.id, user.email),
+    ]);
+    return c.json({ user, workspaces, invitations });
   });
 
   // ---------------- ワークスペース ----------------
@@ -135,28 +161,14 @@ export function createApp() {
     return c.json({ ok: true, workspaceKey: ws.urlKey });
   });
 
-  app.get("/invite/:code", async (c) => {
-    const ws = await first<WorkspaceRow>(c.env.DB, "SELECT * FROM workspaces WHERE invite_code = ?", c.req.param("code"));
-    if (!ws) return err(c, "招待リンクが無効です", 404);
-    const count = await first<{ c: number }>(c.env.DB, "SELECT COUNT(*) AS c FROM members WHERE workspace_id = ?", ws.id);
-    return c.json({ name: ws.name, urlKey: ws.url_key, memberCount: count?.c ?? 0 });
-  });
-
-  app.post("/invite/:code/accept", requireUser, async (c) => {
-    const ws = await first<WorkspaceRow>(c.env.DB, "SELECT * FROM workspaces WHERE invite_code = ?", c.req.param("code"));
-    if (!ws) return err(c, "招待リンクが無効です", 404);
-    const user = c.get("user");
-    await run(
-      c.env.DB,
-      "INSERT OR IGNORE INTO members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)",
-      ws.id,
-      user.id,
-      Date.now(),
-    );
-    const last = await writeChanges(c.env.DB, ws.id, [{ entity: "user", entityId: user.id, op: "upsert" }]);
-    c.executionCtx?.waitUntil?.(notifyRealtime(c.env, ws.id, last));
-    return c.json({ ok: true, workspaceKey: ws.url_key });
-  });
+  // ---------------- 招待（メール指定。管理者だけが発行・再送・取り消しできる） ----------------
+  app.get("/invitations", requireUser, requireWorkspace, listInvitations);
+  app.post("/invitations", requireUser, requireWorkspace, createInvitations);
+  app.post("/invitations/:id/resend", requireUser, requireWorkspace, resendInvitation);
+  app.delete("/invitations/:id", requireUser, requireWorkspace, deleteInvitation);
+  app.get("/invite/:token", previewInvitation);
+  app.post("/invite/:token/accept", requireUser, acceptInvitationByToken);
+  app.post("/me/invitations/:id/accept", requireUser, acceptInvitationById);
 
   // ---------------- 同期 ----------------
   app.get("/bootstrap", requireUser, requireWorkspace, async (c) => {
@@ -179,7 +191,7 @@ export function createApp() {
         ws.id,
         user.id,
       ),
-      listWorkspaces(c, user.id),
+      listWorkspaces(c, user.id, user.email),
     ]);
     const payload: BootstrapPayload = {
       me: { ...user, role: c.get("role") },
