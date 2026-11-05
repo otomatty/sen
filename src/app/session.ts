@@ -109,6 +109,9 @@ export async function loadSession() {
     }
     const invitations = pendingInvitations(res.invitations);
     const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
+    // Google から戻ってきたときなど、ほかのタブが古いアカウントのままにならないよう知らせる
+    const previousId = readLocal<{ user?: { id?: string } } | null>(SESSION_CACHE, null)?.user?.id;
+    if (previousId && previousId !== res.user.id) notifyOtherTabs();
     writeSessionCache(res.user, res.workspaces, defaultWorkspaceId, invitations);
     setCurrentUserId(res.user.id);
     useSession.setState({ status: "authed", user: res.user, workspaces: res.workspaces, invitations, defaultWorkspaceId });

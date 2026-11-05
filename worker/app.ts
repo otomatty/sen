@@ -68,6 +68,15 @@ async function readJson<T>(c: Context): Promise<T> {
   }
 }
 
+// ログイン中のアカウントは Cookie でブラウザ全体に 1 つ。別のタブで切り替えると、このタブは画面を変えないまま別の人として送ってしまうので、画面が思っている利用者と違えば止める
+function accountSwitched(c: Context<AppEnv>, userId: string): Response | null {
+  const expected = c.req.header("x-sen-user");
+  if (expected && expected !== userId) {
+    return c.json({ error: "別のアカウントに切り替わりました。読み込み直します", code: "account-switched" }, 409);
+  }
+  return null;
+}
+
 export function createApp() {
   const app = new Hono<AppEnv>().basePath("/api");
 
@@ -91,11 +100,8 @@ export function createApp() {
   const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
     const session = await getSession(c);
     if (!session) return err(c, "ログインが必要です", 401);
-    // ログイン中のアカウントは Cookie でブラウザ全体に 1 つ。別のタブで切り替えると、このタブは画面を変えないまま別の人として送ってしまうので、画面が思っている利用者と違えば止める
-    const expected = c.req.header("x-sen-user");
-    if (expected && expected !== session.user.id) {
-      return c.json({ error: "別のアカウントに切り替わりました。読み込み直します", code: "account-switched" }, 409);
-    }
+    const switched = accountSwitched(c, session.user.id);
+    if (switched) return switched;
     c.set("user", session.user);
     c.set("emailVerified", session.emailVerified);
     await next();
@@ -239,6 +245,8 @@ export function createApp() {
     try {
       const me = await getSessionUser(c);
       if (!me) return err(c, "ログインが必要です", 401);
+      const switched = accountSwitched(c, me.id);
+      if (switched) return switched;
       const sessions = await getAuth(c).api.listDeviceSessions({ headers: c.req.raw.headers });
       const cur = sessions.find((s) => s.user.id === me.id);
       if (!cur) return err(c, "ログアウトできませんでした。もう一度お試しください", 409);

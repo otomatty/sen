@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { signupViaUi, waitForSynced } from "./helpers";
+import { devSignIn, dismissWelcome, signupViaUi, waitForSynced } from "./helpers";
 
 test("ユーザーボタンに名前と同期の状態が出て、メニューから個人設定を開ける", async ({ page }) => {
   const { email, ws } = await signupViaUi(page, { name: "山田 花子" });
@@ -70,4 +70,39 @@ test("画面の高さが低くても、メニューの最後の項目までキ�
   await page.keyboard.press("Home");
   await expect(page.getByTestId("user-menu-profile")).toBeFocused();
   await expect(page.getByTestId("user-menu-profile")).toBeInViewport({ ratio: 1 });
+});
+
+test("開いたあとでメニューが伸びても、ボタンの上に収まる", async ({ page }) => {
+  await signupViaUi(page, { name: "山田 花子" });
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+  await page.getByTestId("new-workspace-name").fill("次郎の会社");
+  await page.getByTestId("new-workspace-submit").click();
+  await expect(page.getByTestId("app")).toBeVisible();
+  await dismissWelcome(page);
+
+  await page.route("**/api/accounts", async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  try {
+    await page.reload();
+    await expect(page.getByTestId("app")).toBeVisible();
+    await page.getByTestId("user-menu").click();
+    await expect(page.locator('[data-testid^="user-menu-account-"]')).toHaveCount(2);
+    await expect(async () => {
+      const popover = await page.getByTestId("user-menu-popover").boundingBox();
+      const menu = await page.getByTestId("user-menu").boundingBox();
+      expect(popover).not.toBeNull();
+      expect(menu).not.toBeNull();
+      const bottom = popover!.y + popover!.height;
+      expect(bottom).toBeLessThanOrEqual(menu!.y);
+      expect(bottom).toBeLessThanOrEqual(page.viewportSize()!.height);
+    }).toPass();
+  } finally {
+    await page.unroute("**/api/accounts");
+  }
 });

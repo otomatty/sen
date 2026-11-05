@@ -122,6 +122,56 @@ test("画面と違うアカウントからのリクエストは止める", async
   expect(ok.status()).toBe(200);
 });
 
+test("画面と違うアカウントからの『このアカウントからログアウト』は止める", async ({ page }) => {
+  await signupViaUi(page);
+  const blocked = await page.request.post("/api/accounts/sign-out", {
+    data: {},
+    headers: { "x-sen-client": "1", "x-sen-user": "someone-else" },
+  });
+  expect(blocked.status()).toBe(409);
+  expect(((await blocked.json()) as { code?: string }).code).toBe("account-switched");
+  const me = await page.request.get("/api/me");
+  expect(((await me.json()) as { user: unknown }).user).not.toBeNull();
+});
+
+test("Google から戻ってきたように別のアカウントで開き直すと、ほかのタブも切り替わる", async ({ page }) => {
+  await signInTwoAccounts(page);
+  const other = await page.context().newPage();
+  await other.goto("/");
+  await expect(other.getByTestId("user-menu")).toContainText("佐藤 次郎");
+  // 通知の直後に読み込み直すと、ワークスペースを作る前に作成画面で止まる。メニューが出るまで /api/me を待つ
+  let releaseMe = () => {};
+  const meReady = new Promise<void>((resolve) => {
+    releaseMe = resolve;
+  });
+  await other.route("**/api/me", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/me") {
+      await route.continue();
+      return;
+    }
+    await meReady;
+    await route.continue();
+  });
+  // 定期的な差分の取得で 409 になって読み込み直す道をふさぎ、知らせだけで切り替わることを確かめる
+  await other.route("**/api/sync**", () => {});
+  try {
+    await devSignIn(page, { name: "鈴木 三郎" });
+    await page.goto("/").catch((err: unknown) => {
+      if (!String(err).includes("ERR_ABORTED")) throw err;
+    });
+    await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+    await page.getByTestId("new-workspace-name").fill("三郎の会社");
+    await page.getByTestId("new-workspace-submit").click();
+    await expect(page.getByTestId("app")).toBeVisible();
+    releaseMe();
+    await expect(other.getByTestId("user-menu")).toContainText("鈴木 三郎", { timeout: 15_000 });
+  } finally {
+    releaseMe();
+    await other.unroute("**/api/me");
+    await other.unroute("**/api/sync**");
+  }
+});
+
 test("別のタブに未送信の変更があるときは、切り替えない", async ({ page }) => {
   const { jiro } = await signInTwoAccounts(page);
   await waitForSynced(page);
