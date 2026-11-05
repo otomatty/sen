@@ -1,0 +1,259 @@
+<!-- bun run diagrams で docs/images/ に書き出す -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>課題のつながり</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --frame: #f7f7f9;
+    --frame-border: #d6d7dc;
+    --surface: #ffffff;
+    --card: #f7f7f9;
+    --line: #e7e7eb;
+    --text: #1b1c21;
+    --muted: #5c5f68;
+    --label: #787b84;
+    --accent: #5865e3;
+    --accent-text: #4b58d8;
+    --team: #f2f3fd;
+    --ws: #f0f0f3;
+    --pink: #c93d88;
+    --green: #1e8a5b;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111215;
+      --frame: #17181b;
+      --frame-border: #2d2f34;
+      --surface: #111215;
+      --card: #17181b;
+      --line: #212226;
+      --text: #e6e6e9;
+      --muted: #a1a3a9;
+      --label: #7d7f86;
+      --accent: #6470e8;
+      --accent-text: #a0a8ff;
+      --team: #1a1d2e;
+      --ws: #1c1d21;
+      --pink: #e255a1;
+      --green: #3fb27f;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 912px;
+    height: 432px;
+    margin: 0;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  body {
+    position: relative;
+    font-family: "Noto Sans JP", "Hiragino Sans", sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .panel {
+    position: absolute;
+    top: 36px;
+    width: 228px;
+    height: 360px;
+    border-radius: 12px;
+  }
+
+  .panel.team { left: 32px; background: var(--team); }
+  .panel.ws { left: 652px; background: var(--ws); }
+
+  .panel h2 {
+    position: absolute;
+    top: 15px;
+    left: 16px;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  .panel.team h2 { color: var(--accent-text); }
+  .panel.ws h2 { color: var(--label); }
+
+  .card {
+    position: absolute;
+    left: 13.5px;
+    width: 201px;
+    height: 57px;
+    background: var(--bg);
+    border: 1px solid var(--frame-border);
+    border-radius: 8px;
+    padding: 11px 16px 0;
+  }
+
+  .panel.team .card:nth-of-type(1) { top: 81.5px; }
+  .panel.team .card:nth-of-type(2) { top: 161.5px; }
+  .panel.team .card:nth-of-type(3) { top: 241.5px; }
+
+  .panel.ws .card:nth-of-type(1) { top: 41.5px; }
+  .panel.ws .card:nth-of-type(2) { top: 121.5px; }
+  .panel.ws .card:nth-of-type(3) { top: 201.5px; }
+  .panel.ws .card:nth-of-type(4) { top: 281.5px; }
+
+  .card.accent { border-color: var(--accent); }
+
+  .card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .card p {
+    margin-top: 7px;
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.2;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .issue {
+    position: absolute;
+    left: 355.5px;
+    top: 165.5px;
+    width: 201px;
+    height: 121px;
+    background: var(--bg);
+    border: 1px solid var(--label);
+    border-radius: 8px;
+    padding: 19px 18px 0;
+  }
+
+  .issue .key {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--accent-text);
+  }
+
+  .issue .name {
+    margin-top: 11px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+
+  .issue .meta {
+    margin-top: 11px;
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 20px;
+    color: var(--muted);
+  }
+
+  svg.links {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 912px;
+    height: 432px;
+  }
+
+  .pill {
+    position: absolute;
+    height: 23px;
+    border-radius: 12px;
+    border: 1px solid var(--frame-border);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    transform: translate(-50%, -50%);
+  }
+
+  .pill.accent { border-color: var(--accent); }
+</style>
+</head>
+<body>
+  <section class="panel team">
+    <h2>チームの中から選ぶ</h2>
+    <div class="card accent">
+      <h3>チーム</h3>
+      <p>デフォルト（DEF）</p>
+    </div>
+    <div class="card">
+      <h3>ステータス</h3>
+      <p>そのチームのワークフローから</p>
+    </div>
+    <div class="card">
+      <h3>サイクル</h3>
+      <p>そのチームのサイクルから</p>
+    </div>
+  </section>
+
+  <section class="panel ws">
+    <h2>ワークスペース全体から選ぶ</h2>
+    <div class="card">
+      <h3>プロジェクト</h3>
+      <p>どのチームのものでも</p>
+    </div>
+    <div class="card">
+      <h3>ラベル</h3>
+      <p>バグ・機能・改善 など</p>
+    </div>
+    <div class="card">
+      <h3>担当者</h3>
+      <p>ワークスペースのメンバー</p>
+    </div>
+    <div class="card">
+      <h3>親の課題</h3>
+      <p>別のチームの課題でもよい</p>
+    </div>
+  </section>
+
+  <svg class="links" viewBox="0 0 912 432" aria-hidden="true">
+    <g fill="none" stroke-width="1.25" stroke-linecap="butt">
+      <line stroke="var(--accent)" x1="355.50" y1="196.00" x2="254.90" y2="149.85" />
+      <line stroke="var(--label)" x1="355.50" y1="226.00" x2="255.00" y2="226.00" />
+      <line stroke="var(--label)" x1="355.50" y1="256.00" x2="254.90" y2="302.15" />
+      <line stroke="var(--label)" x1="556.50" y1="190.00" x2="658.10" y2="111.88" />
+      <line stroke="var(--label)" x1="556.50" y1="214.00" x2="656.30" y2="188.49" />
+      <line stroke="var(--label)" x1="556.50" y1="238.00" x2="656.30" y2="263.51" />
+      <line stroke="var(--label)" x1="556.50" y1="262.00" x2="658.10" y2="340.12" />
+    </g>
+    <polygon fill="var(--accent)" points="247.86,146.63 255.89,145.91 252.56,153.18" />
+    <polygon fill="var(--label)" points="248.00,226.00 255.00,222.00 255.00,230.00" />
+    <polygon fill="var(--label)" points="247.86,305.37 252.56,298.82 255.89,306.09" />
+    <polygon fill="var(--label)" points="664.31,106.92 661.21,114.36 656.33,108.02" />
+    <polygon fill="var(--label)" points="664.05,186.37 658.26,191.99 656.27,184.24" />
+    <polygon fill="var(--label)" points="664.05,265.63 656.27,267.76 658.26,260.01" />
+    <polygon fill="var(--label)" points="664.31,345.08 656.33,343.98 661.21,337.64" />
+  </svg>
+
+  <div class="issue">
+    <div class="key">DEF-12</div>
+    <div class="name">ログイン画面を作る</div>
+    <div class="meta">ステータス：進行中<br>サブ課題 2 件</div>
+  </div>
+
+  <div class="pill accent" style="left:301px;top:171px">必ず 1 つ</div>
+  <div class="pill" style="left:301px;top:226px">1 つ</div>
+  <div class="pill" style="left:301px;top:281px">0〜1 つ</div>
+  <div class="pill" style="left:611px;top:148px">0〜1 つ</div>
+  <div class="pill" style="left:611px;top:200px">いくつでも</div>
+  <div class="pill" style="left:611px;top:252px">0〜1 人</div>
+  <div class="pill" style="left:611px;top:304px">0〜1 つ</div>
+</body>
+</html>

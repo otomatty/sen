@@ -4,8 +4,8 @@ import { devSignIn, dismissWelcome, seedDemo, signupViaUi } from "./helpers";
 test("初めてログインするとワークスペースを作る画面になり、サンプル課題入りのワークスペースが作られる", async ({ page }) => {
   await signupViaUi(page, { name: "鈴木 次郎", workspace: "テスト株式会社" });
   await expect(page.getByTestId("sidebar")).toContainText("テスト株式会社");
-  await expect(page.getByTestId("sidebar")).toContainText("鈴木 次郎のチーム");
-  await page.getByTestId("nav-team-ENG-issues").click();
+  await expect(page.getByTestId("sidebar")).toContainText("デフォルト");
+  await page.getByTestId("nav-team-DEF-issues").click();
   await expect(page.getByTestId("issue-row").filter({ hasText: "Sen へようこそ" })).toBeVisible();
   await expect(page.getByTestId("issue-row")).toHaveCount(9);
 });

@@ -126,7 +126,10 @@ export function createApp() {
     const body = await readJson<{ name?: string }>(c);
     const name = (body.name ?? "").trim();
     if (!name || name.length > 60) return err(c, "ワークスペース名を60文字以内で入力してください");
-    const ws = await createWorkspace(c.env.DB, { name, ownerId: c.get("user").id, ownerName: c.get("user").name });
+    const user = c.get("user");
+    // どのワークスペースにも所属していない＝初回。画面側（NewWorkspacePage の firstTime）と同じ条件
+    const member = await first<{ x: number }>(c.env.DB, "SELECT 1 AS x FROM members WHERE user_id = ? LIMIT 1", user.id);
+    const ws = await createWorkspace(c.env.DB, { name, ownerId: user.id, withSamples: !member });
     return c.json({ ok: true, workspaceKey: ws.urlKey });
   });
 
