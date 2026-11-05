@@ -102,3 +102,6 @@ export const API_TOKEN_CLIENTS: { value: ApiTokenClient; label: string }[] = [
 export function apiTokenClientLabel(c: ApiTokenClient): string {
   return API_TOKEN_CLIENTS.find((x) => x.value === c)?.label ?? "その他";
 }
+
+// GitHub の Issue 本文・コメントの上限に合わせる。JS の string.length（UTF-16）で数えるので、GitHub より厳しいか同じになる
+export const MARKDOWN_MAX_LENGTH = 65_536;
