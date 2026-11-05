@@ -54,11 +54,11 @@ test("見出しは h6 まで、表は table、空文字はそのまま", () => {
 test("HTML から Markdown へおおむね戻る", () => {
   const md = ["## 見出し", "", "- 親", "  - 子", "", "- [x] 済み", "- [ ] 未", "", "```ts", "const a = 1;", "```", "", "[Sen](https://example.com)"].join("\n");
   const back = htmlToMarkdown(markdownToHtml(md));
-  expect(back).toBe(["## 見出し", "- 親", "  - 子", "- [x] 済み", "- [ ] 未", "", "```ts", "const a = 1;", "```", "", "[Sen](https://example.com)"].join("\n"));
+  expect(back).toBe(["## 見出し", "- 親", "  - 子", "* [x] 済み", "* [ ] 未", "", "```ts", "const a = 1;", "```", "", "[Sen](https://example.com)"].join("\n"));
   expect(back).toContain("## 見出し");
   expect(back).toContain("  - 子");
-  expect(back).toContain("- [x] 済み");
-  expect(back).toContain("- [ ] 未");
+  expect(back).toContain("* [x] 済み");
+  expect(back).toContain("* [ ] 未");
   expect(back).toContain("```ts\nconst a = 1;\n```");
   expect(back).toContain("[Sen](https://example.com)");
 });
@@ -364,6 +364,62 @@ test("隣り合う同じ書式は1つにまとまり、表示の文字と書式�
   expect(htmlVisibleText(mixed)).toBe("ab");
   expect(mixed).toContain("<em>");
   expect(mixed).toContain("<strong>");
+});
+
+function olStarts(html: string): string[] {
+  return [...html.matchAll(/<ol\b[^>]*>/gi)].map((m) => /\bstart="(\d+)"/.exec(m[0])?.[1] ?? "1");
+}
+
+test("続けて並んだリストは別々のまま、番号も残る", () => {
+  const cases = [
+    "<ol><li><p>a</p></li></ol><ol><li><p>b</p></li></ol>",
+    '<ol><li><p>a</p></li></ol><ol start="3"><li><p>b</p></li></ol>',
+    "<ul><li><p>a</p></li></ul><ul><li><p>b</p></li></ul>",
+    "<ol><li><p>a</p></li></ol><ol><li><p>b</p></li></ol><ol><li><p>c</p></li></ol>",
+    "<ul><li><p>a</p></li></ul><ol><li><p>b</p></li></ol>",
+    '<ul data-type="taskList"><li data-checked="false" data-type="taskItem"><label><input type="checkbox"></label><div><p>a</p></div></li></ul><ul data-type="taskList"><li data-checked="true" data-type="taskItem"><label><input type="checkbox" checked="checked"></label><div><p>b</p></div></li></ul>',
+  ];
+  for (const html of cases) {
+    const md = htmlToMarkdown(html);
+    const back = markdownToHtml(md);
+    expect(tagCount(back, /<ol\b/gi), `${html}\n${md}\n${back}`).toBe(tagCount(html, /<ol\b/gi));
+    expect(tagCount(back, /<ul\b/gi), `${html}\n${md}\n${back}`).toBe(tagCount(html, /<ul\b/gi));
+    expect(olStarts(back), `${html}\n${md}\n${back}`).toEqual(olStarts(html));
+    expect(htmlVisibleText(back), `${html}\n${md}`).toBe(htmlVisibleText(html));
+    const checked = htmlToMarkdownChecked(html);
+    expect(checked.fallback, html).toBe(false);
+    expect(checked.markdown, html).toBe(md);
+  }
+
+  expect(htmlToMarkdown("<ol><li><p>a</p></li></ol><ol><li><p>b</p></li></ol>")).toBe("1. a\n1) b");
+  expect(htmlToMarkdown('<ol><li><p>a</p></li></ol><ol start="3"><li><p>b</p></li></ol>')).toBe("1. a\n\n3) b");
+  expect(htmlToMarkdown("<ul><li><p>a</p></li></ul><ul><li><p>b</p></li></ul>")).toBe("- a\n* b");
+  expect(htmlToMarkdown("<ol><li><p>a</p></li></ol><ol><li><p>b</p></li></ol><ol><li><p>c</p></li></ol>")).toBe("1. a\n1) b\n1. c");
+  expect(htmlToMarkdown("<ul><li><p>a</p></li></ul><ol><li><p>b</p></li></ol>")).toBe("- a\n1. b");
+
+  const nested = "<ul><li><p>親</p><ul><li><p>子</p></li></ul></li></ul><ul><li><p>次</p></li></ul>";
+  const nestedMd = htmlToMarkdown(nested);
+  expect(nestedMd).toBe("- 親\n  - 子\n* 次");
+  const nestedBack = markdownToHtml(nestedMd);
+  expect(tagCount(nestedBack, /<ul\b/gi)).toBe(tagCount(nested, /<ul\b/gi));
+  expect(htmlVisibleText(nestedBack)).toBe(htmlVisibleText(nested));
+
+  const stars = "<ul><li><p>*強調*</p></li></ul><ul><li><p>***</p></li></ul>";
+  const starsMd = htmlToMarkdown(stars);
+  const starsBack = markdownToHtml(starsMd);
+  expect(starsMd).toBe("- \\*強調\\*\n* \\*\\*\\*");
+  expect(starsBack).not.toContain("<em>");
+  expect(starsBack).not.toContain("<hr");
+  expect(htmlVisibleText(starsBack)).toBe("*強調* ***");
+  expect(tagCount(starsBack, /<ul\b/gi)).toBe(2);
+});
+
+test("深い入れ子の HTML は例外にせず平文にする", () => {
+  for (const html of ["<div>".repeat(20000) + "x", "<b>".repeat(20000) + "x"]) {
+    const checked = htmlToMarkdownChecked(html);
+    expect(checked.fallback).toBe(true);
+    expect(markdownToText(checked.markdown)).toBe("x");
+  }
 });
 
 test("直らない行内の入れ子は書式を外し、見える文字だけ残す", () => {
