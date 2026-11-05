@@ -82,3 +82,35 @@ test("画面を開いたまま別の場所で参加したワークスペース�
   await page.getByTestId("workspace-menu").click();
   await expect(page.locator(".menu-item", { hasText: "三つ目のワークスペース に切り替え" })).toBeVisible();
 });
+
+test("初めて作るワークスペースにだけサンプルが入り、2 つ目以降はチーム「デフォルト」とラベルだけになる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "はじめてのワークスペース" });
+
+  const firstRes = await page.request.get(`/api/bootstrap?ws=${ws}`);
+  expect(firstRes.ok()).toBeTruthy();
+  const first = await firstRes.json();
+  const labelNames = (labels: { name: string }[]) => labels.map((label) => label.name).sort();
+  expect(first.teams).toHaveLength(1);
+  expect(first.teams[0]).toMatchObject({ name: "デフォルト", key: "DEF" });
+  expect(first.issues).toHaveLength(9);
+  expect(first.projects).toHaveLength(1);
+  expect(first.cycles).toHaveLength(2);
+  expect(labelNames(first.labels)).toEqual(["バグ", "機能", "改善"].sort());
+
+  const created = await page.request.post("/api/workspaces", {
+    data: { name: "ふたつ目のワークスペース" },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const key = ((await created.json()) as { workspaceKey: string }).workspaceKey;
+
+  const secondRes = await page.request.get(`/api/bootstrap?ws=${key}`);
+  expect(secondRes.ok()).toBeTruthy();
+  const second = await secondRes.json();
+  expect(second.teams).toHaveLength(1);
+  expect(second.teams[0]).toMatchObject({ name: "デフォルト", key: "DEF" });
+  expect(second.issues).toHaveLength(0);
+  expect(second.projects).toHaveLength(0);
+  expect(second.cycles).toHaveLength(0);
+  expect(labelNames(second.labels)).toEqual(["バグ", "機能", "改善"].sort());
+});

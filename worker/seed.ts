@@ -31,27 +31,13 @@ const p = (...xs: string[]) => xs.join("\n\n");
 const ul = (...xs: string[]) => xs.map((x) => `- ${x}`).join("\n");
 const h = (x: string) => `### ${x}`;
 
-const TEAM_NAME_LIMIT = 60;
-const TEAM_NAME_SUFFIX = "のチーム";
+/** どのワークスペースでも最初に作るチーム */
+const DEFAULT_TEAM = { name: "デフォルト", key: "DEF", color: "#6470e8" } as const;
 
-/** 作成者の表示名から初期チーム名を作る。空なら「マイチーム」。60文字を超えるときは名前側をコードポイント単位で切り詰める。 */
-function defaultTeamName(ownerName: string): string {
-  const name = ownerName.trim();
-  if (!name) return "マイチーム";
-  // cleanText は UTF-16 の length で 60 文字を見る。サロゲートペアの途中では切らない。
-  const budget = TEAM_NAME_LIMIT - TEAM_NAME_SUFFIX.length;
-  let kept = "";
-  for (const ch of Array.from(name)) {
-    if (kept.length + ch.length > budget) break;
-    kept += ch;
-  }
-  return kept + TEAM_NAME_SUFFIX;
-}
-
-/** 新しいワークスペースを作り、初回体験用のサンプル（使い方を学べる課題）を入れる */
+/** 新しいワークスペースを作る。チーム「デフォルト」とラベルは常に作り、withSamples のときだけ使い方のサンプルを入れる */
 export async function createWorkspace(
   db: Db,
-  opts: { name: string; ownerId: string; ownerName: string; urlKey?: string },
+  opts: { name: string; ownerId: string; urlKey?: string; withSamples: boolean },
 ): Promise<{ id: string; urlKey: string }> {
   const now = Date.now();
   const wsId = crypto.randomUUID();
@@ -71,13 +57,33 @@ export async function createWorkspace(
   ]);
 
   const teamId = crypto.randomUUID();
-  const { stateIds } = await insertTeam(db, wsId, { id: teamId, name: defaultTeamName(opts.ownerName), key: "ENG", color: "#6470e8" }, now);
+  const { stateIds } = await insertTeam(db, wsId, { id: teamId, ...DEFAULT_TEAM }, now);
 
   const labels = {
     bug: crypto.randomUUID(),
     feature: crypto.randomUUID(),
     improvement: crypto.randomUUID(),
   };
+  await batch(db, [
+    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, 'バグ', '#eb5757', ?, ?)", labels.bug, wsId, now, now),
+    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, '機能', '#a76be8', ?, ?)", labels.feature, wsId, now, now),
+    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, '改善', '#4ea7fc', ?, ?)", labels.improvement, wsId, now, now),
+  ]);
+
+  if (opts.withSamples) await insertOnboardingSamples(db, wsId, teamId, stateIds, labels, opts.ownerId, now);
+  return { id: wsId, urlKey };
+}
+
+/** 初めて作るワークスペースに入れる、使い方を学べるサンプル（プロジェクト・サイクル・課題と作成の履歴） */
+async function insertOnboardingSamples(
+  db: Db,
+  wsId: string,
+  teamId: string,
+  stateIds: Record<string, string>,
+  labels: { bug: string; feature: string; improvement: string },
+  ownerId: string,
+  now: number,
+): Promise<void> {
   const projectId = crypto.randomUUID();
   const today = todayYmd();
   const cycleStart = mondayOf(today);
@@ -85,9 +91,6 @@ export async function createWorkspace(
   const cycle2 = crypto.randomUUID();
 
   const statements: D1PreparedStatement[] = [
-    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, 'バグ', '#eb5757', ?, ?)", labels.bug, wsId, now, now),
-    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, '機能', '#a76be8', ?, ?)", labels.feature, wsId, now, now),
-    stmt(db, "INSERT INTO labels (id, workspace_id, name, color, created_at, updated_at) VALUES (?, ?, '改善', '#4ea7fc', ?, ?)", labels.improvement, wsId, now, now),
     stmt(
       db,
       `INSERT INTO projects (id, workspace_id, name, description, status, lead_id, team_ids, start_date, target_date, color, icon, sort_order, created_at, updated_at)
@@ -96,7 +99,7 @@ export async function createWorkspace(
       wsId,
       "Sen をチームに導入する",
       p("チームの課題管理を Sen に移行するためのプロジェクトです。課題をこのプロジェクトに紐づけると、進捗が自動で集計されます。"),
-      opts.ownerId,
+      ownerId,
       JSON.stringify([teamId]),
       cycleStart,
       addDays(cycleStart, 27),
@@ -259,12 +262,12 @@ export async function createWorkspace(
         it.desc,
         stateId,
         it.priority,
-        it.assign ? opts.ownerId : null,
-        opts.ownerId,
+        it.assign ? ownerId : null,
+        ownerId,
         it.project ? projectId : null,
         it.cycle ?? null,
         JSON.stringify((it.labels ?? []).map((k) => labels[k as keyof typeof labels])),
-        JSON.stringify([opts.ownerId]),
+        JSON.stringify([ownerId]),
         it.estimate ?? null,
         i,
         t,
@@ -278,14 +281,13 @@ export async function createWorkspace(
         crypto.randomUUID(),
         wsId,
         id,
-        opts.ownerId,
+        ownerId,
         t,
       ),
     );
   });
   statements.push(stmt(db, "UPDATE teams SET issue_count = ? WHERE id = ?", issues.length, teamId));
   await batch(db, statements);
-  return { id: wsId, urlKey };
 }
 
 // ---------------------------------------------------------------------------

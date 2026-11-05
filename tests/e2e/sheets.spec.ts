@@ -609,7 +609,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
     if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
     const data = (await bootRes.json()) as BootstrapPayload;
-    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    const team = data.teams.find((item) => item.key === "DEF") ?? data.teams[0];
     if (!team) throw new Error("チームがありません");
     completedStateId = stateId(data, team.id, "completed", "完了");
     const startedId = stateId(data, team.id, "started", "進行中");
@@ -761,7 +761,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
     if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
     const data = (await bootRes.json()) as BootstrapPayload;
-    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    const team = data.teams.find((item) => item.key === "DEF") ?? data.teams[0];
     if (!team) throw new Error("チームがありません");
     const project = data.projects.find((item) => item.name === "シート連携テスト");
     if (!project) throw new Error("プロジェクトがありません");
@@ -792,7 +792,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
     if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
     const data = (await bootRes.json()) as BootstrapPayload;
-    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    const team = data.teams.find((item) => item.key === "DEF") ?? data.teams[0];
     if (!team) throw new Error("チームがありません");
     const project = data.projects.find((item) => item.name === "シート連携テスト");
     if (!project) throw new Error("プロジェクトがありません");
@@ -827,7 +827,7 @@ test.describe.serial("模擬 Google サーバーでの反映", () => {
     const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
     if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
     const data = (await bootRes.json()) as BootstrapPayload;
-    const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+    const team = data.teams.find((item) => item.key === "DEF") ?? data.teams[0];
     if (!team) throw new Error("チームがありません");
     const project = data.projects.find((item) => item.name === "シート連携テスト");
     if (!project) throw new Error("プロジェクトがありません");

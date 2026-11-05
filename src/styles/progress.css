@@ -1,0 +1,725 @@
+/* 進捗（活動一覧・WBS・タイムライン）。色はテーマの変数だけを使う */
+
+.progress-page {
+  min-width: 0;
+  max-width: 100%;
+}
+.progress-body {
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.progress-live {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.progress-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px 0;
+}
+.progress-stat {
+  flex: 1 1 160px;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px 10px;
+}
+.progress-stat-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.progress-stat-value {
+  margin-top: 2px;
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1.3;
+}
+.progress-stat-suffix {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.progress-stat-hint {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.progress-stat.is-danger .progress-stat-value {
+  color: var(--danger);
+}
+.progress-stat.is-warn .progress-stat-value {
+  color: var(--warn);
+}
+
+.progress-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px;
+}
+.progress-filter-count {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.chip-btn.on .progress-filter-count {
+  color: var(--accent-text);
+}
+
+.progress-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.progress-table.table {
+  padding: 0 0 8px;
+  min-width: 680px;
+}
+.progress-table .table-head,
+.progress-table .table-row {
+  grid-template-columns: minmax(180px, 2.2fr) minmax(168px, 1.5fr) minmax(168px, 1.3fr) 112px;
+  height: auto;
+  min-height: 44px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.progress-table .table-row {
+  cursor: default;
+}
+.progress-activity-link {
+  color: inherit;
+  min-width: 0;
+}
+.progress-activity-link:hover b {
+  color: var(--accent-text);
+}
+
+.progress-due {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.progress-unset {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-3);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.progress-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.progress-rate .progress-bar {
+  width: 64px;
+  flex-shrink: 0;
+}
+.progress-rate-text {
+  white-space: nowrap;
+}
+.progress-rate-frac {
+  color: var(--text-secondary);
+}
+/* プロジェクト表向けの狭い画面ルールが、進捗の列まで隠さないようにする */
+.progress-table .table-head > :nth-child(n + 3),
+.progress-table .table-row > :nth-child(n + 3) {
+  display: revert;
+}
+
+.progress-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.progress-badge[data-status="期限超過"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.progress-badge[data-status="保留あり"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+.progress-badge[data-status="進行中"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+.progress-badge[data-status="未着手"] {
+  color: var(--text-secondary);
+  background: var(--panel-3);
+  border-color: var(--border);
+}
+.progress-badge[data-status="完了"] {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.progress-badge[data-status="タスク未登録"] {
+  color: var(--text-secondary);
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.progress-empty {
+  margin: 8px 16px 4px;
+  color: var(--text-secondary);
+}
+.progress-note {
+  margin: 0;
+  padding: 8px 16px 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.wbs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+.wbs-toolbar .chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.wbs-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.wbs-toolbar-note {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.progress-scroll:has(.wbs-sheet) {
+  container-type: inline-size;
+}
+.wbs-sheet {
+  /* 列の最小幅の合計。1280px（サイドバーあり）ではこの幅を超え、余りは作業列に入る */
+  min-width: 934px;
+  padding-bottom: 12px;
+}
+.wbs-head,
+.wbs-row {
+  display: grid;
+  grid-template-columns: 80px minmax(220px, 1fr) 118px 84px 84px 112px 84px 72px;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px;
+  min-height: 36px;
+}
+.wbs-head {
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+a.wbs-row {
+  color: inherit;
+  text-decoration: none;
+  min-height: 40px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+a.wbs-row:hover,
+a.wbs-row:focus-visible {
+  background: var(--hover);
+}
+a.wbs-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.wbs-group-head {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100cqi;
+  max-width: 100cqi;
+  box-sizing: border-box;
+  min-height: 42px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.wbs-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.wbs-project-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+.wbs-project-link:hover {
+  color: var(--accent-text);
+}
+.wbs-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wbs-next-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wbs-empty {
+  margin: 0;
+  padding: 10px 16px 12px 44px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.wbs-process,
+.wbs-work,
+.wbs-assignee,
+.wbs-state,
+.wbs-priority {
+  min-width: 0;
+}
+.wbs-work,
+.wbs-assignee,
+.wbs-state,
+.wbs-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.wbs-id {
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.wbs-title,
+.wbs-assignee .truncate,
+.wbs-state .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wbs-title {
+  flex: 1;
+  min-width: 0;
+}
+.wbs-due.is-overdue {
+  font-weight: 650;
+}
+
+.progress-timeline {
+  min-width: 0;
+  max-width: 100%;
+}
+.timeline-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 16px 0;
+}
+.timeline-toolbar .wbs-toggle {
+  margin-left: auto;
+}
+.timeline-zooms {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.timeline-scroll {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: 8px;
+}
+.timeline-sheet {
+  --timeline-label: 272px;
+  --timeline-chart: 640px;
+  --timeline-week: 70px;
+  position: relative;
+  width: calc(var(--timeline-label) + var(--timeline-chart) + 104px);
+}
+.timeline-today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--danger);
+  z-index: 2;
+  pointer-events: none;
+}
+.timeline-scale,
+.timeline-row,
+.timeline-group-head {
+  display: flex;
+  align-items: stretch;
+}
+.timeline-scale {
+  position: relative;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.timeline-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  flex: 0 0 var(--timeline-label);
+  width: var(--timeline-label);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--panel);
+}
+.timeline-corner {
+  z-index: 4;
+  align-self: stretch;
+}
+.timeline-scale-body {
+  flex: 0 0 var(--timeline-chart);
+  width: var(--timeline-chart);
+}
+.timeline-months,
+.timeline-weeks {
+  display: flex;
+}
+.timeline-month,
+.timeline-week {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  overflow: clip;
+  white-space: nowrap;
+  border-left: 1px solid var(--border);
+  padding: 1px 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.timeline-month {
+  height: 22px;
+  color: var(--text);
+  font-weight: 600;
+}
+.timeline-month-label {
+  position: sticky;
+  left: var(--timeline-label);
+}
+.timeline-corner {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.timeline-week {
+  height: 20px;
+}
+.timeline-week-label {
+  position: sticky;
+  left: var(--timeline-label);
+}
+.timeline-group-head {
+  min-height: 40px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.timeline-group-head .timeline-label {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: min(480px, calc(100vw - 80px));
+  background: var(--panel-2);
+}
+.timeline-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+.timeline-project:hover {
+  color: var(--accent-text);
+}
+.timeline-rate {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.timeline-row {
+  min-height: 40px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+a.timeline-label:hover,
+.timeline-row:hover .timeline-label {
+  background: var(--panel-2);
+}
+a.timeline-label:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.timeline-id {
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.timeline-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-track {
+  position: relative;
+  flex: 0 0 var(--timeline-chart);
+  width: var(--timeline-chart);
+  background-image: linear-gradient(to right, color-mix(in srgb, var(--border) 85%, transparent) 1px, transparent 1px);
+  background-size: var(--timeline-week) 100%;
+}
+.timeline-bar {
+  position: absolute;
+  top: 50%;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent);
+  scroll-margin-left: calc(var(--timeline-label) + 16px);
+  z-index: 1;
+}
+.timeline-bar.is-open {
+  -webkit-mask-image: linear-gradient(90deg, #000 28%, transparent);
+  mask-image: linear-gradient(90deg, #000 28%, transparent);
+}
+.timeline-bar.is-overdue {
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+/* 期間の外まで続く棒は、切れた端を矢印とぼかしで示す */
+.timeline-bar.is-clip-start {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%);
+}
+.timeline-bar.is-clip-end {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%);
+}
+.timeline-bar.is-clip-start.is-clip-end {
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+}
+.timeline-bar.is-clip-start::before,
+.timeline-bar.is-clip-end::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  pointer-events: none;
+}
+.timeline-bar.is-clip-start::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--panel), transparent);
+}
+.timeline-bar.is-clip-end::after {
+  right: 0;
+  background: linear-gradient(90deg, transparent, var(--panel));
+}
+.timeline-bar:focus-visible,
+.timeline-milestone:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.timeline-milestone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-0.45em);
+  color: color-mix(in srgb, var(--mark, var(--text)) 40%, var(--text));
+  white-space: nowrap;
+  z-index: 1;
+  padding: 0 2px;
+  scroll-margin-left: calc(var(--timeline-label) + 16px);
+}
+.timeline-milestone.is-overdue,
+.timeline-milestone.is-overdue .timeline-milestone-label {
+  color: var(--danger);
+}
+.timeline-milestone-mark {
+  font-size: 13px;
+  line-height: 1;
+}
+.timeline-milestone-label {
+  font-size: 11px;
+}
+.timeline-undated {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: calc(100vw - 48px);
+  height: 32px;
+  margin: 4px 10px 8px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--panel);
+}
+.timeline-undated:hover {
+  color: var(--accent-text);
+  background: var(--hover);
+}
+.timeline-undated:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 10px 16px 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.timeline-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.timeline-legend-bar {
+  width: 28px;
+  height: 10px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent);
+}
+.timeline-legend-bar.is-open {
+  -webkit-mask-image: linear-gradient(90deg, #000 28%, transparent);
+  mask-image: linear-gradient(90deg, #000 28%, transparent);
+}
+.timeline-legend-diamond {
+  color: color-mix(in srgb, var(--mark, var(--text)) 40%, var(--text));
+  font-size: 13px;
+  line-height: 1;
+}
+.timeline-legend-today {
+  width: 2px;
+  height: 14px;
+  background: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .progress-page .page-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: calc(100% - 72px);
+  }
+  .progress-live {
+    max-width: 11em;
+    text-align: right;
+  }
+  .wbs-toolbar-note {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .progress-table.table {
+    min-width: 0;
+    width: 100%;
+  }
+  .progress-table .table-head {
+    display: none;
+  }
+  .progress-table .table-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name status"
+      "due rate";
+    height: auto;
+    min-height: 0;
+    row-gap: 6px;
+    column-gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+  }
+  .progress-table .table-row > :nth-child(1) {
+    grid-area: name;
+    min-width: 0;
+  }
+  .progress-table .table-row > :nth-child(2) {
+    grid-area: due;
+    min-width: 0;
+  }
+  .progress-table .table-row > :nth-child(3) {
+    grid-area: rate;
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .progress-table .table-row > :nth-child(4) {
+    grid-area: status;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .progress-table .progress-rate .progress-bar {
+    width: 40px;
+  }
+  .timeline-sheet {
+    --timeline-label: 132px;
+  }
+  .timeline-group-head .timeline-label,
+  .timeline-undated {
+    max-width: calc(100vw - 36px);
+  }
+}

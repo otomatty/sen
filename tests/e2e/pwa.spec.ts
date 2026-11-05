@@ -55,7 +55,7 @@ test("インストールに必要なマニフェストとアイコンがそろ�
 
 test("遅れて読み込む画面も保存されるので、初めて開く画面もオフラインで開ける", async ({ page, context }) => {
   const { ws } = await signupViaUi(page);
-  await page.goto(`/${ws}/team/ENG/all`);
+  await page.goto(`/${ws}/team/DEF/all`);
   await expect(page.getByTestId("issue-row").first()).toBeVisible();
 
   // エディタ・ボードの JS とフォントも、インストールの時点でまとめて保存される
@@ -73,7 +73,7 @@ test("遅れて読み込む画面も保存されるので、初めて開く画�
 
   await context.setOffline(true);
   // まだ開いていない画面へ、URL を直接開いて移動する
-  await page.goto(`/${ws}/issue/ENG-2`);
+  await page.goto(`/${ws}/issue/DEF-2`);
   await expect(page.getByTestId("issue-detail")).toBeVisible();
   await expect(page.getByTestId("issue-description")).toBeVisible();
   await expect(page.getByTestId("sync-status")).toContainText("オフライン", { timeout: 20_000 });
@@ -141,9 +141,10 @@ test.afterEach(() => {
 
 /**
  * 新しい版を公開する。drop を指定すると、画面で使っている JS / CSS を含まない版（= 画面のコードが古くなった）にする。
- * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする
+ * broken を指定すると、取得できないファイルを含む版（= インストールに失敗する）にする。
+ * hold を指定すると、ファイルを保存し終えたところでインストールを止めておく版にする（releaseInstall で再開する）
  */
-async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean }) {
+async function publishNextVersion(page: Page, opts: { version: string; drop?: "js" | "css"; broken?: boolean; hold?: boolean }) {
   originalSw ??= readFileSync(SW_FILE, "utf8");
   let source = originalSw.replace(/const VERSION = "\w+";/, `const VERSION = "${opts.version}";`);
   if (opts.broken) source = source.replace("const PRECACHE = [", 'const PRECACHE = [\n  "/api/__missing",');
@@ -154,6 +155,15 @@ async function publishNextVersion(page: Page, opts: { version: string; drop?: "j
     }, opts.drop);
     expect(source).toContain(`"${file}",`);
     source = source.replace(`"${file}",`, "");
+  }
+  if (opts.hold) {
+    const addAll = /^(\s*)(await cache\.addAll\(.*\);)$/m;
+    expect(source).toMatch(addAll);
+    source = source.replace(addAll, "$1$2\n$1await installHeld;");
+    source = `let releaseHeld;
+const installHeld = new Promise((resolve) => (releaseHeld = resolve));
+self.addEventListener("message", (event) => event.data?.type === "e2e-release-install" && releaseHeld());
+${source}`;
   }
   writeFileSync(SW_FILE, source);
   // vite preview は起動時の中身で ETag を返すので、ブラウザの HTTP キャッシュを消して書き換えた sw.js を取りに行かせる
@@ -181,6 +191,9 @@ const installedAndWaiting = (page: Page) =>
     const reg = await navigator.serviceWorker.getRegistration();
     return !reg?.installing && !!reg?.waiting;
   });
+/** hold で止めておいたインストールを再開する */
+const releaseInstall = (page: Page) =>
+  page.evaluate(async () => (await navigator.serviceWorker.getRegistration())!.installing!.postMessage({ type: "e2e-release-install" }));
 
 /** サービスワーカーが有効になった状態で、課題の一覧を開いておく */
 async function openInstalledApp(page: Page) {
@@ -253,8 +266,8 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => hasWaiting(page)).toBe(true);
   await publishNextVersion(page, { version: "c", drop: "js" });
   await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
-  // sen-c のキャッシュはインストールの始めに作られるので、この時点ではまだ b の案内が出ている。
-  // そのまま押すと b に切り替えを頼んでしまうため、c が待機中になるまで待つ
+  // sen-c のキャッシュはインストールの始めに作られるので、c のインストールが終わって待機中になってから押す。
+  // インストールの途中で押す場合は、次のテストで確かめる
   await expect.poll(() => installedAndWaiting(page)).toBe(true);
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
@@ -269,6 +282,31 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => settled(page)).toBe(true);
   await publishNextVersion(page, { version: "d" });
   await expect.poll(() => cacheNames(page)).toEqual(["sen-c", "sen-d"]);
+});
+
+test("さらに新しい版のインストール中に更新を押しても、その新しい版に切り替えて読み込み直す", async ({ page }) => {
+  await openInstalledApp(page);
+  const [original] = await cacheNames(page);
+
+  // 待機中の版（b）の案内が出ているところへ、さらに新しい版（c）を公開する。
+  // c はファイルを保存し終えたところでインストールを止めておき、押した時点では確実にインストール中にする
+  await publishNextVersion(page, { version: "b", drop: "js" });
+  await expect.poll(() => hasWaiting(page)).toBe(true);
+  const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
+  await expect(notice).toBeVisible();
+  await publishNextVersion(page, { version: "c", drop: "js", hold: true });
+  // c のファイルの保存が終わり、インストールの最後で止まるまで待つ（addAll はすべて取れてからまとめて保存する）
+  await expect
+    .poll(() => page.evaluate(async () => (await caches.has("sen-c")) && (await (await caches.open("sen-c")).keys()).length > 0))
+    .toBe(true);
+  const reloaded = page.waitForEvent("load");
+  await notice.getByRole("button", { name: "更新" }).click();
+  // 押したあと、切り替え先を決める前（送信を待っている間）に c のインストールを終わらせる。保存は済んでいるので、回線の速さによらずすぐ待機に入る
+  await releaseInstall(page);
+  // 置き換わって使われなくなった b ではなく、c に切り替わって読み込み直す（止まったまま失敗しない）
+  await reloaded;
+  await expect(page.getByTestId("app")).toBeVisible();
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-c"]);
 });
 
 test("以前の版に戻したあとも、直前まで使っていた版を残す", async ({ page }) => {
@@ -313,7 +351,7 @@ test("以前のサービスワーカー（sen-shell-v1）の保存内容は、�
 
 test("送れない変更があるときは更新せず、操作できる状態に戻す", async ({ page, context }) => {
   const ws = await openInstalledApp(page);
-  await page.goto(`/${ws}/issue/ENG-2`);
+  await page.goto(`/${ws}/issue/DEF-2`);
   await expect(page.getByTestId("issue-detail")).toBeVisible();
   await waitForSynced(page);
   await publishNextVersion(page, { version: "next", drop: "js" });

@@ -306,6 +306,7 @@ export function EmptyState({
   action,
   icon,
   children,
+  testId,
 }: {
   title: string;
   description?: ReactNode;
@@ -313,9 +314,10 @@ export function EmptyState({
   icon?: ReactNode;
   /** 説明とボタンのあいだに置く補足（使い方の案内など） */
   children?: ReactNode;
+  testId?: string;
 }) {
   return (
-    <div className="empty-state">
+    <div className="empty-state" data-testid={testId}>
       {icon && <div className="empty-icon">{icon}</div>}
       <div className="empty-title">{title}</div>
       {description && <div className="empty-desc">{description}</div>}
@@ -359,13 +361,27 @@ export function ViaBadge({ via }: { via: string }) {
   return <span className="via-badge" title={`${via} から AI が行った操作です`} data-testid="via-badge"><Sparkles size={11} />{via} 経由</span>;
 }
 
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  testId,
+  id,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+  testId?: string;
+  id?: string;
+}) {
   return (
     <button
+      id={id}
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      data-testid={testId}
       className={cx("switch", checked && "on")}
       onClick={() => onChange(!checked)}
     >

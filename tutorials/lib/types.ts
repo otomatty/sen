@@ -10,6 +10,7 @@ export type ScreenKey =
   | "inbox"
   | "my-issues"
   | "projects"
+  | "progress"
   | "cycles"
   | "search"
   | "settings";

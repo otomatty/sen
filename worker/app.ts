@@ -8,6 +8,7 @@ import type {
   MutateRequest,
   MutateResponse,
   Mutation,
+  ProgressStartedResponse,
   Role,
   SheetSyncStatus,
 } from "../shared/types";
@@ -32,6 +33,7 @@ import {
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
 import { handleMcp } from "./mcp/server";
 import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
+import { loadStartedOn } from "./progress";
 import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
 
 function err(c: Context, message: string, status = 400) {
@@ -126,7 +128,10 @@ export function createApp() {
     const body = await readJson<{ name?: string }>(c);
     const name = (body.name ?? "").trim();
     if (!name || name.length > 60) return err(c, "ワークスペース名を60文字以内で入力してください");
-    const ws = await createWorkspace(c.env.DB, { name, ownerId: c.get("user").id, ownerName: c.get("user").name });
+    const user = c.get("user");
+    // どのワークスペースにも所属していない＝初回。画面側（NewWorkspacePage の firstTime）と同じ条件
+    const member = await first<{ x: number }>(c.env.DB, "SELECT 1 AS x FROM members WHERE user_id = ? LIMIT 1", user.id);
+    const ws = await createWorkspace(c.env.DB, { name, ownerId: user.id, withSamples: !member });
     return c.json({ ok: true, workspaceKey: ws.urlKey });
   });
 
@@ -310,6 +315,13 @@ export function createApp() {
     // 反映そのものが失敗しても 200。理由は lastError に入る。
     const status = await requestSheetSyncNow(c.env, ws.id, publicOrigin(c));
     return c.json(asEnabledStatus(c.env, status));
+  });
+
+  // ---------------- 進捗（メンバーなら誰でも。スプレッドシート連携とは別） ----------------
+  app.get("/progress/started", requireUser, requireWorkspace, async (c) => {
+    const startedOn = await loadStartedOn(c.env.DB, c.get("workspace").id);
+    const body: ProgressStartedResponse = { startedOn };
+    return c.json(body);
   });
 
   // ---------------- 開発用 ----------------

@@ -30,6 +30,7 @@ export type ScreenKey =
   | "inbox"
   | "my-issues"
   | "projects"
+  | "progress"
   | "cycles"
   | "search"
   | "settings";
@@ -44,6 +45,7 @@ export const SCREENS: Record<ScreenKey, string> = {
   inbox: "受信トレイ",
   "my-issues": "自分の課題",
   projects: "プロジェクト",
+  progress: "進捗",
   cycles: "サイクル",
   search: "検索",
   settings: "設定",

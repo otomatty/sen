@@ -6,6 +6,7 @@ import "./styles/components.css";
 import "./styles/layout.css";
 import "./styles/issues.css";
 import "./styles/pages.css";
+import "./styles/progress.css";
 import { App } from "./App";
 import { applyTheme, useUI } from "./store/ui";
 import { initPWA } from "./app/pwa";

@@ -1,0 +1,288 @@
+<!-- bun run diagrams で docs/images/ に書き出す -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>チームの構造</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --frame: #f7f7f9;
+    --frame-border: #d6d7dc;
+    --surface: #ffffff;
+    --card: #f7f7f9;
+    --line: #e7e7eb;
+    --text: #1b1c21;
+    --muted: #5c5f68;
+    --label: #787b84;
+    --accent: #6470e8;
+    --pink: #c93d88;
+    --green: #1e8a5b;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111215;
+      --frame: #17181b;
+      --frame-border: #2d2f34;
+      --surface: #111215;
+      --card: #17181b;
+      --line: #212226;
+      --text: #e6e6e9;
+      --muted: #a1a3a9;
+      --label: #7d7f86;
+      --accent: #6470e8;
+      --pink: #e255a1;
+      --green: #3fb27f;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 912px;
+    height: 432px;
+    margin: 0;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  body {
+    position: relative;
+    font-family: "Noto Sans JP", "Hiragino Sans", sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .frame {
+    position: absolute;
+    left: 25px;
+    top: 25px;
+    width: 861px;
+    height: 381px;
+    background: var(--frame);
+    border: 1px solid var(--frame-border);
+    border-radius: 13px;
+    padding: 0 19px 15px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ws-head {
+    height: 39px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding-top: 11px;
+  }
+
+  .ws-name {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .ws-ex {
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--muted);
+  }
+
+  .cols {
+    height: 325px;
+    display: flex;
+    gap: 19px;
+  }
+
+  .col {
+    height: 325px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0 15px 15px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .col.shared { width: 241px; flex: none; }
+  .col.team { width: 271px; flex: none; }
+
+  .col-head {
+    height: 41px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--label);
+  }
+
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .key {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--label);
+    letter-spacing: 0.02em;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .dot.accent { background: var(--accent); }
+  .dot.pink { background: var(--pink); }
+  .dot.green { background: var(--green); }
+
+  .card {
+    height: 65px;
+    margin-bottom: 11px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 15px 12px 0;
+  }
+
+  .card:last-child {
+    height: 115px;
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .card p {
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--muted);
+  }
+
+  .chips {
+    margin-top: auto;
+    margin-bottom: 16px;
+    display: flex;
+    gap: 9px;
+  }
+
+  .chip, .pill {
+    height: 31px;
+    background: var(--surface);
+    border: 1px solid var(--frame-border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .chip {
+    width: 65px;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .pill {
+    margin-top: auto;
+    margin-bottom: 16px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="ws-head">
+      <span class="ws-name">ワークスペース</span>
+      <span class="ws-ex">例：テスト株式会社</span>
+    </div>
+    <div class="cols">
+      <section class="col shared">
+        <div class="col-head">ワークスペース全体で共有</div>
+        <div class="card">
+          <h3>メンバー</h3>
+          <p>全員がすべてのチームを見られる</p>
+        </div>
+        <div class="card">
+          <h3>ラベル</h3>
+          <p>どのチームの課題にも付けられる</p>
+        </div>
+        <div class="card">
+          <h3>プロジェクト</h3>
+          <p>複数のチームにまたがれる</p>
+          <div class="pill"><span class="dot green"></span>モバイルアプリ v2.0</div>
+        </div>
+      </section>
+      <section class="col team">
+        <div class="col-head">
+          <span class="who"><span class="dot accent"></span>デフォルト</span>
+          <span class="key">DEF</span>
+        </div>
+        <div class="card">
+          <h3>ワークフロー</h3>
+          <p>バックログ → 進行中 → 完了 など</p>
+        </div>
+        <div class="card">
+          <h3>サイクル</h3>
+          <p>2 週間ごと・番号は 1 から</p>
+        </div>
+        <div class="card">
+          <h3>課題</h3>
+          <p>ID は「識別子 + 連番」</p>
+          <div class="chips">
+            <span class="chip">DEF-1</span>
+            <span class="chip">DEF-2</span>
+            <span class="chip">DEF-3</span>
+          </div>
+        </div>
+      </section>
+      <section class="col team">
+        <div class="col-head">
+          <span class="who"><span class="dot pink"></span>デザイン</span>
+          <span class="key">DES</span>
+        </div>
+        <div class="card">
+          <h3>ワークフロー</h3>
+          <p>チームごとに追加・名前変更できる</p>
+        </div>
+        <div class="card">
+          <h3>サイクル</h3>
+          <p>3 週間ごと・番号は 1 から</p>
+        </div>
+        <div class="card">
+          <h3>課題</h3>
+          <p>ID は「識別子 + 連番」</p>
+          <div class="chips">
+            <span class="chip">DES-1</span>
+            <span class="chip">DES-2</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</body>
+</html>
