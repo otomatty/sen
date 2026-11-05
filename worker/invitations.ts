@@ -144,7 +144,8 @@ async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): P
     createdAt,
     expiresAt,
   );
-  const link = `${publicOrigin(c)}/invite/${token}`;
+  const origin = publicOrigin(c);
+  const link = `${origin}/invite/${token}`;
   const sent = await sendInvitationEmail(c.env, db, ws.id, {
     invitationId: id,
     inviterId: user.id,
@@ -153,6 +154,8 @@ async function issueInvitation(c: Context<AppEnv>, email: string, role: Role): P
     inviterName: user.name,
     link,
     expiresAt,
+    role,
+    appOrigin: origin,
   });
   const invitation: InvitationSummary = {
     id,
