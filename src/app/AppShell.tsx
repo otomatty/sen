@@ -65,6 +65,7 @@ function GlobalShortcuts() {
   useHotkeys("g i", () => go("/inbox"));
   useHotkeys("g m", () => go("/my-issues"));
   useHotkeys("g p", () => go("/projects"));
+  useHotkeys("g r", () => go("/progress"));
   useHotkeys("g s", () => go("/settings"));
   useHotkeys("g h", () => go("/help"));
   useHotkeys("g e", () => teamKey && go(`/team/${teamKey}/all`));

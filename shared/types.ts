@@ -390,3 +390,8 @@ export interface SheetSyncStatus {
   /** 反映の予約（アラーム）があるか */
   pending?: boolean;
 }
+
+/** GET /api/progress/started の応答。課題 ID → 日本時間の着手日 'YYYY-MM-DD'（無い課題は含めない） */
+export interface ProgressStartedResponse {
+  startedOn: Record<string, string>;
+}
