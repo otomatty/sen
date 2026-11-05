@@ -5,6 +5,8 @@
  *   bun run tutorials -- create board # id の一部で絞り込み
  *   bun run tutorials -- --skip-build # ビルドを省略
  *   bun run tutorials -- --url https://xxx.workers.dev  # 既存の環境で収録（DEV_TOOLS=1 が必要）
+ *   bun run tutorials -- --no-narration       # ナレーションなしで撮る
+ *   bun run tutorials -- --speed 0.8          # 操作の速さ（1 が標準。0.8 なら 2 割ゆっくり）
  *
  * 流れ: アプリをビルド → まっさらな DB でローカル起動 → デモデータを投入 →
  *       ヘッドレス Chromium で各シナリオを AI（スクリプト）が操作 → CDP で録画 → ffmpeg で MP4 化 →
@@ -25,6 +27,7 @@ import { googleMock, TUTORIAL_SHEETS_DELAY_MS, TUTORIAL_SPREADSHEET_ID } from ".
 import { overlayScript } from "./lib/overlay";
 import { ScreenRecorder } from "./lib/recorder";
 import { Director, PARK } from "./lib/director";
+import { Narrator, collectNarrationTexts, muxNarration, titleNarration } from "./lib/narration";
 import type { Scenario } from "./lib/types";
 import { sourceHash } from "./lib/source-hash";
 
@@ -45,8 +48,23 @@ const USER = { name: "山田 太郎", email: "taro@example.com", workspaceName: 
 const args = process.argv.slice(2);
 const skipBuild = args.includes("--skip-build");
 const keepFrames = args.includes("--keep-frames");
+const noNarration = args.includes("--no-narration");
 const urlArg = args.includes("--url") ? args[args.indexOf("--url") + 1] : null;
-const filters = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--url");
+const speed = parseSpeed(args);
+const filters = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--url" && args[i - 1] !== "--speed");
+
+/** --speed の次の値。正の数でなければ終了する（1 が標準。0.8 なら 2 割ゆっくり） */
+function parseSpeed(argv: string[]): number {
+  const i = argv.indexOf("--speed");
+  if (i < 0) return 1;
+  const raw = argv[i + 1];
+  const value = Number(raw);
+  if (raw == null || !Number.isFinite(value) || value <= 0) {
+    console.error("--speed には正の数を指定してください（1 が標準です。0.8 なら 2 割ゆっくり）");
+    process.exit(1);
+  }
+  return value;
+}
 
 function log(msg: string) {
   console.log(`\x1b[36m[tutorials]\x1b[0m ${msg}`);
@@ -321,9 +339,37 @@ interface ManifestEntry {
   recordedAt: string;
   /** 収録したときの画面・シナリオのハッシュ（bun run tutorials:check で古い動画を見つける） */
   sourceHash?: string;
+  /** 読み上げを付けたか（cue が 1 つでもあれば true） */
+  narration: boolean;
+}
+
+/**
+ * タイトルと字幕を先に読み上げておく。ビルドやサーバー起動と並行して進める。
+ * 起動が先に失敗したときは、読み上げの失敗を未処理の拒否にしない。
+ */
+function startNarrationPrefetch(narrator: Narrator, scenarios: LoadedScenario[]): Promise<void> {
+  log(`ナレーション: ${narrator.describe()}`);
+  const pending = (async () => {
+    const texts: string[] = [];
+    for (const s of scenarios) {
+      texts.push(titleNarration(s.title, s.summary));
+      texts.push(...collectNarrationTexts(await readFile(s.file, "utf8")));
+    }
+    await narrator.prefetch(texts, (done, total) => {
+      log(`ナレーションを準備しています（${done}/${total}）`);
+    });
+  })();
+  void pending.catch(() => {});
+  return pending;
 }
 
 async function main() {
+  const narrator = noNarration ? null : Narrator.fromEnv(path.join(WORK_DIR, "_narration"));
+  if (!noNarration && !narrator) {
+    console.error("GEMINI_API_KEY が設定されていません。ナレーションなしで撮るときは --no-narration を付けてください");
+    process.exit(1);
+  }
+
   let scenarios = (await loadScenarios()).filter((s) => !filters.length || filters.some((f) => s.id.includes(f)));
   if (!scenarios.length) throw new Error("該当するシナリオがありません");
   const failures: string[] = [];
@@ -347,6 +393,8 @@ async function main() {
   }
   await mkdir(OUT_DIR, { recursive: true });
   await mkdir(WORK_DIR, { recursive: true });
+  // 読み上げはビルドと起動のあいだに進める。最初の収録の前に待つ。
+  const narrationReady = narrator ? startNarrationPrefetch(narrator, scenarios) : Promise.resolve();
 
   let api: APIRequestContext | undefined;
   let browser: Browser | undefined;
@@ -367,6 +415,7 @@ async function main() {
       : { tutorials: [] };
 
     browser = await chromium.launch({ args: ["--font-render-hinting=none", "--disable-lcd-text"] });
+    await narrationReady;
     // 最初のサーバーは連携なし。シナリオごとに、必要な状態と違えば起動し直す
     let sheetsOn = false;
     for (const s of scenarios) {
@@ -411,7 +460,7 @@ async function main() {
       await page.mouse.move(PARK.x, PARK.y);
 
       const recorder = new ScreenRecorder(page, path.join(WORK_DIR, s.id));
-      const t = new Director(page, ws, recorder);
+      const t = new Director(page, ws, recorder, { speed, narrator });
       t.setMouse(PARK.x, PARK.y);
       t.posterFile = path.join(OUT_DIR, `${s.id}.jpg`);
       await recorder.start();
@@ -434,10 +483,14 @@ async function main() {
       const video = `${s.id}.mp4`;
       const poster = `${s.id}.jpg`;
       // サムネイルはシナリオが t.poster() で撮ったもの（字幕なし）。撮っていなければ動画から切り出す
-      const duration = await recorder.encode(path.join(OUT_DIR, video), t.posterTaken ? null : path.join(OUT_DIR, poster), {
+      const videoPath = path.join(OUT_DIR, video);
+      const duration = await recorder.encode(videoPath, t.posterTaken ? null : path.join(OUT_DIR, poster), {
         width: VIDEO_WIDTH,
         posterAt: Math.min(5.5, t.chapters[0]?.t ? t.chapters[0].t + 2 : 4),
       });
+      if (t.narrationCues.length) {
+        await muxNarration({ video: videoPath, cues: t.narrationCues, duration, workDir: recorder.workDirPath });
+      }
       if (t.posterTaken) {
         const full = `${path.join(OUT_DIR, poster)}.full.jpg`;
         spawnSync("ffmpeg", ["-y", "-loglevel", "error", "-i", full, "-vf", "scale=960:-2", "-q:v", "4", path.join(OUT_DIR, poster)]);
@@ -457,10 +510,11 @@ async function main() {
         chapters: t.chapters.map((c) => ({ t: Math.round(c.t * 10) / 10, title: c.title })),
         recordedAt: new Date().toISOString(),
         sourceHash: await sourceHash(ROOT, s.file),
+        narration: t.narrationCues.length > 0,
       };
       manifest.tutorials = [...manifest.tutorials.filter((x) => x.id !== s.id), entry].sort((a, b) => a.order - b.order);
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-      log(`  ✓ ${video}（${entry.duration}秒・${entry.chapters.length}ステップ）`);
+      log(`  ✓ ${video}（${entry.duration}秒・${entry.chapters.length}ステップ・${entry.narration ? "ナレーションあり" : "ナレーションなし"}）`);
       await context.close();
     }
   } finally {

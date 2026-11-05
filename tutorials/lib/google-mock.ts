@@ -10,10 +10,12 @@ export const TUTORIAL_SPREADSHEET_ID = "tutorial-spreadsheet";
 
 /**
  * 保存から自動反映までの待ち時間（ミリ秒）。本番は 30 秒だが、動画では短くする。
- * 設定画面は反映待ちの間 5 秒おきに状態を取り直すので、画面を開いてから最初の取り直しまでに反映が終わる長さにしている。
- * ただし短すぎると、設定画面を開く前に反映が終わって「反映待ち」を映せない。
+ * 設定画面は反映待ちの間 5 秒おきに状態を取り直す。
+ * ナレーションとゆっくりした操作で字幕の間隔が延びるので、字幕と「反映待ち」の強調が
+ * 終わるまで表示が残る長さ（12 秒）にしている。
+ * 短すぎると、設定画面を開く前や字幕のあいだに反映が終わって「反映待ち」を映せない。
  */
-export const TUTORIAL_SHEETS_DELAY_MS = 4000;
+export const TUTORIAL_SHEETS_DELAY_MS = 12000;
 
 const ACCESS_TOKEN = "tutorial-access-token";
 

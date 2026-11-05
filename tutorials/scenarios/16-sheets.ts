@@ -96,6 +96,8 @@ export default defineScenario({
     await focusSheetsSection(t);
     await t.expect("[data-testid=sheets-pending]", { timeout: 8_000 });
     await t.caption("保存すると「反映待ち」になり、約 30 秒後に自動で反映されます");
+    // 字幕を出しているあいだに反映待ちが消えていたら、壊れた動画を残さず収録を失敗させる
+    await t.expect("[data-testid=sheets-pending]");
     await t.highlight("[data-testid=sheets-pending]", 1400);
     await t.expect("[data-testid=sheets-pending]", { hidden: true, timeout: 25_000 });
     await t.highlight("[data-testid=sheets-last-sync]", 1400);

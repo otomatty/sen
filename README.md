@@ -334,7 +334,7 @@ Google Cloud Console の OAuth クライアントには、公開する URL の�
 
 ログイン用の `BETTER_AUTH_SECRET` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` は GitHub ではなく、上の `wrangler secret put` で Worker に登録しておきます。
 
-手動実行（Run workflow）で「操作説明動画を AI に再収録させてからデプロイする」にチェックを入れると、デプロイするビルドそのものを AI が操作して動画を撮り直します。
+手動実行（Run workflow）で「操作説明動画を AI に再収録させてからデプロイする」にチェックを入れると、デプロイするビルドそのものを AI が操作して動画を撮り直します。再収録ではナレーションに Gemini を使うので、GitHub の Secrets に `GEMINI_API_KEY` を登録してください。
 
 ## 使い方動画の自動収録
 
@@ -342,7 +342,10 @@ Google Cloud Console の OAuth クライアントには、公開する URL の�
 bun run tutorials                  # すべての動画を収録
 bun run tutorials -- board inbox   # id の一部で絞り込み
 bun run tutorials -- --skip-build  # ビルド済みなら省略
+bun run tutorials -- --no-narration # ナレーションなしで撮る
 ```
+
+字幕とタイトルカードは Gemini TTS で読み上げて動画に付けます。`GEMINI_API_KEY` が必要です。キーが無いときは `--no-narration` を付けてください。
 
 **何が起きるか**
 
