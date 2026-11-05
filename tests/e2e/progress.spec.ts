@@ -329,7 +329,101 @@ test("期限が昨日のバックログの課題は、タイムラインで期�
   await bar.evaluate((el) => el.scrollIntoView({ inline: "center", block: "nearest" }));
   await expect(bar).toBeVisible();
   await expect(bar).not.toHaveClass(/is-overdue/);
-  await expect(row.getByTestId("timeline-milestone")).toHaveCount(0);
+  // 完了予定が着手より前なので ◆ は出る。保留は期限超過ではない。
+  const mark = row.getByTestId("timeline-milestone");
+  await expect(mark).toBeVisible();
+  await expect(mark).not.toHaveClass(/is-overdue/);
+});
+
+test("工程が複数の作業は、選んだ工程を含むものだけが出て、組み合わせは候補に出ない", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "工程の絞り込み" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const projectId = randomUUID();
+  const designId = randomUUID();
+  const implId = randomUUID();
+  await mutate(page, ws, [
+    { type: "label.create", args: { id: designId, name: "工程:設計", color: "#6470e8" } },
+    { type: "label.create", args: { id: implId, name: "工程:実装", color: "#3fb27f" } },
+    { type: "project.create", args: { id: projectId, name: "工程の絞り込み", teamIds: [team.id] } },
+    {
+      type: "issue.create",
+      args: {
+        id: randomUUID(),
+        teamId: team.id,
+        projectId,
+        title: "設計と実装",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        labelIds: [designId, implId],
+      },
+    },
+    {
+      type: "issue.create",
+      args: {
+        id: randomUUID(),
+        teamId: team.id,
+        projectId,
+        title: "設計だけ",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        labelIds: [designId],
+      },
+    },
+  ]);
+  await page.goto(`/${ws}/progress/wbs`);
+  await page.getByTestId("wbs-filter-process").click();
+  const menu = page.locator(".menu");
+  await expect(menu.getByRole("button", { name: "設計", exact: true })).toBeVisible();
+  await expect(menu.getByRole("button", { name: "実装", exact: true })).toBeVisible();
+  await expect(menu.getByRole("button", { name: "設計／実装", exact: true })).toHaveCount(0);
+  await expect(menu.getByRole("button", { name: "実装／設計", exact: true })).toHaveCount(0);
+  await menu.getByRole("button", { name: "設計", exact: true }).click();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "設計と実装" })).toBeVisible();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "設計だけ" })).toBeVisible();
+  await page.getByTestId("wbs-filter-process").click();
+  await page.locator(".menu").getByRole("button", { name: "実装", exact: true }).click();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "設計と実装" })).toBeVisible();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "設計だけ" })).toHaveCount(0);
+});
+
+test("日本時間の 0 時を過ぎると、開いた日が期限の未完了の課題が期限超過になる", async ({ page }) => {
+  const openedOn = "2026-11-05";
+  const { ws } = await signupViaUi(page, { workspace: "日付をまたぐ進捗" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const projectId = randomUUID();
+  await mutate(page, ws, [
+    { type: "project.create", args: { id: projectId, name: "日付をまたぐ", teamIds: [team.id] } },
+    {
+      type: "issue.create",
+      args: {
+        id: randomUUID(),
+        teamId: team.id,
+        projectId,
+        title: "その日が期限の作業",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        dueDate: openedOn,
+      },
+    },
+  ]);
+  // 23:59 JST。時計はコンテキスト全体に入るので、データを作ったあとに入れる。
+  await page.clock.install({ time: new Date("2026-11-05T14:59:00.000Z") });
+  await page.goto(`/${ws}/progress`);
+  const activity = page.locator(`[data-testid=progress-activity-row][data-project-id="${projectId}"]`);
+  await expect(activity.getByTestId("progress-status")).toHaveText("未着手");
+  await expect(page.locator(".progress-stat-hint", { hasText: "今日の日付" })).toHaveText("今日の日付 2026/11/05");
+  // setSystemTime は Date だけを進め、0 時に仕掛けた setTimeout は発火しない。
+  // fastForward でそこまで進めると、同期の setInterval（15 秒ごとの差分取得と WebSocket の ping）も
+  // まとめて動いて接続と競合する。休止したブラウザ向けに、表示が戻ったときも日付を確かめるので、ここではそれを使う。
+  await page.clock.setSystemTime(new Date("2026-11-05T15:00:30.000Z"));
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(activity.getByTestId("progress-status")).toHaveText("期限超過");
+  await expect(page.locator(".progress-stat-hint", { hasText: "今日の日付" })).toHaveText("今日の日付 2026/11/06");
 });
 
 test("1280×860 では WBS の優先度が横スクロールなしで見える", async ({ page }) => {
@@ -449,6 +543,68 @@ test("バックログに戻しても着手日の履歴でタイムラインの�
   await page.reload();
   await expect(bar).toBeVisible();
   await expect(page.locator("[data-testid=timeline-row][data-identifier='ENG-1']").getByTestId("timeline-milestone")).toHaveCount(0);
+});
+
+test("完了予定が昨日の課題を今日進行中にすると、棒は着手日から始まり完了予定の日に印が出る", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "期限後の着手" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const projectId = randomUUID();
+  const issueId = randomUUID();
+  const today = todayYmd(540);
+  const yesterday = addDays(today, -1);
+  await mutate(page, ws, [
+    { type: "project.create", args: { id: projectId, name: "期限後の着手", teamIds: [team.id] } },
+    {
+      type: "issue.create",
+      args: {
+        id: issueId,
+        teamId: team.id,
+        projectId,
+        title: "期限を過ぎてから着手した作業",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        dueDate: yesterday,
+      },
+    },
+    { type: "issue.update", args: { id: issueId, patch: { stateId: stateId(data, team.id, "started", "進行中") } } },
+  ]);
+  await page.goto(`/${ws}/progress/timeline`);
+  const row = page.locator("[data-testid=timeline-row]", { hasText: "期限を過ぎてから着手した作業" });
+  const bar = row.getByTestId("timeline-bar");
+  const mark = row.getByTestId("timeline-milestone");
+  await bar.evaluate((el) => el.scrollIntoView({ inline: "center", block: "nearest" }));
+  await expect(bar).toBeVisible();
+  await expect(mark).toBeVisible();
+  await expect(mark).toContainText("◆");
+  const todaySlash = today.replaceAll("-", "/");
+  const yesterdaySlash = yesterday.replaceAll("-", "/");
+  await expect(bar).toHaveAttribute("title", new RegExp(`完了予定 ${yesterdaySlash}（着手より前） / 着手 ${todaySlash} → 今日`));
+  const placed = await row.evaluate((el) => {
+    const barEl = el.querySelector("[data-testid=timeline-bar]");
+    const markEl = el.querySelector("[data-testid=timeline-milestone]");
+    const track = el.querySelector(".timeline-track");
+    const todayLine = document.querySelector("[data-testid=timeline-today]");
+    const week = document.querySelector(".timeline-week");
+    if (!(barEl instanceof HTMLElement) || !(markEl instanceof HTMLElement) || !(track instanceof HTMLElement) || !(todayLine instanceof HTMLElement) || !(week instanceof HTMLElement)) {
+      return null;
+    }
+    const dayWidth = week.getBoundingClientRect().width / 7;
+    const todayBox = todayLine.getBoundingClientRect();
+    const trackBox = track.getBoundingClientRect();
+    const todayCenter = todayBox.left + todayBox.width / 2 - trackBox.left;
+    return {
+      dayWidth,
+      barFromTodayStart: barEl.getBoundingClientRect().left - trackBox.left - (todayCenter - dayWidth / 2),
+      // offsetLeft は transform を含まない。印の left は完了予定の日の中央
+      markFromYesterdayCenter: markEl.offsetLeft - (todayCenter - dayWidth),
+    };
+  });
+  expect(placed, "棒と印の位置を測れません").toBeTruthy();
+  expect(Math.abs(placed!.barFromTodayStart), JSON.stringify(placed)).toBeLessThanOrEqual(2);
+  expect(Math.abs(placed!.markFromYesterdayCenter), JSON.stringify(placed)).toBeLessThanOrEqual(2);
 });
 
 test("日付のない作業の行を押すと WBS へ移り、棒を押すと課題が開く", async ({ page }) => {

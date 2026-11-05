@@ -23,7 +23,7 @@ export function WbsTab({ model }: { model: ProgressModel }) {
   const [collapsed, setCollapsed] = useCollapsed(wsKey);
   const processes = useMemo(() => {
     const names = new Set<string>();
-    for (const activity of activities) for (const task of activity.tasks) if (task.process) names.add(task.process);
+    for (const activity of activities) for (const task of activity.tasks) for (const name of task.processes) names.add(name);
     return [...names].sort((a, b) => a.localeCompare(b, "ja"));
   }, [activities]);
 
@@ -120,8 +120,8 @@ function matches(
   if (!opts.showDone && task.stateType === "completed") return false;
   if (opts.overdueOnly && !isTaskOverdue(task, opts.today)) return false;
   if (opts.process === "none") {
-    if (task.process) return false;
-  } else if (opts.process !== "all" && task.process !== opts.process) return false;
+    if (task.processes.length > 0) return false;
+  } else if (opts.process !== "all" && !task.processes.includes(opts.process)) return false;
   const assigneeId = opts.assigneeIdByIssue.get(task.id) ?? null;
   if (opts.assignee === "none") return assigneeId == null;
   if (opts.assignee === "me") return assigneeId != null && assigneeId === opts.meId;

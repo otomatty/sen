@@ -38,13 +38,13 @@ export function useProgress(): ProgressModel {
   const members = useMembers();
   const startedOn = useStartedOn(wsKey, issues);
   const sheetUrl = useSheetUrl(wsKey);
+  const today = useJstToday();
 
   return useMemo(() => {
     const projectList = Object.values(projects)
       .filter((project) => !project.archivedAt)
       .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
     const projectIds = new Set(projectList.map((project) => project.id));
-    const today = todayYmd(540);
     const assigneeIdByIssue = new Map<string, string | null>();
     const reportIssues = Object.values(issues)
       .filter((issue) => !issue.archivedAt && issue.projectId && projectIds.has(issue.projectId))
@@ -93,7 +93,54 @@ export function useProgress(): ProgressModel {
       users,
       assigneeIdByIssue,
     };
-  }, [workspace, projects, issues, states, teams, users, labels, meId, members, startedOn, sheetUrl]);
+  }, [workspace, projects, issues, states, teams, users, labels, meId, members, startedOn, sheetUrl, today]);
+}
+
+const JST_OFFSET_MINUTES = 540;
+const DAY_MS = 86_400_000;
+/** 0 時ちょうどに読むと、時計のずれで前日のままになることがある */
+const MIDNIGHT_SLACK_MS = 1000;
+
+/** 次の日本時間 0 時までのミリ秒に、少しの余裕を足したもの */
+function msUntilNextJstMidnight(now = Date.now()): number {
+  const elapsed = (now + JST_OFFSET_MINUTES * 60_000) % DAY_MS;
+  return DAY_MS - (elapsed < 0 ? elapsed + DAY_MS : elapsed) + MIDNIGHT_SLACK_MS;
+}
+
+/**
+ * 日本時間の今日。ページを開いたまま 0 時をまたいでも更新する。
+ * 休止したブラウザではタイマーが遅れるので、タブの再表示とウィンドウのフォーカスでも確かめる。
+ */
+function useJstToday(): string {
+  const [today, setToday] = useState(() => todayYmd(JST_OFFSET_MINUTES));
+
+  useEffect(() => {
+    let timer = 0;
+    const sync = () => {
+      const next = todayYmd(JST_OFFSET_MINUTES);
+      setToday((prev) => (prev === next ? prev : next));
+    };
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        sync();
+        arm();
+      }, msUntilNextJstMidnight());
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    arm();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", sync);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", sync);
+    };
+  }, []);
+
+  return today;
 }
 
 function earlierYmd(a: string | null, b: string | null): string | null {

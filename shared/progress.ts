@@ -44,7 +44,9 @@ export interface ReportIssueInput {
 export type ActivityStatus = "タスク未登録" | "完了" | "期限超過" | "保留あり" | "進行中" | "未着手";
 
 export interface ProgressTask extends ReportIssueInput {
-  /** `工程:` / `工程：` ラベルを名前順に `／` でつないだもの。無ければ空 */
+  /** `工程:` / `工程：` ラベルの工程名。名前順・重複なし */
+  processes: string[];
+  /** 工程名を名前順に `／` でつないだもの。無ければ空。表示とシート用 */
   process: string;
   /** シートの優先度列と同じ短い表示名（なし / 緊急 / 高 / 中 / 低） */
   priorityLabel: string;
@@ -84,6 +86,7 @@ export function summarizeProgress(input: ReportInput): { activities: ProgressAct
 
   const tasks: ProgressTask[] = issues.map((issue) => ({
     ...issue,
+    processes: processNames(issue.labelNames),
     process: processLabel(issue.labelNames),
     priorityLabel: PRIORITIES.find((item) => item.value === issue.priority)?.short ?? "なし",
   }));
@@ -153,8 +156,8 @@ function splitIdentifier(identifier: string): { key: string; num: number } {
   return { key: identifier.slice(0, i), num: Number.isFinite(num) ? num : 0 };
 }
 
-/** `工程:` または `工程：` で始まるラベルの接頭辞を除き、名前順に `／` でつなぐ */
-function processLabel(labelNames: string[]): string {
+/** `工程:` または `工程：` の接頭辞を除いた工程名。空は除く */
+function processBodies(labelNames: string[]): string[] {
   const names: string[] = [];
   for (const name of labelNames) {
     const matched = PROCESS_PREFIX.exec(name);
@@ -162,8 +165,21 @@ function processLabel(labelNames: string[]): string {
     const body = matched[1].trim();
     if (body) names.push(body);
   }
-  names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return names.join("／");
+  return names;
+}
+
+function byProcessName(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** 名前順・重複なし。絞り込みの候補と、選んだ工程が作業に含まれるかの判定に使う */
+function processNames(labelNames: string[]): string[] {
+  return [...new Set(processBodies(labelNames))].sort(byProcessName);
+}
+
+/** 名前順に `／` でつなぐ。重複も残す（シートの工程列はこの文字列のまま） */
+function processLabel(labelNames: string[]): string {
+  return processBodies(labelNames).sort(byProcessName).join("／");
 }
 
 /** 完了以外が未完了。保留は backlog。active は未完了のうち保留でないもの */

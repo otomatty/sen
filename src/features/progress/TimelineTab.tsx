@@ -87,18 +87,33 @@ function markOf(task: ProgressTask): Mark {
   return "undated";
 }
 
+/** from が to より後でも入れ替えない。逆向きの区間は from の 1 日分にする */
 function spanBox(from: string, to: string, rangeStart: string, dayWidth: number): { left: number; width: number } {
-  const start = from <= to ? from : to;
-  const end = from <= to ? to : from;
+  const end = to >= from ? to : from;
   return {
-    left: diffDays(rangeStart, start) * dayWidth,
-    width: (diffDays(start, end) + 1) * dayWidth,
+    left: diffDays(rangeStart, from) * dayWidth,
+    width: (diffDays(from, end) + 1) * dayWidth,
   };
+}
+
+function dueBeforeStart(task: ProgressTask): boolean {
+  return !!(task.startedOn && task.dueDate && task.dueDate < task.startedOn);
+}
+
+function doneSpan(task: ProgressTask): string {
+  if (task.completedOn && task.startedOn && task.completedOn < task.startedOn) {
+    return `着手 ${slashDate(task.startedOn)}（完了日 ${slashDate(task.completedOn)} は着手より前）`;
+  }
+  return `着手 ${slashDate(task.startedOn)} → 完了日 ${slashDate(task.completedOn)}`;
 }
 
 function captionOf(task: ProgressTask, mark: Mark): string {
   const head = `${task.identifier} ${task.title}`;
-  if (mark === "done") return `${head} / 着手 ${slashDate(task.startedOn)} → 完了日 ${slashDate(task.completedOn)}`;
+  if (dueBeforeStart(task)) {
+    const work = mark === "done" ? doneSpan(task) : `着手 ${slashDate(task.startedOn)} → 今日`;
+    return `${head} / 完了予定 ${slashDate(task.dueDate)}（着手より前） / ${work}`;
+  }
+  if (mark === "done") return `${head} / ${doneSpan(task)}`;
   if (mark === "scheduled") return `${head} / 着手 ${slashDate(task.startedOn)} → 完了予定 ${slashDate(task.dueDate)}`;
   if (mark === "open") return `${head} / 着手 ${slashDate(task.startedOn)} → 予定なし`;
   return `${head} / 完了予定 ${slashDate(task.dueDate)}`;
@@ -349,6 +364,7 @@ function TimelineRow({
   const color = (issue && model.states[issue.stateId]?.color) || "var(--accent)";
   const overdue = isTaskOverdue(task, today);
   const text = captionOf(task, mark);
+  const earlyDue = dueBeforeStart(task);
   return (
     <div className="timeline-row" data-testid="timeline-row" data-identifier={task.identifier}>
       <Link to={href} className="timeline-label">
@@ -357,24 +373,54 @@ function TimelineRow({
       </Link>
       <div className="timeline-track">
         {mark === "milestone" && task.dueDate ? (
-          <Link
-            to={href}
-            className={cx("timeline-milestone", overdue && "is-overdue")}
-            data-testid="timeline-milestone"
-            title={text}
-            aria-label={text}
-            style={{ left: diffDays(rangeStart, task.dueDate) * dayWidth + dayWidth / 2, "--mark": color } as CSSProperties}
-          >
-            <span className="timeline-milestone-mark" aria-hidden>
-              ◆
-            </span>
-            <span className="timeline-milestone-label">完了予定 {monthDay(task.dueDate)}</span>
-          </Link>
+          <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} dayWidth={dayWidth} />
         ) : (
-          <Bar task={task} mark={mark} color={color} overdue={overdue} text={text} href={href} rangeStart={rangeStart} dayWidth={dayWidth} today={today} />
+          <>
+            <Bar task={task} mark={mark} color={color} overdue={overdue} text={text} href={href} rangeStart={rangeStart} dayWidth={dayWidth} today={today} />
+            {earlyDue && task.dueDate && (
+              <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} dayWidth={dayWidth} label={false} />
+            )}
+          </>
         )}
       </div>
     </div>
+  );
+}
+
+function DueMark({
+  href,
+  dueDate,
+  color,
+  overdue,
+  text,
+  rangeStart,
+  dayWidth,
+  label = true,
+}: {
+  href: string;
+  dueDate: string;
+  color: string;
+  overdue: boolean;
+  text: string;
+  rangeStart: string;
+  dayWidth: number;
+  /** 棒と並べる印は ◆ だけにする。ラベルが棒に重なるため */
+  label?: boolean;
+}) {
+  return (
+    <Link
+      to={href}
+      className={cx("timeline-milestone", overdue && "is-overdue")}
+      data-testid="timeline-milestone"
+      title={text}
+      aria-label={text}
+      style={{ left: diffDays(rangeStart, dueDate) * dayWidth + dayWidth / 2, "--mark": color } as CSSProperties}
+    >
+      <span className="timeline-milestone-mark" aria-hidden>
+        ◆
+      </span>
+      {label && <span className="timeline-milestone-label">完了予定 {monthDay(dueDate)}</span>}
+    </Link>
   );
 }
 
@@ -399,13 +445,26 @@ function Bar({
   dayWidth: number;
   today: string;
 }) {
-  const end = mark === "done" ? (task.completedOn ?? task.startedOn) : mark === "open" ? today : task.dueDate;
-  if (!task.startedOn || !end) return null;
-  const box = spanBox(task.startedOn, end, rangeStart, dayWidth);
+  if (!task.startedOn) return null;
+  const started = task.startedOn;
+  const earlyDue = dueBeforeStart(task);
+  let end: string | null = null;
+  let open = false;
+  if (mark === "done") {
+    end = task.completedOn && task.completedOn >= started ? task.completedOn : started;
+  } else if (mark === "open" || earlyDue) {
+    // 期限が着手より前の未完了は、予定なしと同じく着手日から今日まで
+    open = true;
+    end = today >= started ? today : started;
+  } else {
+    end = task.dueDate;
+  }
+  if (!end) return null;
+  const box = spanBox(started, end, rangeStart, dayWidth);
   return (
     <Link
       to={href}
-      className={cx("timeline-bar", mark === "open" && "is-open", overdue && "is-overdue")}
+      className={cx("timeline-bar", open && "is-open", overdue && "is-overdue")}
       data-testid="timeline-bar"
       title={text}
       aria-label={text}
