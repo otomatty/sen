@@ -4,7 +4,7 @@ import { MoreHorizontal, Plus, Star, Trash2 } from "lucide-react";
 import type { ProjectStatus } from "../../../shared/types";
 import { PALETTE, PROJECT_STATUSES } from "../../../shared/constants";
 import { useData } from "../../store/data";
-import { archiveProject, updateProject, updateSettings } from "../../store/actions";
+import { archiveProject, setFavorite, updateProject } from "../../store/actions";
 import { projectProgress, useActiveIssues, useMembers, useTeams } from "../../store/selectors";
 import { openCreateIssue, toast } from "../../store/ui";
 import { cx, formatDate, localYmd } from "../../lib/utils";
@@ -52,7 +52,7 @@ export function ProjectPage() {
   const favorites = me?.settings?.favorites ?? [];
   const isFav = favorites.some((f) => f.type === "project" && f.id === project.id);
   const toggleFav = () => {
-    updateSettings({ favorites: isFav ? favorites.filter((f) => !(f.type === "project" && f.id === project.id)) : [...favorites, { type: "project", id: project.id }] });
+    setFavorite({ type: "project", id: project.id }, !isFav);
     toast(isFav ? "お気に入りから外しました" : "お気に入りに追加しました");
   };
   const title = (

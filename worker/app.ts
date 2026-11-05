@@ -119,8 +119,35 @@ export function createApp() {
 
   app.get("/me", async (c) => {
     const user = await getSessionUser(c);
-    if (!user) return c.json({ user: null, workspaces: [] });
-    return c.json({ user, workspaces: await listWorkspaces(c, user.id) });
+    if (!user) return c.json({ user: null, workspaces: [], defaultWorkspaceId: null });
+    const [workspaces, row] = await Promise.all([
+      listWorkspaces(c, user.id),
+      first<{ default_workspace_id: string | null }>(c.env.DB, "SELECT default_workspace_id FROM users WHERE id = ?", user.id),
+    ]);
+    const stored = row?.default_workspace_id ?? null;
+    const defaultWorkspaceId = stored && workspaces.some((w) => w.id === stored) ? stored : null;
+    return c.json({ user, workspaces, defaultWorkspaceId });
+  });
+
+  // 既定のワークスペース。users.settings はワークスペースのスナップショットに入るため、users の列に保存する。
+  app.post("/me/default-workspace", requireUser, async (c) => {
+    const body = await readJson<{ workspaceId?: unknown }>(c);
+    const workspaceId = body.workspaceId;
+    const userId = c.get("user").id;
+    if (workspaceId === null) {
+      await run(c.env.DB, "UPDATE users SET default_workspace_id = ? WHERE id = ?", null, userId);
+      return c.json({ ok: true, defaultWorkspaceId: null });
+    }
+    if (typeof workspaceId !== "string") return err(c, "ワークスペースを指定してください");
+    const member = await first<{ x: number }>(
+      c.env.DB,
+      "SELECT 1 AS x FROM members WHERE workspace_id = ? AND user_id = ?",
+      workspaceId,
+      userId,
+    );
+    if (!member) return err(c, "このワークスペースには参加していません", 404);
+    await run(c.env.DB, "UPDATE users SET default_workspace_id = ? WHERE id = ?", workspaceId, userId);
+    return c.json({ ok: true, defaultWorkspaceId: workspaceId });
   });
 
   // ---------------- ワークスペース ----------------
