@@ -4,6 +4,7 @@ import path from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { buildAssistantKnowledge } from "./scripts/assistant-knowledge";
 
 // SEN_PERSIST_DIR を指定すると、ローカル D1 / Durable Object の保存先を切り替えられる。
 // （E2E テストやチュートリアル動画の収録で、毎回まっさらな DB を使うため）
@@ -16,6 +17,31 @@ function publicFiles(dir: string, base = ""): string[] {
     if (e.isDirectory()) return rel === "tutorials" ? [] : publicFiles(dir, rel);
     return [rel];
   });
+}
+
+/**
+ * AI アシスタントに渡す知識。ガイドや manifest を直すと、開発中に作り直す。
+ * Worker のコードはデモ版にも含まれるので、両方のビルドに入れる。
+ */
+function assistantKnowledge(): Plugin {
+  const virtualId = "virtual:sen-assistant-knowledge";
+  const resolvedId = `\0${virtualId}`;
+  return {
+    name: "sen:assistant-knowledge",
+    // まだ import されていなくても、起動時とビルド時に一度作って壊れていないことを確かめる
+    configResolved(config) {
+      buildAssistantKnowledge(config.root);
+    },
+    resolveId(id) {
+      if (id === virtualId) return resolvedId;
+    },
+    load(id) {
+      if (id !== resolvedId) return null;
+      const knowledge = buildAssistantKnowledge(this.environment.config.root);
+      for (const file of knowledge.sources) this.addWatchFile(file);
+      return `export const KNOWLEDGE = ${JSON.stringify(knowledge.text)};\nexport const TUTORIALS = ${JSON.stringify(knowledge.tutorials)};\n`;
+    },
+  };
 }
 
 /**
@@ -56,7 +82,7 @@ export default defineConfig(({ mode }) => {
   // デモ版（ブラウザ内でバックエンドごと動く単一 HTML）は Worker を含めない
   if (mode === "demo") {
     return {
-      plugins: [react()],
+      plugins: [react(), assistantKnowledge()],
       define: { __SEN_DEMO__: "true" },
       base: "./",
       build: {
@@ -77,6 +103,7 @@ export default defineConfig(({ mode }) => {
         inspectorPort: false,
       }),
       serviceWorker(),
+      assistantKnowledge(),
     ],
     define: { __SEN_DEMO__: "false" },
     server: { port: Number(process.env.PORT ?? 5173), strictPort: true },
