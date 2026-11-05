@@ -22,9 +22,13 @@ function processOptionId(name: string): string {
   return `${PROCESS_OPTION_PREFIX}${name}`;
 }
 
-/** 予約項目の表示名と同じ工程名だけ「」で囲む。メニューと選んだあとのボタンで使う */
+/**
+ * 予約項目と同じ名前、または「で始まる工程名は「」で囲む。メニューと選んだあとのボタンで使う。
+ * 囲んだ表示は必ず「で始まり、囲まない表示は「で始まらないので、工程同士は重ならない。
+ * 予約項目の表示は「で始まらないので囲む側に出ず、その名前自体は囲むので囲まない側にも出ない。
+ */
 function processDisplayName(name: string): string {
-  return name === "すべて" || name === "工程なし" ? `「${name}」` : name;
+  return name === "すべて" || name === "工程なし" || name.startsWith("「") ? `「${name}」` : name;
 }
 
 function processFilterFromOption(id: string): ProcessFilter {

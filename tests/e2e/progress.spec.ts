@@ -536,6 +536,63 @@ test("工程名が「すべて」と「工程なし」でも、予約項目と�
   await expect(page.locator("[data-testid=wbs-row]", { hasText: "工程が工程なしの作業" })).toHaveCount(0);
 });
 
+test("工程名「すべて」と、かぎ括弧で始まる「すべて」が別の表示になる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "工程名のかぎ括弧" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const projectId = randomUUID();
+  const plainId = randomUUID();
+  const quotedId = randomUUID();
+  await mutate(page, ws, [
+    { type: "label.create", args: { id: plainId, name: "工程:すべて", color: "#6470e8" } },
+    { type: "label.create", args: { id: quotedId, name: "工程:「すべて」", color: "#3fb27f" } },
+    { type: "project.create", args: { id: projectId, name: "工程名のかぎ括弧", teamIds: [team.id] } },
+    {
+      type: "issue.create",
+      args: {
+        id: randomUUID(),
+        teamId: team.id,
+        projectId,
+        title: "工程がすべての作業",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        labelIds: [plainId],
+      },
+    },
+    {
+      type: "issue.create",
+      args: {
+        id: randomUUID(),
+        teamId: team.id,
+        projectId,
+        title: "工程が「すべての作業",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        labelIds: [quotedId],
+      },
+    },
+  ]);
+  await page.goto(`/${ws}/progress/wbs`);
+  await page.getByTestId("wbs-filter-process").click();
+  const menu = page.locator(".menu");
+  await expect(menu.getByRole("button", { name: "「すべて」", exact: true })).toHaveCount(1);
+  await expect(menu.getByRole("button", { name: "「「すべて」」", exact: true })).toHaveCount(1);
+
+  await menu.getByRole("button", { name: "「すべて」", exact: true }).click();
+  await expect(page.getByTestId("wbs-filter-process")).toContainText("工程：「すべて」");
+  await expect(page.getByTestId("wbs-row")).toHaveCount(1);
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "工程がすべての作業" })).toBeVisible();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "工程が「すべての作業" })).toHaveCount(0);
+
+  await page.getByTestId("wbs-filter-process").click();
+  await page.locator(".menu").getByRole("button", { name: "「「すべて」」", exact: true }).click();
+  await expect(page.getByTestId("wbs-filter-process")).toContainText("工程：「「すべて」」");
+  await expect(page.getByTestId("wbs-row")).toHaveCount(1);
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "工程が「すべての作業" })).toBeVisible();
+  await expect(page.locator("[data-testid=wbs-row]", { hasText: "工程がすべての作業" })).toHaveCount(0);
+});
+
 test("日本時間の 0 時を過ぎると、開いた日が期限の未完了の課題が期限超過になる", async ({ page }) => {
   const openedOn = "2026-11-05";
   const { ws } = await signupViaUi(page, { workspace: "日付をまたぐ進捗" });
