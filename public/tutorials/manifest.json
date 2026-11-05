@@ -6,53 +6,53 @@
       "summary": "サイドバーの構成と、どの画面でも使える基本のショートカットを紹介します。",
       "screen": "overview",
       "order": 1,
-      "duration": 68.6,
+      "duration": 59.8,
       "video": "/tutorials/overview.mp4",
       "poster": "/tutorials/overview.jpg",
       "chapters": [
         {
-          "t": 10,
+          "t": 8.2,
           "title": "はじめてログインすると、Sen の考え方が表示されます"
         },
         {
-          "t": 18.5,
+          "t": 15.4,
           "title": "左のサイドバーが、すべての画面への入り口です"
         },
         {
-          "t": 23.1,
+          "t": 19.5,
           "title": "受信トレイには、あなた宛ての通知が届きます"
         },
         {
-          "t": 27.4,
+          "t": 23.6,
           "title": "「自分の課題」には、担当している課題がまとまります"
         },
         {
-          "t": 32,
+          "t": 27.7,
           "title": "チームごとの課題一覧は、チーム名の下にあります"
         },
         {
-          "t": 37.1,
+          "t": 32.2,
           "title": "キーボードでも移動できます。G → I で受信トレイへ"
         },
         {
-          "t": 43.2,
+          "t": 37.5,
           "title": "G → M で「自分の課題」へ戻ります"
         },
         {
-          "t": 48,
+          "t": 41.6,
           "title": "? を押すと、ショートカットの一覧が開きます"
         },
         {
-          "t": 52.8,
+          "t": 46.3,
           "title": "⌘K（Ctrl+K）のパレットから、ほぼすべての操作ができます"
         },
         {
-          "t": 61.1,
+          "t": 53.2,
           "title": "使い方動画は、サイドバーの下からいつでも見られます"
         }
       ],
-      "recordedAt": "2026-11-05T09:46:35.294Z",
-      "sourceHash": "6a61782c3bcb9185",
+      "recordedAt": "2026-11-05T11:06:21.054Z",
+      "sourceHash": "6afe1072f71dd716",
       "narration": true
     },
     {
@@ -61,37 +61,37 @@
       "summary": "どの画面からでも C キーで課題を作成できます。プロパティもその場で設定できます。",
       "screen": "create",
       "order": 2,
-      "duration": 58.6,
+      "duration": 53.9,
       "video": "/tutorials/create-issue.mp4",
       "poster": "/tutorials/create-issue.jpg",
       "chapters": [
         {
-          "t": 11.1,
+          "t": 10.7,
           "title": "どの画面でも、C キーで課題の作成画面が開きます"
         },
         {
-          "t": 16.7,
+          "t": 15.5,
           "title": "まずタイトルを入力します"
         },
         {
-          "t": 21.7,
+          "t": 20.6,
           "title": "Enter で説明欄へ。Markdown 記法が使えます"
         },
         {
-          "t": 28.4,
+          "t": 27.2,
           "title": "下のボタンで、優先度や担当者をその場で設定します"
         },
         {
-          "t": 41.7,
+          "t": 40.6,
           "title": "⌘ + Enter（Ctrl + Enter）で作成します"
         },
         {
-          "t": 49.7,
+          "t": 46.2,
           "title": "作成した課題は、すぐ一覧に加わります。保存は自動です"
         }
       ],
-      "recordedAt": "2026-11-05T09:47:46.553Z",
-      "sourceHash": "fd82bc8607edaa36",
+      "recordedAt": "2026-11-05T11:07:27.213Z",
+      "sourceHash": "a3c3041c705ccf51",
       "narration": true
     },
     {
@@ -465,29 +465,30 @@
       "summary": "/ キーで検索。タイトル・説明・ID から、待ち時間なしで結果が表示されます。",
       "screen": "search",
       "order": 12,
-      "duration": 16.4,
+      "duration": 30,
       "video": "/tutorials/search.mp4",
       "poster": "/tutorials/search.jpg",
       "chapters": [
         {
-          "t": 3.1,
+          "t": 10.4,
           "title": "/ キーで、どこからでも検索を開けます"
         },
         {
-          "t": 5.7,
+          "t": 14.3,
           "title": "入力したそばから、結果が絞り込まれます"
         },
         {
-          "t": 7.7,
+          "t": 17.9,
           "title": "↓ で結果に移り、Enter で開きます"
         },
         {
-          "t": 10.9,
+          "t": 22.7,
           "title": "課題の ID でも探せます"
         }
       ],
-      "recordedAt": "2026-11-03T14:58:34.222Z",
-      "sourceHash": "762de5817be7259d"
+      "recordedAt": "2026-11-05T11:08:04.931Z",
+      "sourceHash": "3f06d7db8314f35e",
+      "narration": true
     },
     {
       "id": "settings",
