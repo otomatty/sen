@@ -306,6 +306,7 @@ export function EmptyState({
   action,
   icon,
   children,
+  testId,
 }: {
   title: string;
   description?: ReactNode;
@@ -313,9 +314,10 @@ export function EmptyState({
   icon?: ReactNode;
   /** 説明とボタンのあいだに置く補足（使い方の案内など） */
   children?: ReactNode;
+  testId?: string;
 }) {
   return (
-    <div className="empty-state">
+    <div className="empty-state" data-testid={testId}>
       {icon && <div className="empty-icon">{icon}</div>}
       <div className="empty-title">{title}</div>
       {description && <div className="empty-desc">{description}</div>}

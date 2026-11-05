@@ -131,13 +131,16 @@ export async function applyUpdate() {
     fail("送信できていない変更があります。オンラインで同期が終わってから、もう一度お試しください");
     return;
   }
+  // 待っている間にさらに新しい版のインストールが終わり、捕まえた版が置き換わっていることがある。
+  // 置き換わった版は起動しないので、いちばん新しい待機中の版に切り替える
+  const target = waiting && waiting.state !== "redundant" ? waiting : worker;
   // 別のタブですでに切り替わっていれば、読み込み直すだけでよい
-  if (worker.state === "activating" || worker.state === "activated") {
+  if (target.state === "activating" || target.state === "activated") {
     window.location.reload();
     return;
   }
   reloadOnChange = true;
-  worker.postMessage({ type: "skip-waiting" });
+  target.postMessage({ type: "skip-waiting" });
   // 切り替わらなかったときは、操作できる状態に戻す
   setTimeout(() => fail("更新できませんでした。もう一度お試しください"), 10_000);
 }
@@ -160,6 +163,11 @@ function showUpdate() {
 
 async function onWaiting(worker: ServiceWorker) {
   waiting = worker;
+  // 更新を頼んだあとに新しい版が待機に入った（頼んだ版が置き換わった）ときは、その版に切り替える
+  if (reloadOnChange) {
+    worker.postMessage({ type: "skip-waiting" });
+    return;
+  }
   if (await hasCurrentCode(worker)) {
     // 画面はすでに新しい版（ネットワークから読み込んだ）なので、保存内容だけ黙って入れ替える
     worker.postMessage({ type: "skip-waiting" });
