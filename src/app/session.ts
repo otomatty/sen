@@ -35,8 +35,17 @@ const sessionChannel: BroadcastChannel | null = (() => {
   }
 })();
 
+type SessionMessage =
+  | { type: "account-changed" }
+  | { type: "pending-query"; id: string }
+  | { type: "pending-reply"; id: string; pending: number };
+
+function postSession(message: SessionMessage) {
+  sessionChannel?.postMessage(message);
+}
+
 function notifyOtherTabs() {
-  sessionChannel?.postMessage({ type: "account-changed" });
+  postSession({ type: "account-changed" });
 }
 
 let sessionSyncReady = false;
@@ -46,8 +55,14 @@ export function initSessionSync() {
   if (DEMO || sessionSyncReady) return;
   sessionSyncReady = true;
   if (sessionChannel) {
-    sessionChannel.onmessage = (ev) => {
-      if (ev.data?.type !== "account-changed") return;
+    const channel = sessionChannel;
+    channel.onmessage = (ev) => {
+      const data = ev.data as SessionMessage | undefined;
+      if (data?.type === "pending-query") {
+        postSession({ type: "pending-reply", id: data.id, pending: useData.getState().pendingCount });
+        return;
+      }
+      if (data?.type !== "account-changed") return;
       engine.stop();
       window.location.assign("/");
     };
@@ -175,10 +190,33 @@ export function canChangeAccount(): string | null {
   return null;
 }
 
+// 切り替えると、ほかのタブは読み込み直すので、送っていない変更が消える。切り替えたあとは別のアカウントになるので送り直せない。だから切り替える前に確かめる
+async function otherTabsBlocker(): Promise<string | null> {
+  if (!sessionChannel) return null;
+  const channel = sessionChannel;
+  const id = crypto.randomUUID();
+  let total = 0;
+  const onMessage = (ev: MessageEvent) => {
+    const data = ev.data as SessionMessage | undefined;
+    if (data?.type === "pending-reply" && data.id === id) total += data.pending;
+  };
+  channel.addEventListener("message", onMessage);
+  try {
+    postSession({ type: "pending-query", id });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  } finally {
+    channel.removeEventListener("message", onMessage);
+  }
+  if (total >= 1) return `別のタブに未送信の変更（${total}件）があります。送り終わってから切り替えてください`;
+  return null;
+}
+
 /** このブラウザに記録済みのアカウントへ切り替えて、最初から開き直す */
 export async function switchAccount(userId: string) {
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
+  const other = await otherTabsBlocker();
+  if (other) throw new Error(other);
   await api("/api/accounts/switch", { body: { userId } });
   engine.stop();
   notifyOtherTabs();
@@ -190,12 +228,18 @@ export async function addAccount() {
   if (DEMO) return;
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
+  const other = await otherTabsBlocker();
+  if (other) throw new Error(other);
   await refreshAccounts();
   await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
 }
 
 /** 今のアカウントだけログアウトし、残ったアカウントで開き直す */
 export async function logoutCurrentAccount() {
+  const reason = canChangeAccount();
+  if (reason) throw new Error(reason);
+  const other = await otherTabsBlocker();
+  if (other) throw new Error(other);
   const user = useSession.getState().user;
   await api("/api/accounts/sign-out", { body: {} });
   engine.stop();

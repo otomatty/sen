@@ -121,3 +121,29 @@ test("画面と違うアカウントからのリクエストは止める", async
   const ok = await page.request.get(`/api/sync?ws=${ws}&after=0`);
   expect(ok.status()).toBe(200);
 });
+
+test("別のタブに未送信の変更があるときは、切り替えない", async ({ page }) => {
+  const { jiro } = await signInTwoAccounts(page);
+  await waitForSynced(page);
+  const other = await page.context().newPage();
+  await other.goto(`/${jiro.ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  if ((await other.getByTestId("issue-row").count()) === 0) {
+    await other.getByTestId("sidebar-create").click();
+    await other.getByTestId("create-title").fill("オフラインで確認する課題");
+    await other.keyboard.press("ControlOrMeta+Enter");
+    await expect(other.getByTestId("issue-row").first()).toBeVisible();
+  }
+  // 応答を返さないので、変更は送信待ちのまま残る。この指定はこのページにしか効かない
+  await other.route("**/api/mutate**", () => {});
+  await other.getByTestId("issue-row").first().click();
+  const title = other.getByTestId("issue-title");
+  await title.fill("別のタブで編集");
+  await title.press("Enter");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("toast")).toContainText("別のタブに未送信の変更");
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+  await other.unroute("**/api/mutate**");
+  await other.close();
+});
