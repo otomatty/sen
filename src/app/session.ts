@@ -57,12 +57,15 @@ export async function loadSession() {
 }
 
 let workspacesRefresh: Promise<void> | null = null;
+// 既定の保存が始まった回数。遅れて届く取り直しが、その間に保存した値を上書きしないために数える。
+let defaultWorkspaceSaves = 0;
 
 // 参加一覧はワークスペースごとのスナップショットに入れず、ユーザー単位のこの一覧（/api/me）だけを正とする。
 // メニューを開いたときに取り直し、別のタブや端末であとから参加したワークスペースも反映する。
 export async function refreshWorkspaces(): Promise<void> {
   if (workspacesRefresh) return workspacesRefresh;
   workspacesRefresh = (async () => {
+    const savesAtStart = defaultWorkspaceSaves;
     try {
       // 応答が無いまま待ち続けると、使い回す Promise が終わらず次回も取り直せない。
       const res = await api<MeResponse>("/api/me", {
@@ -71,7 +74,9 @@ export async function refreshWorkspaces(): Promise<void> {
       if (!res.user) return;
       const cur = useSession.getState();
       if (cur.status !== "authed" || cur.user?.id !== res.user.id) return;
-      const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
+      // 取り直しの途中で既定の保存が始まっていたら、応答は保存前の値なので使わない。
+      // 一覧だけ更新し、defaultWorkspaceId は今の値のまま残してキャッシュにも書く。
+      const defaultWorkspaceId = savesAtStart === defaultWorkspaceSaves ? (res.defaultWorkspaceId ?? null) : cur.defaultWorkspaceId;
       writeSessionCache(res.user, res.workspaces, defaultWorkspaceId);
       useSession.setState({ workspaces: res.workspaces, defaultWorkspaceId });
     } catch {
@@ -151,6 +156,7 @@ export function pickWorkspaceKey(workspaces: WorkspaceSummary[], defaultWorkspac
 
 /** 最初に開くワークスペースを保存する。解除するときは null */
 export async function setDefaultWorkspace(workspaceId: string | null): Promise<void> {
+  defaultWorkspaceSaves += 1;
   const res = await api<{ ok: true; defaultWorkspaceId: string | null }>("/api/me/default-workspace", { body: { workspaceId } });
   const defaultWorkspaceId = res.defaultWorkspaceId ?? null;
   const cur = useSession.getState();

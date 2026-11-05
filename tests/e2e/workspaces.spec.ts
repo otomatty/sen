@@ -151,6 +151,46 @@ test("最初に開くワークスペースを選ぶと、最後に開いたワ�
   await expect(page).toHaveURL(new RegExp(`/${ws2}/`));
 });
 
+test("設定を開いた直後の取り直しが遅れても、選んだ最初に開くワークスペースが元に戻らない", async ({ page }) => {
+  const { ws: ws1 } = await signupViaUi(page, { workspace: "ワークスペース1" });
+  await waitForSynced(page);
+
+  const created = await page.request.post("/api/workspaces", {
+    data: { name: "ワークスペース2" },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const ws2 = ((await created.json()) as { workspaceKey: string }).workspaceKey;
+
+  const before = (await (await page.request.get("/api/me")).json()) as { workspaces: { id: string; urlKey: string }[] };
+  const id1 = before.workspaces.find((w) => w.urlKey === ws1)?.id;
+  expect(id1).toBeTruthy();
+
+  // GET はすぐサーバーへ取りにいき、保存前の応答を 1.5 秒遅れて届ける。
+  const gets: { fetched: boolean; fulfilled: boolean }[] = [];
+  await page.route("**/api/me", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const slot = { fetched: false, fulfilled: false };
+    gets.push(slot);
+    const response = await route.fetch();
+    slot.fetched = true;
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.fulfill({ response });
+    slot.fulfilled = true;
+  });
+
+  await page.goto(`/${ws2}/settings/profile`);
+  await expect(page.getByTestId("default-workspace")).toBeVisible();
+  // select が出るのは loadSession のあと。設定画面の取り直しが保存前の応答を持って遅れているうちに選ぶ。
+  await expect.poll(() => gets.some((g) => g.fetched && !g.fulfilled)).toBe(true);
+  await page.getByTestId("default-workspace").selectOption(id1!);
+  await page.waitForTimeout(2500);
+  await expect(page.getByTestId("default-workspace")).toHaveValue(id1!);
+});
+
 test("参加していないワークスペースは最初に開くワークスペースにできない", async ({ page, browser }) => {
   await signupViaUi(page, { workspace: "自分のワークスペース" });
 
