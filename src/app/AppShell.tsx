@@ -22,6 +22,7 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useCurrentTeamId } from "./hooks";
 import { setLastWorkspaceKey, useSession } from "./session";
 import { openRelationPicker, RELATION_ACTIONS } from "../features/issues/Relations";
+import { NAVIGATION_SHORTCUT_SCREENS, resolveScreenPath } from "../../shared/navigation";
 
 export function Toasts() {
   const toasts = useUI((s) => s.toasts);
@@ -55,23 +56,19 @@ function GlobalShortcuts() {
   const { ws } = useParams();
   const teamId = useCurrentTeamId();
   const teams = useData((s) => s.teams);
-  const go = (p: string) => navigate(`/${ws}${p}`);
   const teamKey = (teamId && teams[teamId]?.key) || Object.values(teams)[0]?.key;
 
   useHotkeys("mod+k", () => openPalette(), { allowInInput: true });
   useHotkeys("c", () => openCreateIssue({ teamId }));
-  useHotkeys("/", () => go("/search"));
   useHotkeys("?", () => useUI.setState((s) => ({ shortcutsOpen: !s.shortcutsOpen })));
-  useHotkeys("g i", () => go("/inbox"));
-  useHotkeys("g m", () => go("/my-issues"));
-  useHotkeys("g p", () => go("/projects"));
-  useHotkeys("g r", () => go("/progress"));
-  useHotkeys("g s", () => go("/settings"));
-  useHotkeys("g h", () => go("/help"));
-  useHotkeys("g e", () => teamKey && go(`/team/${teamKey}/all`));
-  useHotkeys("g a", () => teamKey && go(`/team/${teamKey}/active`));
-  useHotkeys("g b", () => teamKey && go(`/team/${teamKey}/backlog`));
-  useHotkeys("g c", () => teamKey && go(`/team/${teamKey}/cycles`));
+  for (const screen of NAVIGATION_SHORTCUT_SCREENS) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- NAVIGATION_SHORTCUT_SCREENS は固定の配列なので呼び出し順は変わらない
+    useHotkeys(screen.combo, () => {
+      if (!ws) return;
+      const path = resolveScreenPath(screen.id, { ws, teamKey, teamId });
+      if (path) navigate(path);
+    });
+  }
   useHotkeys("mod+z", () => undo());
 
   // フォーカスした課題のコメントと履歴を先読みして、開いた瞬間に表示できるようにする

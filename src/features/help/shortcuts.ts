@@ -1,3 +1,5 @@
+import { navigationShortcutItems } from "../../../shared/navigation";
+
 export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
   {
     title: "全体",
@@ -12,18 +14,7 @@ export const SHORTCUT_GROUPS: { title: string; items: [string, string][] }[] = [
   },
   {
     title: "移動",
-    items: [
-      ["g i", "受信トレイ"],
-      ["g m", "自分の課題"],
-      ["g e", "チームのすべての課題"],
-      ["g a", "チームのアクティブな課題"],
-      ["g b", "チームのバックログ"],
-      ["g c", "サイクル"],
-      ["g p", "プロジェクト"],
-      ["g r", "進捗"],
-      ["g s", "設定"],
-      ["g h", "使い方動画"],
-    ],
+    items: navigationShortcutItems(),
   },
   {
     title: "一覧",
