@@ -155,6 +155,66 @@ test("テキストの ~ は 1 つでもエスケープし、コードの中は�
   expect(markdownToHtml(htmlToMarkdown("<p>~~二重~~</p>"))).not.toContain("<s>");
 });
 
+test("強調の端の空白と句読点は区切りの外に出て、太字・斜体・取消のまま残る", () => {
+  const cases = [
+    { html: "<strong>foo </strong>bar", tag: "<strong>" },
+    { html: "<em> foo</em>", tag: "<em>" },
+    { html: "a<strong> b </strong>c", tag: "<strong>" },
+    { html: "<strong>重要。</strong>次に", tag: "<strong>" },
+    { html: "<strong>「重要」</strong>です", tag: "<strong>" },
+    { html: "前<strong>(注)</strong>後", tag: "<strong>" },
+    { html: '<strong><a href="https://example.com">link</a></strong>です', tag: "<strong>" },
+    // 取消線の表示は <s>（~~ の描画）。入力の <del> が強調のまま残ることを見る。
+    { html: "<del>「取消」</del>です", tag: "<s>" },
+  ];
+  for (const { html, tag } of cases) {
+    const md = htmlToMarkdown(html);
+    const back = markdownToHtml(md);
+    expect(back, html).toContain(tag);
+    expect(markdownToText(md), html).toBe(htmlVisibleText(html));
+    expect(back, html).not.toContain("md-raw-html");
+    if (!/<table\b/i.test(html)) expect(back, html).not.toContain("<table");
+    expect(tagCount(back, /<h[1-6]\b/gi), html).toBe(tagCount(html, /<h[1-6]\b/gi));
+    expect(tagCount(back, /<(?:ul|ol)\b/gi), html).toBe(tagCount(html, /<(?:ul|ol)\b/gi));
+    expect(tagCount(back, /<blockquote\b/gi), html).toBe(tagCount(html, /<blockquote\b/gi));
+  }
+});
+
+test("重ねた強調の端の句読点は、外側の隣を見て区切りの外に出る", () => {
+  const cases = ['<strong><em>「両方」</em></strong>です', "前<em><strong>(注)</strong></em>後", '<strong>「<em>両方</em>」</strong>です'];
+  for (const html of cases) {
+    const md = htmlToMarkdown(html);
+    const back = markdownToHtml(md);
+    expect(back, html).toContain("<strong>");
+    expect(back, html).toContain("<em>");
+    expect(markdownToText(md), html).toBe(htmlVisibleText(html));
+  }
+  expect(htmlToMarkdown('<strong><em>「両方」</em></strong>です')).toBe("「***両方***」です");
+  expect(htmlToMarkdown("前<em><strong>(注)</strong></em>後")).toBe("前(***注***)後");
+  expect(htmlToMarkdown('<strong>「<em>両方</em>」</strong>です')).toBe("「***両方***」です");
+});
+
+test("名前付きの文字参照は1回だけ戻して表示する", () => {
+  expect(markdownToText(htmlToMarkdown("<p>&copy; 2026 &eacute;t&eacute;</p>"))).toBe("© 2026 été");
+  expect(markdownToHtml(htmlToMarkdown("<p>&copy; 2026 &eacute;t&eacute;</p>"))).toBe("<p>© 2026 été</p>");
+  expect(markdownToText(htmlToMarkdown("<p>&amp;copy;</p>"))).toBe("&copy;");
+  expect(markdownToHtml(htmlToMarkdown("<p>&amp;copy;</p>"))).toBe("<p>&amp;copy;</p>");
+  expect(markdownToText(htmlToMarkdown("<p>&foo;</p>"))).toBe("&foo;");
+  expect(markdownToHtml(htmlToMarkdown("<p>&foo;</p>"))).toBe("<p>&amp;foo;</p>");
+});
+
+test("大文字の基本の文字参照は戻し、ほかの名前は大文字小文字を区別する", () => {
+  const md = htmlToMarkdown("<p>&AMP; &LT;b&GT; &QUOT;</p>");
+  expect(markdownToText(md)).toBe('& <b> "');
+  const back = markdownToHtml(md);
+  expect(back).toBe('<p>&amp; &lt;b&gt; &quot;</p>');
+  expect(back).not.toContain("<b>");
+  expect(markdownToText(htmlToMarkdown("<p>&Eacute;</p>"))).toBe("É");
+  expect(markdownToHtml(htmlToMarkdown("<p>&Eacute;</p>"))).toBe("<p>É</p>");
+  expect(markdownToText(htmlToMarkdown("<p>&eacute;</p>"))).toBe("é");
+  expect(markdownToHtml(htmlToMarkdown("<p>&eacute;</p>"))).toBe("<p>é</p>");
+});
+
 test("文字だったものは、変換後も同じ文字のまま残る", () => {
   const samples = [
     "<p>&lt;div&gt; と a_b</p>",

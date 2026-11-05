@@ -13,6 +13,7 @@ import { FootnoteDefinition, FootnoteReference } from "./editor/footnote";
 import { SafeImage } from "./editor/image";
 import { InlineHtml, RawHtmlBlock } from "./editor/rawHtml";
 import { TableToolbar } from "./editor/TableToolbar";
+import { adjustEmphasisPunctuation } from "./editor/emphasis";
 import { createTableFromPipes, inTableCell, tableExtensions } from "./editor/table";
 
 // リッチテキストエディタ。本文は GitHub 互換の Markdown（GFM）として読み書きする。
@@ -34,7 +35,9 @@ export interface EditorProps {
 /** 末尾の改行は取り除く。ただし Shift+Enter のハードブレーク（空白 2 つ、または \）は残す */
 export function editorMarkdown(editor: TiptapEditor): string {
   if (editor.isEmpty) return "";
-  const markdown = editor.getMarkdown();
+  // 画面の文書は変えず、保存する文字だけ句読点の印を外す。getMarkdown は serialize(getJSON()) と同じ。
+  const json = adjustEmphasisPunctuation(editor.getJSON());
+  const markdown = editor.markdown ? editor.markdown.serialize(json) : editor.getMarkdown();
   return markdown.replace(/\n+$/, (newlines) => {
     const before = markdown.slice(0, markdown.length - newlines.length);
     if (before.endsWith("  ") || before.endsWith("\\")) return "\n";
