@@ -4,6 +4,9 @@ import type {
   AppNotification,
   Comment,
   Cycle,
+  GitHubLink,
+  GitHubPull,
+  GitHubRepo,
   Issue,
   Label,
   Me,
@@ -31,6 +34,9 @@ export interface DataState {
   comments: Record<string, Comment>;
   activities: Record<string, Activity>;
   notifications: Record<string, AppNotification>;
+  githubRepos: Record<string, GitHubRepo>;
+  githubLinks: Record<string, GitHubLink>;
+  githubPulls: Record<string, GitHubPull>;
   threads: Record<string, "loading" | "loaded">;
   syncStatus: SyncStatus;
   pendingCount: number;
@@ -52,6 +58,9 @@ export const initialData: DataState = {
   comments: {},
   activities: {},
   notifications: {},
+  githubRepos: {},
+  githubLinks: {},
+  githubPulls: {},
   threads: {},
   syncStatus: "synced",
   pendingCount: 0,

@@ -578,9 +578,14 @@ export function regenerateInvite() {
   m({ type: "workspace.regenerateInvite", args: {} });
 }
 
-export function updateMe(patch: { name?: string; avatarColor?: string; settings?: UserSettings }) {
+export function updateMe(patch: { name?: string; avatarColor?: string; settings?: UserSettings; githubLogin?: string | null }) {
   const id = getData().meId!;
-  m({ type: "user.update", args: patch }, [{ c: "users", id, fn: (v) => v && { ...v, ...patch } }]);
+  const args = { ...patch };
+  if (typeof args.githubLogin === "string") {
+    const login = args.githubLogin.trim().toLowerCase();
+    args.githubLogin = login ? login : null;
+  }
+  m({ type: "user.update", args }, [{ c: "users", id, fn: (v) => v && { ...v, ...args } }]);
 }
 
 export function updateSettings(patch: Partial<UserSettings>) {

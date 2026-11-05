@@ -6,9 +6,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.E2E_PORT ?? 4320);
 const GOOGLE_PORT = Number(process.env.E2E_GOOGLE_PORT ?? 4329);
+const GITHUB_PORT = Number(process.env.E2E_GITHUB_PORT ?? 4339);
 const persist = path.join(os.tmpdir(), "sen-e2e-state");
 const sheetsVarsPath = path.join(os.tmpdir(), "sen-e2e-sheets.vars");
 const sheetsPublicPath = path.join(os.tmpdir(), "sen-e2e-sheets-public.pem");
+const githubVarsPath = path.join(os.tmpdir(), "sen-e2e-github.vars");
 // Google ログインは「Google の画面へ移るところ」までを確かめるので、ダミーの認証情報を使う。
 // ビルドが書き出す dist/sen/.dev.vars の末尾に足すと、手元の .env.local の値より優先される。
 const GOOGLE_DUMMY = "GOOGLE_CLIENT_ID=e2e-google-client-id\\nGOOGLE_CLIENT_SECRET=e2e-google-client-secret\\n";
@@ -22,6 +24,21 @@ const sheetsOriginLine = `GOOGLE_API_ORIGIN_FOR_TESTS=http://localhost:${GOOGLE_
 function sheetsVarsMatchCurrentPort(): boolean {
   if (!fs.existsSync(sheetsVarsPath) || !fs.existsSync(sheetsPublicPath)) return false;
   return fs.readFileSync(sheetsVarsPath, "utf8").split(/\r?\n/).includes(sheetsOriginLine);
+}
+
+const githubOriginLine = `GITHUB_API_ORIGIN_FOR_TESTS=http://localhost:${GITHUB_PORT}`;
+if (!process.env.TEST_WORKER_INDEX) {
+  fs.writeFileSync(
+    githubVarsPath,
+    [
+      "GITHUB_WORKSPACE=github-e2e",
+      "GITHUB_TOKEN=e2e-github-token",
+      "GITHUB_WEBHOOK_SECRET=e2e-github-webhook-secret",
+      "GITHUB_SYNC_DELAY_MS=200",
+      githubOriginLine,
+      "",
+    ].join("\n"),
+  );
 }
 
 if (!process.env.TEST_WORKER_INDEX && !sheetsVarsMatchCurrentPort()) {
@@ -68,7 +85,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } } }],
   webServer: {
     // 毎回まっさらな DB で、本番と同じビルドを動かす
-    command: `rm -rf ${persist} && bunx vite build && printf '${GOOGLE_DUMMY}' >> dist/sen/.dev.vars && cat '${sheetsVarsPath}' >> dist/sen/.dev.vars && bunx vite preview --port ${PORT} --strictPort`,
+    command: `rm -rf ${persist} && bunx vite build && printf '${GOOGLE_DUMMY}' >> dist/sen/.dev.vars && cat '${sheetsVarsPath}' >> dist/sen/.dev.vars && cat '${githubVarsPath}' >> dist/sen/.dev.vars && bunx vite preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/api/health`,
     env: { SEN_PERSIST_DIR: persist, PORT: String(PORT) },
     reuseExistingServer: !process.env.CI,

@@ -31,10 +31,22 @@ type Row = Record<string, any>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COLOR = /^#[0-9a-f]{6}$/i;
+/** GitHub のユーザー名。空は登録を消す。保存前に小文字にする */
+const GITHUB_LOGIN = /^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/;
 const STATE_TYPES: StateType[] = ["backlog", "unstarted", "started", "completed", "canceled"];
 
 function fail(msg: string, status = 400): never {
   throw new MutationError(msg, status);
+}
+
+/** 空は登録を消す。それ以外は GitHub の規則に合い、小文字で返す */
+function normalizeGitHubLogin(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") fail("GitHub のユーザー名が不正です");
+  const login = value.trim().toLowerCase();
+  if (!login) return null;
+  if (!GITHUB_LOGIN.test(login)) fail("GitHub のユーザー名の形式が正しくありません");
+  return login;
 }
 
 function assertId(id: unknown): asserts id is string {
@@ -999,12 +1011,18 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         if (s.length > 20_000) fail("設定が大きすぎます");
         settings = s;
       }
+      const githubLogin = a.githubLogin !== undefined ? normalizeGitHubLogin(a.githubLogin) : (cur.github_login ?? null);
+      if (githubLogin) {
+        const other = await first<{ id: string }>(db, "SELECT id FROM users WHERE github_login = ? AND id != ?", githubLogin, user.id);
+        if (other) fail("この GitHub ユーザー名は、ほかの人が登録しています", 409);
+      }
       await run(
         db,
-        "UPDATE users SET name = ?, avatar_color = ?, settings = ?, updated_at = ? WHERE id = ?",
+        "UPDATE users SET name = ?, avatar_color = ?, settings = ?, github_login = ?, updated_at = ? WHERE id = ?",
         name,
         color,
         settings,
+        githubLogin,
         now,
         user.id,
       );
@@ -1020,6 +1038,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
           email: cur.email,
           avatarColor: color,
           role: ctx.role,
+          githubLogin,
           createdAt: cur.created_at,
           settings: JSON.parse(settings || "{}"),
         },

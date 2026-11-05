@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { createApp } from "./app";
 import { all, ensureMigrated, first, run } from "./db";
 import type { Env, WorkspaceRow } from "./env";
+import { GitHubSyncRunner } from "./github/runner";
 import { requestSheetSyncNow, sheetsConfig } from "./sheets/config";
 import { SheetSyncRunner } from "./sheets/runner";
 
@@ -47,6 +48,12 @@ export default {
     } catch (e) {
       console.error("sheets cron failed", e);
     }
+    // Webhook の重複除け。7 日より古い行を消す。突き合わせの依頼はまだしない。
+    try {
+      await run(env.DB, "DELETE FROM github_deliveries WHERE received_at < ?", Date.now() - 7 * 86_400_000);
+    } catch (e) {
+      console.error("github delivery cleanup failed", e instanceof Error ? e.name : "error");
+    }
   },
 } satisfies ExportedHandler<Env>;
 
@@ -72,16 +79,22 @@ async function syncSheets(env: Env): Promise<void> {
  */
 export class WorkspaceRealtime extends DurableObject<Env> {
   private sheets: SheetSyncRunner;
+  private github: GitHubSyncRunner;
+  private alarmChain: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.sheets = new SheetSyncRunner(ctx.storage, env);
+    const signal = () => this.syncAlarm();
+    this.sheets = new SheetSyncRunner(ctx.storage, env, signal);
+    this.github = new GitHubSyncRunner(ctx.storage, env, signal);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
   async fetch(request: Request): Promise<Response> {
-    const r = await this.sheets.handle(request);
-    if (r) return r;
+    const sheets = await this.sheets.handle(request);
+    if (sheets) return sheets;
+    const github = await this.github.handle(request);
+    if (github) return github;
     const url = new URL(request.url);
     if (url.pathname === "/notify" && request.method === "POST") {
       const { lastSyncId } = (await request.json()) as { lastSyncId: number };
@@ -106,6 +119,27 @@ export class WorkspaceRealtime extends DurableObject<Env> {
 
   async alarm() {
     await this.sheets.alarm();
+    await this.github.alarm();
+    await this.syncAlarm();
+  }
+
+  /** スプレッドシートと連携の、次の時刻の早い方にアラームを合わせる */
+  private syncAlarm(): Promise<void> {
+    const run = this.alarmChain.then(() => this.writeAlarm(), () => this.writeAlarm());
+    this.alarmChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async writeAlarm(): Promise<void> {
+    const times = [await this.sheets.nextAt(), await this.github.nextAt()].filter((t): t is number => t != null);
+    if (times.length === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(Math.min(...times));
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {

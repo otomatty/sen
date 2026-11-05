@@ -33,6 +33,7 @@ import { confirmDialog } from "../../components/ConfirmDialog";
 import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
 import type { Me } from "../../../shared/types";
 import { AiSettings } from "./AiSettings";
+import { GitHubSection } from "./GitHubSettings";
 import { SheetsSection } from "./SheetsSettings";
 import { Field, Section } from "./parts";
 
@@ -79,6 +80,7 @@ function ProfileSettings() {
   const me = useData((s) => (s.meId ? (s.users[s.meId] as Me) : null));
   const theme = useUI((s) => s.theme);
   const [name, setName] = useState(me?.name ?? "");
+  const [githubLogin, setGithubLogin] = useState(me?.githubLogin ?? "");
   if (!me) return null;
   return (
     <>
@@ -88,6 +90,24 @@ function ProfileSettings() {
         </Field>
         <Field label="メールアドレス">
           <span className="muted">{me.email}</span>
+        </Field>
+        <Field label="GitHub のユーザー名" hint="自分のユーザー名だけを登録できます。小文字で保存します。本人確認は行いません。">
+          <input
+            className="input"
+            value={githubLogin}
+            placeholder="例: octocat"
+            maxLength={39}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            data-testid="profile-github-login"
+            onChange={(e) => setGithubLogin(e.target.value)}
+            onBlur={() => {
+              const next = githubLogin.trim().toLowerCase();
+              setGithubLogin(next);
+              if (next !== (me.githubLogin ?? "")) updateMe({ githubLogin: next });
+            }}
+          />
         </Field>
         <Field label="アバターの色">
           <span className="avatar-edit">
@@ -242,6 +262,7 @@ function WorkspaceSettings() {
       </Section>
       <InviteSection invite={invite} admin={admin} />
       <SheetsSection />
+      <GitHubSection />
       <DevTools />
     </>
   );

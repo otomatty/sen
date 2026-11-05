@@ -30,6 +30,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **AI 連携（MCP）**：Claude Code・Cursor・VS Code などの AI ツールから、課題の作成・更新・検索・コメント・関係づけ。AI の変更には「Claude Code 経由」の印（[詳しく](#ai-連携mcp)）
 - **進捗**：ワークスペースのメンバーが、プロジェクト（活動）ごとの完了率・直近期限・活動状況と、作業の WBS・タイムラインをアプリの中で見られます。数え方はスプレッドシート連携と同じです（[詳しく](#進捗ページ)）
 - **スプレッドシート連携**：プロジェクトを「活動」、課題を「タスク」として、Google スプレッドシートの「活動一覧」「WBS」に書き出します（[詳しく](#スプレッドシート連携)）
+- **GitHub 連携**：チーム 1 つと GitHub のリポジトリ 1 つを対応させ、個人のアクセストークンと Webhook でつなぎます（[詳しく](#github-連携)）
 - **ログイン**：Google アカウントのみ（[Better Auth](https://www.better-auth.com)）。初めての人はログイン後にワークスペースを作るか、招待リンクから参加
 - **設定**：プロフィール、テーマ（ライト / ダーク / システム）、メンバー招待リンク・権限、ラベル、チーム、ワークフロー、サイクル期間
 - **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`bun run tutorials:check` で古い動画も検出）
@@ -334,6 +335,36 @@ GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account","client_email":"...","priv
 - 403 のときは、共有していない場合と Google Sheets API が有効でない場合とで、設定画面の理由を出し分けます。
 - 反映の予約と状態は、ワークスペースごとの Durable Object が持ちます。DB のテーブルは増えません。
 
+## GitHub 連携
+
+チーム 1 つと GitHub のリポジトリ 1 つを対応させます。書き込みは個人のアクセストークン（fine-grained を推奨）で行い、リポジトリの Webhook で変更を受け取ります。トークンと Webhook の secret は Worker の secret にだけ置き、画面・ログ・同期ログには出しません。
+
+連携されるのは `GITHUB_WORKSPACE` のワークスペースだけです。それ以外では、設定画面にこの区画は出ません。
+
+設定 → ワークスペース の「GitHub 連携」で、管理者がチームに `owner/name` を登録します。登録すると Webhook（Issues、Issue comments、Pull requests。JSON。secret 付き）を自動で作ります。トークンに Webhook の権限が無いときは、画面に手で設定する手順（URL と選ぶイベント）が出ます。secret の値そのものは出さず、環境変数 `GITHUB_WEBHOOK_SECRET` の値を入れるよう案内します。
+
+連携を外すと、そのリポジトリの課題とプルリクエストの紐づけを消し、自動で作った Webhook も消します。GitHub の Issue と Sen の課題そのものは消しません。
+
+プルリクエストの状態で課題を動かす初期値は、下書きが進行中の最初のステータス、レビュー待ちが「レビュー中」（無ければ進行中の最初）、マージが完了の最初です。チームごとに「変えない」も選べます。
+
+各メンバーは、設定 → プロフィール で自分の GitHub ユーザー名を登録します。他人の分は登録できません。全体で一意で、小文字で保存します。OAuth などでの本人確認は無いので、正しいユーザー名を自分で入れてください。
+
+課題とコメントの同期、プルリクエストの紐づけは、連携を始めたあとに作られたものだけが対象です。コメントは追加だけを同期し、編集と削除は同期しません。
+
+```bash
+bunx wrangler secret put GITHUB_WORKSPACE
+bunx wrangler secret put GITHUB_TOKEN
+bunx wrangler secret put GITHUB_WEBHOOK_SECRET
+```
+
+| 変数 | 内容 |
+| --- | --- |
+| `GITHUB_WORKSPACE` | 連携するワークスペースの URL の名前（例：`ses`） |
+| `GITHUB_TOKEN` | 個人のアクセストークン。対象リポジトリの Issues の読み書き、Pull requests の読み取り、Metadata の読み取り。Webhook を自動で作るなら Webhooks の読み書き |
+| `GITHUB_WEBHOOK_SECRET` | Webhook の secret |
+| `GITHUB_SYNC_DELAY_MS` | Sen の変更を GitHub に送るまでの待ち時間（ミリ秒）。省略時は `3000` |
+| `GITHUB_API_ORIGIN_FOR_TESTS` | E2E 用。`DEV_TOOLS=1` のときだけ有効で、`https://api.github.com` の代わりにこのオリジンへ送ります。本番では無視します |
+
 ## はじめかた（ローカル）
 
 必要なもの：[Bun](https://bun.sh)（パッケージ管理）と Node.js 20 以上（Vite・Wrangler の実行に使います）。
@@ -474,7 +505,7 @@ Windows / Linux では `⌘` の代わりに `Ctrl` を使います。
 ## ディレクトリ構成
 
 ```
-worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object・スプレッドシート連携）
+worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object・スプレッドシート連携・GitHub 連携）
 shared/        クライアントとサーバーで共有する型・定数（`progress.ts` はシートとアプリで共通の集計、`markdown.ts` は本文の Markdown の処理）
 migrations/    D1 のスキーマ
 src/           React アプリ

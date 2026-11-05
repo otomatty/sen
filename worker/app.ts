@@ -5,6 +5,7 @@ import type {
   ApiTokenCreateResponse,
   ApiTokenListResponse,
   BootstrapPayload,
+  GitHubRepoPatch,
   MutateRequest,
   MutateResponse,
   Mutation,
@@ -21,6 +22,9 @@ import {
   toActivity,
   toComment,
   toCycle,
+  toGithubLink,
+  toGithubPull,
+  toGithubRepo,
   toIssue,
   toLabel,
   toNotification,
@@ -35,7 +39,9 @@ import { handleMcp } from "./mcp/server";
 import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
 import { loadStartedOn } from "./progress";
 import { isSheetsTarget, requestSheetSyncNow, requestSheetSyncStatus, scheduleSheetSync, sheetsConfig, spreadsheetUrl } from "./sheets/config";
-
+import { scheduleGitHubSync, isGitHubTarget } from "./github/config";
+import { handleGitHubWebhook } from "./github/webhook";
+import { linkGitHubRepo, readGitHubStatus, unlinkGitHubRepo, updateGitHubRepo } from "./github/repos";
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
 }
@@ -67,7 +73,9 @@ export function createApp() {
   // /api/mcp は Cookie を使わず API トークンだけで認証するので対象外。MCP クライアントは x-sen-client を送らない。
   app.use("*", async (c, next) => {
     await ensureMigrated(c.env.DB);
-    if (c.req.path !== "/api/mcp" && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
+    // /api/github/webhook は GitHub からの POST。セッションも x-sen-client も無い。
+    const csrfExempt = c.req.path === "/api/mcp" || c.req.path === "/api/github/webhook";
+    if (!csrfExempt && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
       return err(c, "不正なリクエストです", 403);
     }
     c.header("Cache-Control", "no-store");
@@ -165,7 +173,8 @@ export function createApp() {
     const user = c.get("user");
     // 先に syncId を取ってから読む（読んでいる間の変更は次の差分取得で拾える）
     const lastSyncId = await getLastSyncId(db, ws.id);
-    const [users, teams, states, labels, projects, cycles, issues, notifications, workspaces] = await Promise.all([
+    const githubOn = isGitHubTarget(c.env, ws.url_key);
+    const [users, teams, states, labels, projects, cycles, issues, notifications, workspaces, githubRepos, githubLinks, githubPulls] = await Promise.all([
       all<never>(db, "SELECT u.*, m.role FROM users u JOIN members m ON m.user_id = u.id WHERE m.workspace_id = ? ORDER BY m.created_at", ws.id),
       all<never>(db, "SELECT * FROM teams WHERE workspace_id = ? ORDER BY created_at", ws.id),
       all<never>(db, "SELECT * FROM workflow_states WHERE workspace_id = ?", ws.id),
@@ -180,6 +189,18 @@ export function createApp() {
         user.id,
       ),
       listWorkspaces(c, user.id),
+      githubOn ? all<never>(db, "SELECT * FROM github_repos WHERE workspace_id = ?", ws.id) : Promise.resolve([]),
+      githubOn
+        ? all<never>(
+            db,
+            `SELECT l.*, COALESCE(r.full_name, '') AS repo
+             FROM github_issue_links l
+             LEFT JOIN github_repos r ON r.repo_id = l.repo_id
+             WHERE l.workspace_id = ?`,
+            ws.id,
+          )
+        : Promise.resolve([]),
+      githubOn ? all<never>(db, "SELECT * FROM github_pull_links WHERE workspace_id = ?", ws.id) : Promise.resolve([]),
     ]);
     const payload: BootstrapPayload = {
       me: { ...user, role: c.get("role") },
@@ -193,6 +214,9 @@ export function createApp() {
       cycles: cycles.map(toCycle),
       issues: issues.map(toIssue),
       notifications: notifications.map(toNotification),
+      githubRepos: githubRepos.map(toGithubRepo),
+      githubLinks: githubLinks.map(toGithubLink),
+      githubPulls: githubPulls.map(toGithubPull),
       lastSyncId,
     };
     return c.json(payload);
@@ -260,6 +284,7 @@ export function createApp() {
     if (ctx.changes.length) {
       c.executionCtx?.waitUntil?.(notifyRealtime(c.env, ctx.ws.id, lastSyncId));
       c.executionCtx?.waitUntil?.(scheduleSheetSync(c.env, ctx.ws, ctx.changes, publicOrigin(c)));
+      c.executionCtx?.waitUntil?.(scheduleGitHubSync(c.env, ctx.ws, ctx.changes, null));
     }
     return c.json({ results, lastSyncId } satisfies MutateResponse);
   });
@@ -297,6 +322,30 @@ export function createApp() {
     if (c.req.header("upgrade")?.toLowerCase() !== "websocket") return err(c, "WebSocket が必要です", 426);
     const stub = c.env.REALTIME.get(c.env.REALTIME.idFromName(c.get("workspace").id));
     return stub.fetch(new Request("https://realtime/connect", c.req.raw));
+  });
+
+  // ---------------- GitHub 連携 ----------------
+  app.post("/github/webhook", (c) => handleGitHubWebhook(c.req.raw, c.env));
+
+  app.get("/github/status", requireUser, requireWorkspace, async (c) => {
+    return c.json(await readGitHubStatus(c.env, c.get("workspace"), publicOrigin(c)));
+  });
+
+  app.post("/github/repos", requireUser, requireWorkspace, async (c) => {
+    const body = await readJson<{ teamId?: unknown; repo?: unknown }>(c);
+    const repo = await linkGitHubRepo(c.env, c.get("workspace"), c.get("user").id, c.get("role"), publicOrigin(c), body);
+    return c.json({ repo });
+  });
+
+  app.patch("/github/repos/:teamId", requireUser, requireWorkspace, async (c) => {
+    const patch = await readJson<GitHubRepoPatch>(c);
+    const repo = await updateGitHubRepo(c.env, c.get("workspace"), c.get("role"), c.req.param("teamId"), patch);
+    return c.json({ repo });
+  });
+
+  app.delete("/github/repos/:teamId", requireUser, requireWorkspace, async (c) => {
+    await unlinkGitHubRepo(c.env, c.get("workspace"), c.get("role"), c.req.param("teamId"));
+    return c.json({ ok: true });
   });
 
   // ---------------- スプレッドシート連携（メンバーなら誰でも） ----------------

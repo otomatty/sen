@@ -28,7 +28,10 @@ export type CollectionKey =
   | "issues"
   | "comments"
   | "activities"
-  | "notifications";
+  | "notifications"
+  | "githubRepos"
+  | "githubLinks"
+  | "githubPulls";
 
 const COLLECTIONS: CollectionKey[] = [
   "users",
@@ -41,6 +44,9 @@ const COLLECTIONS: CollectionKey[] = [
   "comments",
   "activities",
   "notifications",
+  "githubRepos",
+  "githubLinks",
+  "githubPulls",
 ];
 
 const ENTITY_COLLECTION: Record<Exclude<EntityName, "workspace">, CollectionKey> = {
@@ -54,6 +60,9 @@ const ENTITY_COLLECTION: Record<Exclude<EntityName, "workspace">, CollectionKey>
   comment: "comments",
   activity: "activities",
   notification: "notifications",
+  githubRepo: "githubRepos",
+  githubLink: "githubLinks",
+  githubPull: "githubPulls",
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -270,6 +279,9 @@ class SyncEngine {
     put("cycles", data.cycles);
     put("issues", data.issues);
     put("notifications", data.notifications);
+    put("githubRepos", data.githubRepos ?? []);
+    put("githubLinks", data.githubLinks ?? []);
+    put("githubPulls", data.githubPulls ?? []);
     this.applied = data.lastSyncId;
     const view: Partial<DataState> = {
       status: "ready",

@@ -24,6 +24,8 @@ interface StoredSheets {
   lastError: string | null;
   retries: number;
   origin: string | null;
+  /** 次に反映する時刻。Durable Object のアラームは GitHub 連携と共有するので、ここだけを見る */
+  nextAt: number | null;
 }
 
 interface IssueRow {
@@ -118,6 +120,8 @@ export class SheetSyncRunner {
   constructor(
     private storage: DurableObjectStorage,
     private env: Env,
+    /** 次の時刻が変わったとき。Durable Object のアラームは GitHub 連携と共有する */
+    private signal: () => Promise<void>,
   ) {}
 
   async handle(request: Request): Promise<Response | null> {
@@ -138,9 +142,19 @@ export class SheetSyncRunner {
     return null;
   }
 
-  /** アラームが鳴ったら反映する。失敗したら短い間隔で入れ直す（2 回まで） */
+  /** 自分の時刻が来ていれば反映する。失敗したら短い間隔で入れ直す（2 回まで） */
   async alarm(): Promise<void> {
-    await this.enqueue(() => this.execute(true));
+    await this.enqueue(async () => {
+      const raw = await this.storage.get<Record<string, unknown>>(STORAGE_KEY);
+      const legacy = !!raw && !Object.prototype.hasOwnProperty.call(raw, "nextAt");
+      const state = await this.load();
+      if (!legacy && (state.nextAt == null || state.nextAt > Date.now() + 1500)) return;
+      await this.execute(true);
+    });
+  }
+
+  async nextAt(): Promise<number | null> {
+    return (await this.load()).nextAt;
   }
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -152,15 +166,18 @@ export class SheetSyncRunner {
     return run;
   }
 
-  /** 保存のあと。近いアラームはそのまま、遅いときだけ前倒しする。新しい保存なのでやり直し回数は 0 に戻す */
+  /** 保存のあと。近い予約はそのまま、遅いときだけ前倒しする。新しい保存なのでやり直し回数は 0 に戻す */
   private async schedule(origin: string | null): Promise<void> {
     const state = await this.load();
     const cfg = sheetsConfig(this.env);
-    await this.save({ ...state, origin: origin ?? state.origin, retries: 0 });
-    if (!cfg) return;
+    if (!cfg) {
+      await this.save({ ...state, origin: origin ?? state.origin, retries: 0 });
+      return;
+    }
     const target = Date.now() + cfg.delayMs;
-    const pending = await this.storage.getAlarm();
-    if (pending === null || pending > target) await this.storage.setAlarm(target);
+    const nextAt = state.nextAt != null && state.nextAt <= target ? state.nextAt : target;
+    await this.save({ ...state, origin: origin ?? state.origin, retries: 0, nextAt });
+    await this.signal();
   }
 
   /**
@@ -171,7 +188,11 @@ export class SheetSyncRunner {
     const state = await this.load();
     await this.save({ ...state, origin: origin ?? state.origin });
     const ok = await this.execute(false);
-    if (ok) await this.storage.deleteAlarm();
+    if (ok) {
+      const latest = await this.load();
+      await this.save({ ...latest, nextAt: null });
+      await this.signal();
+    }
     return this.snapshot();
   }
 
@@ -202,7 +223,15 @@ export class SheetSyncRunner {
         key.clientEmail,
       );
       const latest = await this.load();
-      await this.save({ ...latest, lastAttemptAt: now, lastSuccessAt: now, lastError: null, retries: 0 });
+      await this.save({
+        ...latest,
+        lastAttemptAt: now,
+        lastSuccessAt: now,
+        lastError: null,
+        retries: 0,
+        nextAt: fromAlarm ? null : latest.nextAt,
+      });
+      if (fromAlarm) await this.signal();
       return true;
     } catch (e) {
       const message = e instanceof SheetsError ? e.message : "反映に失敗しました";
@@ -215,12 +244,9 @@ export class SheetSyncRunner {
         lastAttemptAt: now,
         lastError: message,
         retries: delay !== undefined ? latest.retries + 1 : latest.retries,
+        nextAt: delay !== undefined ? Date.now() + delay : fromAlarm ? null : latest.nextAt,
       });
-      if (delay !== undefined) {
-        const retryAt = Date.now() + delay;
-        const pending = await this.storage.getAlarm();
-        if (pending === null || pending > retryAt) await this.storage.setAlarm(retryAt);
-      }
+      if (fromAlarm) await this.signal();
       return false;
     }
   }
@@ -228,13 +254,12 @@ export class SheetSyncRunner {
   private async snapshot(): Promise<SheetSyncStatus> {
     const cfg = sheetsConfig(this.env);
     const state = await this.load();
-    const alarm = await this.storage.getAlarm();
     const status: SheetSyncStatus = {
       enabled: cfg !== null,
       lastAttemptAt: state.lastAttemptAt,
       lastSuccessAt: state.lastSuccessAt,
       lastError: state.lastError,
-      pending: alarm !== null,
+      pending: state.nextAt != null,
     };
     if (cfg) status.spreadsheetUrl = spreadsheetUrl(cfg.spreadsheetId);
     return status;
@@ -248,6 +273,7 @@ export class SheetSyncRunner {
       lastError: raw?.lastError ?? null,
       retries: typeof raw?.retries === "number" ? raw.retries : 0,
       origin: raw?.origin ?? null,
+      nextAt: typeof raw?.nextAt === "number" ? raw.nextAt : null,
     };
   }
 

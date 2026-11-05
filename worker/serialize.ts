@@ -3,6 +3,10 @@ import type {
   AppNotification,
   Comment,
   Cycle,
+  GitHubLink,
+  GitHubPull,
+  GitHubPullState,
+  GitHubRepo,
   IssueRelation,
   Issue,
   Label,
@@ -43,6 +47,7 @@ export const toUser = (r: Row): User => ({
   email: r.email,
   avatarColor: r.avatar_color,
   role: (r.role ?? "member") as Role,
+  githubLogin: typeof r.github_login === "string" && r.github_login ? r.github_login : null,
   createdAt: r.created_at,
 });
 
@@ -134,6 +139,7 @@ export const toComment = (r: Row): Comment => ({
   updatedAt: r.updated_at,
   editedAt: r.edited_at,
   via: r.via ?? null,
+  githubAuthor: typeof r.github_author === "string" && r.github_author ? r.github_author : null,
 });
 
 export const toActivity = (r: Row): Activity => ({
@@ -144,6 +150,40 @@ export const toActivity = (r: Row): Activity => ({
   data: json<Record<string, unknown>>(r.data, {}),
   createdAt: r.created_at,
   via: r.via ?? null,
+});
+
+const PULL_STATES: readonly GitHubPullState[] = ["draft", "open", "merged", "closed"];
+
+export const toGithubRepo = (r: Row): GitHubRepo => ({
+  id: r.team_id,
+  teamId: r.team_id,
+  repo: r.full_name ?? r.repo ?? "",
+  linkedAt: r.linked_at,
+  hook: r.hook_id != null ? "auto" : "manual",
+  prDraftStateId: r.pr_draft_state_id ?? null,
+  prOpenStateId: r.pr_open_state_id ?? null,
+  prMergedStateId: r.pr_merged_state_id ?? null,
+});
+
+export const toGithubLink = (r: Row): GitHubLink => ({
+  id: r.issue_id,
+  issueId: r.issue_id,
+  repo: r.repo ?? "",
+  number: r.number,
+  url: r.url,
+  syncedAt: r.synced_at ?? null,
+  lastError: r.last_error ?? null,
+});
+
+export const toGithubPull = (r: Row): GitHubPull => ({
+  id: r.id,
+  issueId: r.issue_id,
+  repo: r.repo,
+  number: r.number,
+  title: r.title,
+  url: r.url,
+  state: PULL_STATES.includes(r.state) ? r.state : "open",
+  author: r.author ?? null,
 });
 
 export const toNotification = (r: Row): AppNotification => ({

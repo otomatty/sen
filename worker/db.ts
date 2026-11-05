@@ -3,6 +3,7 @@ import syncMetaSql from "../migrations/0002_sync_meta.sql?raw";
 import relationsSql from "../migrations/0003_issue_relations.sql?raw";
 import googleAuthSql from "../migrations/0004_google_auth.sql?raw";
 import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
+import githubSql from "../migrations/0007_github.sql?raw";
 // sync.ts は db.ts を import する。writeChanges は移行の関数の中でしか呼ばないので、循環しても読み込み時には問題にならない。
 import { migrateBodiesToMarkdown } from "./markdown-migration";
 import { writeChanges } from "./sync";
@@ -54,6 +55,7 @@ const MIGRATIONS: Migration[] = [
         writeChanges(db, wsId, [{ entity: "workspace", entityId: wsId, op: "upsert" }]),
       ),
   },
+  { name: "0007_github.sql", sql: githubSql },
 ];
 
 export function splitSql(sql: string): string[] {
