@@ -40,7 +40,7 @@ export function useMembers(): User[] {
 export function useProjects(): Project[] {
   const projects = useData((s) => s.projects);
   return useMemo(
-    () => Object.values(projects).filter((p) => !p.archivedAt).sort((a, b) => a.sortOrder - b.sortOrder),
+    () => Object.values(projects).filter((p) => !p.archivedAt).sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt),
     [projects],
   );
 }
