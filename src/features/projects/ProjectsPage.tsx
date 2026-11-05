@@ -10,6 +10,7 @@ import { useData } from "../../store/data";
 import { createProject, updateProject } from "../../store/actions";
 import { projectProgress, useActiveIssues, useMembers, useProjects, useTeamByKey, useTeams } from "../../store/selectors";
 import { useUI } from "../../store/ui";
+import { planProjectMove } from "../../lib/projectOrder";
 import { cx, dueStatus, formatDate } from "../../lib/utils";
 import { Avatar, Button, EmptyState, Modal } from "../../components/ui";
 import { ProgressRing, ProjectIcon, TeamIcon } from "../../components/icons";
@@ -186,15 +187,14 @@ export function ProjectsPage() {
     const newIndex = list.findIndex((pr) => pr.id === over.id);
     if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
     const moved = arrayMove(list, oldIndex, newIndex);
-    const prev = moved[newIndex - 1]?.sortOrder;
-    const next = moved[newIndex + 1]?.sortOrder;
-    // 動かしたプロジェクトの sortOrder だけを、前後の値から決める
-    let sortOrder: number;
-    if (prev !== undefined && next !== undefined) sortOrder = (prev + next) / 2;
-    else if (prev !== undefined) sortOrder = prev + 1;
-    else if (next !== undefined) sortOrder = next - 1;
-    else return;
-    updateProject(String(active.id), { sortOrder });
+    const nextRow = moved[newIndex + 1];
+    const prevRow = moved[newIndex - 1];
+    // 表示中の並びで、すぐ後ろがあればその直前、一番下ならすぐ前の直後に入れる
+    const anchor = nextRow ? { beforeId: nextRow.id } : prevRow ? { afterId: prevRow.id } : null;
+    if (!anchor) return;
+    for (const update of planProjectMove(projects, String(active.id), anchor)) {
+      updateProject(update.id, { sortOrder: update.sortOrder });
+    }
   };
 
   return (
