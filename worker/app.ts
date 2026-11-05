@@ -324,6 +324,13 @@ export function createApp() {
     return c.json(body);
   });
 
+  // AI アシスタント。デモ版のビルドでは登録しない（この分岐の中だけで SDK を import する）。
+  if (!__SEN_DEMO__) {
+    const loadAssistant = () => import("./assistant/http");
+    app.get("/assistant/status", requireUser, requireWorkspace, (c) => loadAssistant().then((m) => m.assistantStatus(c)));
+    app.post("/assistant", requireUser, requireWorkspace, (c) => loadAssistant().then((m) => m.assistantChat(c)));
+  }
+
   // ---------------- 開発用 ----------------
   app.post("/dev/seed-demo", requireUser, requireWorkspace, async (c) => {
     if (c.env.DEV_TOOLS !== "1") return err(c, "無効です", 404);

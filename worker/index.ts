@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { addDays, todayYmd } from "../shared/dates";
 import { createApp } from "./app";
 import { all, ensureMigrated, first, run } from "./db";
 import type { Env, WorkspaceRow } from "./env";
@@ -15,7 +16,7 @@ export default {
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   },
 
-  /** 毎日の掃除：30日より古い同期ログ、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータを削除する */
+  /** 毎日の掃除：30日より古い同期ログ、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータ、7日より前の AI アシスタント利用回数を削除する */
   async scheduled(_event, env) {
     await ensureMigrated(env.DB);
     const cutoff = Date.now() - 30 * 86_400_000;
@@ -40,6 +41,8 @@ export default {
     const now = new Date().toISOString();
     await run(env.DB, "DELETE FROM auth_sessions WHERE expires_at < ?", now);
     await run(env.DB, "DELETE FROM auth_verifications WHERE expires_at < ?", now);
+    // 7日より前の利用回数（日本時間の日付。YYYY-MM-DD なので文字列の比較で足りる）
+    await run(env.DB, "DELETE FROM assistant_usage WHERE day < ?", addDays(todayYmd(), -7));
     // スプレッドシートへ反映する（期限の超過など日付で変わる値の更新と、失敗した分のやり直し）。
     // ここで失敗しても、上の掃除はすでに終わっている。
     try {

@@ -32,6 +32,15 @@ export interface Env {
    * 設定されていれば Google の代わりにこのオリジンへ送る（E2E の模擬サーバー用）。本番では無視する。
    */
   GOOGLE_API_ORIGIN_FOR_TESTS?: string;
+  /** Claude API のキー（`wrangler secret put ANTHROPIC_API_KEY`）。無ければ AI アシスタントは無効 */
+  ANTHROPIC_API_KEY?: string;
+  /** 1 人が 1 日（日本時間）に質問できる回数。省略時は 30。正の整数でなければ 30 */
+  ASSISTANT_DAILY_LIMIT?: string;
+  /**
+   * DEV_TOOLS が "1" のときだけ有効。
+   * E2E の模擬サーバーの origin（例: http://localhost:4330）。SDK の baseURL に渡す。本番では無視する。
+   */
+  ANTHROPIC_API_ORIGIN_FOR_TESTS?: string;
 }
 
 export interface WorkspaceRow {
