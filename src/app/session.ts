@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type { DeviceAccount, Me, PendingInvitation, WorkspaceSummary } from "../../shared/types";
 import { api, ApiError, setAccountSwitchedHandler, setBearerToken, setCurrentUserId } from "../lib/api";
 import { confirmDialog } from "../components/ConfirmDialog";
+import { hasCommentDraft } from "../features/issues/CommentComposer";
+import { hasIssueDraft } from "../features/issues/CreateIssueModal";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
 import { clearSnapshots, clearSnapshotsFor } from "../store/cache";
@@ -322,10 +324,20 @@ async function otherTabsBlocker(): Promise<string | null> {
   return null;
 }
 
-/** 切り替える前に、画面を止めて、書きかけの保存と送信が終わるのを待つ。終わったら元に戻す関数を返す */
-async function prepareAccountChange(label: string): Promise<() => void> {
+/** 切り替える前に、書きかけを捨ててよいか確かめ、画面を止めて、保存と送信が終わるのを待つ。終わったら元に戻す関数を返す。やめたときは null */
+async function prepareAccountChange(label: string): Promise<(() => void) | null> {
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
+  // 読み込み直すと消える書きかけの内容は、画面を止める前に確かめる
+  if (hasIssueDraft() || hasCommentDraft()) {
+    const ok = await confirmDialog({
+      title: "書きかけの内容があります",
+      message: "作成中の課題や書きかけのコメントは、アカウントを切り替えると失われます。続けますか？",
+      confirmLabel: "続ける",
+      danger: true,
+    });
+    if (!ok) return null;
+  }
   (document.activeElement as HTMLElement | null)?.blur?.();
   lockScreen(true);
   const progress = toast(label, { duration: Infinity });
@@ -349,6 +361,7 @@ async function prepareAccountChange(label: string): Promise<() => void> {
 /** このブラウザに記録済みのアカウントへ切り替えて、最初から開き直す */
 export async function switchAccount(userId: string) {
   const release = await prepareAccountChange("アカウントを切り替えています…");
+  if (!release) return;
   try {
     await api("/api/accounts/switch", { body: { userId } });
   } catch (e) {
@@ -366,6 +379,7 @@ export async function addAccount() {
   const { accounts, maxAccounts } = useSession.getState();
   if (accounts.length >= maxAccounts) throw new Error(`同時にログインできるのは ${maxAccounts} つまでです`);
   const release = await prepareAccountChange("Google のアカウント選択へ移ります…");
+  if (!release) return;
   try {
     if (!(await refreshAccounts())) throw new Error("今のアカウントを記録できませんでした。通信できる状態で、もう一度お試しください");
     await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
@@ -378,6 +392,7 @@ export async function addAccount() {
 /** 今のアカウントだけログアウトし、残ったアカウントで開き直す */
 export async function logoutCurrentAccount() {
   const release = await prepareAccountChange("ログアウトしています…");
+  if (!release) return;
   const user = useSession.getState().user;
   try {
     await api("/api/accounts/sign-out", { body: {} });

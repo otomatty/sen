@@ -304,6 +304,34 @@ test("切り替えているあいだは、画面を操作できない", async ({
   await page.unroute("**/api/accounts/switch");
 });
 
+test("書きかけのコメントがあるときは、アカウントを切り替える前に確かめる", async ({ page }) => {
+  const { jiro } = await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.goto(`/${jiro.ws}/team/DEF/all`);
+  await expect(page.getByTestId("app")).toBeVisible();
+  if ((await page.getByTestId("issue-row").count()) === 0) {
+    await page.getByTestId("sidebar-create").click();
+    await page.getByTestId("create-title").fill("オフラインで確認する課題");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(page.getByTestId("issue-row").first()).toBeVisible();
+  }
+  await page.getByTestId("issue-row").first().click();
+  await expect(page.getByTestId("issue-detail")).toBeVisible();
+  await page.getByTestId("comment-input").click();
+  await page.keyboard.type("書きかけのコメント");
+  await expect(page.getByTestId("comment-input")).toContainText("書きかけのコメント");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("書きかけの内容があります");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+  await expect(page.getByTestId("comment-input")).toContainText("書きかけのコメント");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await page.getByTestId("confirm-ok").click();
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+});
+
 test("アカウントの一覧が分かるまでは、ログアウトを 2 つに分けて出す", async ({ page }) => {
   await signInTwoAccounts(page);
   await page.route("**/api/accounts", (route) =>
