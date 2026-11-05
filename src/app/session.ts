@@ -104,7 +104,7 @@ async function handleAccountChangedElsewhere() {
       error
         ? {
             title: "元のアカウントに戻せませんでした",
-            message: `${error}。もう一度試しますか？ キャンセルすると、まだ送っていない変更（${pending}件）を捨てて開き直します。`,
+            message: `${error}。もう一度試しますか？ キャンセルすると、${pending > 0 ? `まだ送っていない変更（${pending}件）` : "書きかけのコメントや作成中の課題"}を捨てて開き直します。`,
             confirmLabel: "もう一度試す",
           }
         : {
@@ -387,15 +387,29 @@ export async function switchAccount(userId: string) {
   window.location.assign("/");
 }
 
-/** 今のアカウントを残したまま、別の Google アカウントを追加する */
-export async function addAccount() {
-  if (DEMO) return;
+/** 別のアカウントを追加する前の準備。上限・未送信の変更・書きかけを確かめ、画面を止め、今のアカウントを記録に加える。やめたら null。終わったら元に戻す関数を返す */
+export async function prepareAddAccount(): Promise<(() => void) | null> {
   const { accounts, maxAccounts } = useSession.getState();
   if (accounts.length >= maxAccounts) throw new Error(`同時にログインできるのは ${maxAccounts} つまでです`);
   const release = await prepareAccountChange("Google のアカウント選択へ移ります…");
-  if (!release) return;
+  if (!release) return null;
   try {
     if (!(await refreshAccounts())) throw new Error("今のアカウントを記録できませんでした。通信できる状態で、もう一度お試しください");
+    const next = useSession.getState();
+    if (next.accounts.length >= next.maxAccounts) throw new Error(`同時にログインできるのは ${next.maxAccounts} つまでです`);
+  } catch (e) {
+    release();
+    throw e;
+  }
+  return release;
+}
+
+/** 今のアカウントを残したまま、別の Google アカウントを追加する */
+export async function addAccount() {
+  if (DEMO) return;
+  const release = await prepareAddAccount();
+  if (!release) return;
+  try {
     await signInWithGoogle({ callbackURL: "/", errorCallbackURL: window.location.pathname });
   } catch (e) {
     release();

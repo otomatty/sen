@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { devSignIn, dismissWelcome, signupViaUi, waitForSynced } from "./helpers";
+import { devSignIn, dismissWelcome, inviteByEmail, invitePath, signupViaUi, waitForSynced } from "./helpers";
 
 /** 山田 花子（花子の会社）でログインしたあと、同じブラウザで佐藤 次郎（次郎の会社）を追加する。追加した次郎が今のアカウントになる */
 async function signInTwoAccounts(page: Page) {
@@ -470,4 +470,124 @@ test("ワークスペースの無いアカウントを追加しても、作成�
   await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
   await page.getByTestId("user-menu").click();
   await expect(accountRows(page)).toHaveCount(0);
+});
+
+test("招待ページからアカウントを追加するときも、ほかのタブに未送信の変更があれば止める", async ({ page, context }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const link = await inviteByEmail(page, ws, `invitee-${Date.now()}@example.com`);
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  // 送れない変更として残す。この指定はこのページにしか効かない
+  await other.route("**/api/mutate**", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+  await other.getByTestId("issue-row").first().click();
+  const title = other.getByTestId("issue-title");
+  await title.fill("アカウントの追加中に編集");
+  await title.press("Enter");
+  await expect(other.getByTestId("sync-status")).toContainText("オフライン", { timeout: 10_000 });
+  let googleCalled = false;
+  // 本物の Google には行かず、利用者が「キャンセル」を押したことにしてアプリへ戻す
+  await context.route("https://accounts.google.com/**", (route) => {
+    googleCalled = true;
+    const authUrl = new URL(route.request().url());
+    const back = new URL(authUrl.searchParams.get("redirect_uri")!);
+    back.searchParams.set("error", "access_denied");
+    back.searchParams.set("state", authUrl.searchParams.get("state")!);
+    return route.fulfill({ status: 302, headers: { location: back.toString() } });
+  });
+  await page.goto(invitePath(link));
+  await page.getByTestId("google-sign-in").click();
+  await expect(page.getByTestId("auth-error")).toContainText("別のタブに未送信の変更（1件）があります");
+  expect(googleCalled).toBe(false);
+  await other.unroute("**/api/mutate**");
+});
+
+test("招待ページからも、同時にログインできる数を超えて追加しない", async ({ page, context }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const link = await inviteByEmail(page, ws, `invitee-${Date.now()}@example.com`);
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await devSignIn(page, { name: "鈴木 三郎" });
+  await devSignIn(page, { name: "高橋 四郎" });
+  await devSignIn(page, { name: "伊藤 五郎" });
+  const listed = (await (await page.request.get("/api/accounts")).json()) as { accounts: unknown[] };
+  expect(listed.accounts).toHaveLength(5);
+  let googleCalled = false;
+  await context.route("https://accounts.google.com/**", (route) => {
+    googleCalled = true;
+    const authUrl = new URL(route.request().url());
+    const back = new URL(authUrl.searchParams.get("redirect_uri")!);
+    back.searchParams.set("error", "access_denied");
+    back.searchParams.set("state", authUrl.searchParams.get("state")!);
+    return route.fulfill({ status: 302, headers: { location: back.toString() } });
+  });
+  await page.goto(invitePath(link)).catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await page.getByTestId("google-sign-in").click();
+  await expect(page.getByTestId("auth-error")).toContainText("同時にログインできるのは 5 つまでです");
+  expect(googleCalled).toBe(false);
+});
+
+test("ログイン中に招待ページから Google へ進んでキャンセルしたときも、理由を出す", async ({ page, context }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const link = await inviteByEmail(page, ws, `invitee-${Date.now()}@example.com`);
+  let googleCalled = false;
+  await context.route("https://accounts.google.com/**", (route) => {
+    googleCalled = true;
+    const authUrl = new URL(route.request().url());
+    const back = new URL(authUrl.searchParams.get("redirect_uri")!);
+    back.searchParams.set("error", "access_denied");
+    back.searchParams.set("state", authUrl.searchParams.get("state")!);
+    return route.fulfill({ status: 302, headers: { location: back.toString() } });
+  });
+  await page.goto(invitePath(link));
+  await page.getByTestId("google-sign-in").click();
+  await expect(page.getByTestId("auth-error")).toContainText("キャンセルされました");
+  expect(googleCalled).toBe(true);
+  await expect(page.getByTestId("user-menu")).toHaveCount(0);
+  const me = await page.request.get("/api/me");
+  expect(((await me.json()) as { user: { name: string } }).user.name).toBe("山田 花子");
+});
+
+test("ワークスペースの作成画面では、アカウントの一覧が分かるまで全アカウントのログアウトを出さない", async ({ page }) => {
+  await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.route("**/api/accounts", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "サーバーでエラーが発生しました" }) }),
+  );
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(page.getByTestId("new-workspace-form")).toBeVisible();
+  await expect(page.getByTestId("new-workspace-logout-current")).toBeVisible();
+  await expect(page.getByText("別のアカウントでログイン")).toHaveCount(0);
+  await page.unroute("**/api/accounts");
+});
+
+test("書きかけだけのタブで元に戻すのに失敗したときは、書きかけが失われると伝える", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { name: "山田 花子", workspace: "花子の会社" });
+  const other = await page.context().newPage();
+  await other.goto(`/${ws}/team/DEF/all`);
+  await dismissWelcome(other);
+  await other.getByTestId("issue-row").first().click();
+  await expect(other.getByTestId("issue-detail")).toBeVisible();
+  await other.getByTestId("comment-input").click();
+  await other.keyboard.type("書きかけのコメント");
+  await expect(other.getByTestId("comment-input")).toContainText("書きかけのコメント");
+  // Google から戻ってきたのと同じく、このタブだけ別のアカウントになる
+  await devSignIn(page, { name: "佐藤 次郎" });
+  await page.goto("/").catch((err: unknown) => {
+    if (!String(err).includes("ERR_ABORTED")) throw err;
+  });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題があります", { timeout: 15_000 });
+  await other.route("**/api/accounts/switch", (route) =>
+    route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "サーバーでエラーが発生しました" }) }),
+  );
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("confirm-dialog")).toContainText("元のアカウントに戻せませんでした");
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題を捨てて");
+  await expect(other.getByTestId("confirm-dialog")).not.toContainText("0件");
+  await other.unroute("**/api/accounts/switch");
+  await other.getByTestId("confirm-ok").click();
+  await expect(other.getByTestId("user-menu")).toContainText("山田 花子");
 });

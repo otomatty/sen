@@ -4,7 +4,7 @@ import { AlertTriangle, Check, Link2Off } from "lucide-react";
 import { api } from "../../lib/api";
 import { Avatar, Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
-import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, logoutCurrentAccount, pickWorkspaceKey, refreshAccounts, signInWithGoogle, switchAccount, useSession } from "../../app/session";
+import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, logoutCurrentAccount, pickWorkspaceKey, prepareAddAccount, signInWithGoogle, switchAccount, useSession } from "../../app/session";
 import { formatDateTime } from "../../lib/utils";
 import type { InvitePreview, PendingInvitation, Role } from "../../../shared/types";
 
@@ -115,19 +115,36 @@ function GoogleSignInButton({
   errorCallbackURL: string;
   error?: string | null;
   disabled?: boolean;
-  /** Google へ移る前にすること（別のアカウントを追加するとき、今のアカウントを記録に加えるなど） */
-  beforeSignIn?: () => Promise<void>;
+  /**
+   * Google へ移る前にすること（別のアカウントを追加するとき、今のアカウントを記録に加えるなど）。
+   * null を返すと、やめたのでエラーを出さずボタンを押せる状態に戻す。Google へは進まない。
+   * 関数を返すと、Google へ進めなかったときにその関数を呼んでからエラーを出す。
+   */
+  beforeSignIn?: () => Promise<(() => void) | null | void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError ?? null);
   const start = async () => {
     setBusy(true);
     setError(null);
+    let release: (() => void) | null | void;
     try {
-      await beforeSignIn?.();
+      release = await beforeSignIn?.();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+      return;
+    }
+    // やめた。エラーは出さず、ボタンを押せる状態に戻す
+    if (release === null) {
+      setBusy(false);
+      return;
+    }
+    try {
       await signInWithGoogle({ callbackURL, errorCallbackURL });
       // そのまま Google のページへ移るので、ボタンは押せないままにしておく
     } catch (err) {
+      if (typeof release === "function") release();
       setError((err as Error).message);
       setBusy(false);
     }
@@ -341,11 +358,17 @@ export function InvitePage() {
             label={googleLabel}
             callbackURL={`/invite/${token}?join=1`}
             errorCallbackURL={`/invite/${token}`}
-            error={authed ? null : authErrorMessage(params.get("error"))}
+            error={authErrorMessage(params.get("error"))}
             disabled={busy}
             beforeSignIn={async () => {
+              if (!authed) {
+                writeJoinMark(token);
+                return;
+              }
+              const release = await prepareAddAccount();
+              if (!release) return null;
               writeJoinMark(token);
-              if (authed && !(await refreshAccounts())) throw new Error("今のアカウントを記録できませんでした。通信できる状態で、もう一度お試しください");
+              return release;
             }}
           />
           {session.status === "anon" && <p className="invite-hint">{invite.maskedEmail} の Google アカウントでログインしてください。</p>}
@@ -469,7 +492,7 @@ export function NewWorkspacePage() {
         </Button>
       )}
       {firstTime ? (
-        others.length === 0 ? (
+        session.accountsLoaded && others.length === 0 ? (
           <p className="auth-switch">
             {session.user?.email} でログイン中 ・{" "}
             <a
