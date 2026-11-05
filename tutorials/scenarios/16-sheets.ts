@@ -1,5 +1,5 @@
 import type { Route } from "playwright";
-import { googleMock, TUTORIAL_SPREADSHEET_ID, type MockCell, type MockSpreadsheet, type MockTab } from "../google-mock";
+import { googleMock, TUTORIAL_SPREADSHEET_ID, type MockCell, type MockSpreadsheet, type MockTab } from "../lib/google-mock";
 import type { Director } from "../lib/director";
 import { defineScenario } from "../lib/types";
 
@@ -86,6 +86,10 @@ export default defineScenario({
     await t.click("[data-testid=picker-status] [role=option]:has-text('完了')", { pause: 600 });
     await t.expect("[data-testid=prop-status]", { text: "完了" });
 
+    // 「完了」の表示は楽観的な更新。/api/mutate の送信と反映の予約（scheduleSheetSync。waitUntil で非同期）はそのあと。
+    // 設定画面の最初の状態取得が予約より先だと pending は false になり、次の取り直しは 30 秒後なので反映待ちを取り逃がす。
+    await waitForPendingSync(t);
+
     // 収録では保存から反映までの待ちを TUTORIAL_SHEETS_DELAY_MS に縮めている（本番は約 30 秒）。
     // 反映待ちが消える前に設定へ戻す。
     await t.goto("/settings/workspace");
@@ -134,6 +138,25 @@ function assertWritten(snapshot: MockSpreadsheet) {
   if (!titles.includes(ACTIVITY) || !titles.includes(WBS)) {
     throw new Error(`活動一覧と WBS がありません（${titles.join("、")}）`);
   }
+}
+
+/** 反映が予約されるまで状態を 100ms おきに見る。予約済みならすぐ戻る（最大 8 秒） */
+async function waitForPendingSync(t: Director): Promise<void> {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    const pending = await t.page.evaluate(async (ws) => {
+      const res = await fetch("/api/sheets/status?ws=" + encodeURIComponent(ws), {
+        headers: { "x-sen-client": "1" },
+        credentials: "same-origin",
+      });
+      if (!res.ok) return false;
+      const body = await res.json();
+      return body != null && body.pending === true;
+    }, t.ws);
+    if (pending) return;
+    await t.page.waitForTimeout(100);
+  }
+  throw new Error("反映の予約を確認できませんでした");
 }
 
 async function focusSheetsSection(t: Director) {

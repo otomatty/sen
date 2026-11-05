@@ -21,7 +21,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, request, type APIRequestContext, type Browser } from "playwright";
-import { googleMock, TUTORIAL_SHEETS_DELAY_MS, TUTORIAL_SPREADSHEET_ID } from "./google-mock";
+import { googleMock, TUTORIAL_SHEETS_DELAY_MS, TUTORIAL_SPREADSHEET_ID } from "./lib/google-mock";
 import { overlayScript } from "./lib/overlay";
 import { ScreenRecorder } from "./lib/recorder";
 import { Director, PARK } from "./lib/director";
@@ -235,6 +235,8 @@ async function writeTutorialsBlock(ws: string): Promise<void> {
   const body = withoutTutorialsBlock((await readDevVars()) ?? "");
   const block = [
     TUTORIALS_BEGIN,
+    // GOOGLE_API_ORIGIN_FOR_TESTS は DEV_TOOLS=1 のときだけ効く。.env に頼らず、このブロックだけで模擬の Google に向ける
+    "DEV_TOOLS=1",
     `SHEETS_WORKSPACE=${ws}`,
     `SHEETS_SPREADSHEET_ID=${TUTORIAL_SPREADSHEET_ID}`,
     `SHEETS_SYNC_DELAY_MS=${TUTORIAL_SHEETS_DELAY_MS}`,
@@ -322,14 +324,32 @@ interface ManifestEntry {
 }
 
 async function main() {
-  const scenarios = (await loadScenarios()).filter((s) => !filters.length || filters.some((f) => s.id.includes(f)));
+  let scenarios = (await loadScenarios()).filter((s) => !filters.length || filters.some((f) => s.id.includes(f)));
   if (!scenarios.length) throw new Error("該当するシナリオがありません");
+  const failures: string[] = [];
+  // --url では模擬の Google を使えない。初期化より前に外し、既存の課題などを消さない。
+  if (urlArg) {
+    const kept: LoadedScenario[] = [];
+    for (const s of scenarios) {
+      if (!s.needsSheets) {
+        kept.push(s);
+        continue;
+      }
+      const message = `${s.id}: スプレッドシート連携の動画は、ローカルで収録してください（--url では模擬の Google を使えません）`;
+      failures.push(message);
+      console.error(message);
+    }
+    scenarios = kept;
+    if (!scenarios.length) {
+      console.error(`\n収録に失敗したシナリオ:\n- ${failures.join("\n- ")}`);
+      process.exit(1);
+    }
+  }
   await mkdir(OUT_DIR, { recursive: true });
   await mkdir(WORK_DIR, { recursive: true });
 
   let api: APIRequestContext | undefined;
   let browser: Browser | undefined;
-  const failures: string[] = [];
   try {
     if (!urlArg && scenarios.some((s) => s.needsSheets)) {
       const origin = await googleMock.start(GOOGLE_PORT);
@@ -353,12 +373,6 @@ async function main() {
       log(`収録中: ${s.order}. ${s.title}`);
       if (!api) throw new Error("API の準備ができていません");
       await resetData(api, ws, !!s.freshUser);
-      if (urlArg && s.needsSheets) {
-        const message = `${s.id}: スプレッドシート連携の動画は、ローカルで収録してください（--url では模擬の Google を使えません）`;
-        failures.push(message);
-        console.error(message);
-        continue;
-      }
       if (!urlArg && s.needsSheets !== sheetsOn) {
         await switchSheets(s.needsSheets, ws);
         sheetsOn = s.needsSheets;
