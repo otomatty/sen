@@ -5,14 +5,14 @@ export default defineScenario({
   order: 14,
   screen: "issue",
   title: "課題どうしの関係を示す",
-  summary: "「ブロックされている」「関連」「重複」で、課題のつながりと、進められない理由を見えるようにします。",
+  summary: "「先に終わらせる課題」「関連」「重複」で、課題のつながりと、進められない理由を見えるようにします。",
   start: "/issue/ENG-20",
   async run(t) {
     await t.park();
     await t.expect("[data-testid=relation-row][data-kind=blockedBy][data-identifier='ENG-2']");
     await t.caption("この課題は、ENG-2 が終わるまで進められません");
     await t.highlight("[data-testid=relations]", 1600);
-    await t.caption("ブロックされている課題には、一覧でも印が付きます");
+    await t.caption("ほかの課題を待っている課題には、一覧でも印が付きます");
     await t.goto("/team/ENG/all");
     await t.expect("[data-testid=issue-row][data-identifier='ENG-20'] [data-testid=blocked-chip]");
     await t.highlight("[data-testid=issue-row][data-identifier='ENG-20']", 1400);
@@ -20,7 +20,7 @@ export default defineScenario({
     await t.click("[data-testid=issue-row][data-identifier='ENG-14']", { pause: 600 });
     await t.expect("[data-testid=issue-detail][data-identifier='ENG-14']");
     await t.park();
-    await t.caption("M → B で「ブロックされている」課題を指定します");
+    await t.caption("M → B で、先に終わらせる課題を指定します");
     await t.press("m b", { pause: 400 });
     await t.expect("[data-testid=picker-relation]");
     await t.type("v3");
