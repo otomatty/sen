@@ -21,12 +21,17 @@ const ZOOMS: { id: Zoom; label: string; px: number }[] = [
 ];
 
 const ZOOM_KEY = "sen:timeline-zoom";
+/** 期間の計算に使う日付は、今日からこの日数を超えたものを捨てる */
+const MAX_SPAN_DAYS = 365 * 3;
 
-/** 作業の日付と「今日の14日前〜28日後」を含む。始まりは月曜、終わりは日曜 */
+/** 今日から前後 3 年に収まる作業の日付と「今日の14日前〜28日後」を含む。始まりは月曜、終わりは日曜 */
 function timelineRange(dates: string[], today: string): { start: string; end: string } {
+  const earliestLimit = addDays(today, -MAX_SPAN_DAYS);
+  const latestLimit = addDays(today, MAX_SPAN_DAYS);
   let earliest: string | null = null;
   let latest: string | null = null;
   for (const date of dates) {
+    if (date < earliestLimit || date > latestLimit) continue;
     if (!earliest || date < earliest) earliest = date;
     if (!latest || date > latest) latest = date;
   }
@@ -94,6 +99,60 @@ function spanBox(from: string, to: string, rangeStart: string, dayWidth: number)
     left: diffDays(rangeStart, from) * dayWidth,
     width: (diffDays(from, end) + 1) * dayWidth,
   };
+}
+
+/** 日付を期間の中へ寄せ、日の中央の位置と、期間の外ならどちら側かを返す */
+function placeDate(
+  date: string,
+  rangeStart: string,
+  rangeEnd: string,
+  dayWidth: number,
+): { left: number; outside: "before" | "after" | null } {
+  let placed = date;
+  let outside: "before" | "after" | null = null;
+  if (date < rangeStart) {
+    placed = rangeStart;
+    outside = "before";
+  } else if (date > rangeEnd) {
+    placed = rangeEnd;
+    outside = "after";
+  }
+  return { left: diffDays(rangeStart, placed) * dayWidth + dayWidth / 2, outside };
+}
+
+/** 棒の両端を期間の中へ切り、切れた端と位置を返す */
+function placeSpan(
+  from: string,
+  to: string,
+  rangeStart: string,
+  rangeEnd: string,
+  dayWidth: number,
+): { left: number; width: number; clipStart: boolean; clipEnd: boolean } {
+  const end = to >= from ? to : from;
+  let visibleFrom = from;
+  let visibleTo = end;
+  let clipStart = false;
+  let clipEnd = false;
+  if (end < rangeStart) {
+    visibleFrom = rangeStart;
+    visibleTo = rangeStart;
+    clipStart = true;
+  } else if (from > rangeEnd) {
+    visibleFrom = rangeEnd;
+    visibleTo = rangeEnd;
+    clipEnd = true;
+  } else {
+    if (from < rangeStart) {
+      visibleFrom = rangeStart;
+      clipStart = true;
+    }
+    if (end > rangeEnd) {
+      visibleTo = rangeEnd;
+      clipEnd = true;
+    }
+  }
+  const box = spanBox(visibleFrom, visibleTo, rangeStart, dayWidth);
+  return { left: box.left, width: box.width, clipStart, clipEnd };
 }
 
 function dueBeforeStart(task: ProgressTask): boolean {
@@ -244,6 +303,7 @@ export function TimelineTab({ model }: { model: ProgressModel }) {
                 onToggle={() => toggle(activity.projectId)}
                 rows={shownTasks(activity.tasks, showDone)}
                 rangeStart={range.start}
+                rangeEnd={range.end}
                 dayWidth={dayWidth}
                 today={today}
               />
@@ -292,6 +352,7 @@ function TimelineGroup({
   collapsed,
   onToggle,
   rangeStart,
+  rangeEnd,
   dayWidth,
   today,
 }: {
@@ -301,6 +362,7 @@ function TimelineGroup({
   collapsed: boolean;
   onToggle: () => void;
   rangeStart: string;
+  rangeEnd: string;
   dayWidth: number;
   today: string;
 }) {
@@ -333,7 +395,7 @@ function TimelineGroup({
       </div>
       {!collapsed &&
         dated.map((task) => (
-          <TimelineRow key={task.id} task={task} model={model} rangeStart={rangeStart} dayWidth={dayWidth} today={today} />
+          <TimelineRow key={task.id} task={task} model={model} rangeStart={rangeStart} rangeEnd={rangeEnd} dayWidth={dayWidth} today={today} />
         ))}
       {!collapsed && undated > 0 && (
         <Link to={p("/progress/wbs")} className="timeline-undated" data-testid="timeline-undated">
@@ -348,12 +410,14 @@ function TimelineRow({
   task,
   model,
   rangeStart,
+  rangeEnd,
   dayWidth,
   today,
 }: {
   task: ProgressTask;
   model: ProgressModel;
   rangeStart: string;
+  rangeEnd: string;
   dayWidth: number;
   today: string;
 }) {
@@ -373,12 +437,12 @@ function TimelineRow({
       </Link>
       <div className="timeline-track">
         {mark === "milestone" && task.dueDate ? (
-          <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} dayWidth={dayWidth} />
+          <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} rangeEnd={rangeEnd} dayWidth={dayWidth} />
         ) : (
           <>
-            <Bar task={task} mark={mark} color={color} overdue={overdue} text={text} href={href} rangeStart={rangeStart} dayWidth={dayWidth} today={today} />
+            <Bar task={task} mark={mark} color={color} overdue={overdue} text={text} href={href} rangeStart={rangeStart} rangeEnd={rangeEnd} dayWidth={dayWidth} today={today} />
             {earlyDue && task.dueDate && (
-              <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} dayWidth={dayWidth} label={false} />
+              <DueMark href={href} dueDate={task.dueDate} color={color} overdue={overdue} text={text} rangeStart={rangeStart} rangeEnd={rangeEnd} dayWidth={dayWidth} label={false} />
             )}
           </>
         )}
@@ -394,6 +458,7 @@ function DueMark({
   overdue,
   text,
   rangeStart,
+  rangeEnd,
   dayWidth,
   label = true,
 }: {
@@ -403,23 +468,30 @@ function DueMark({
   overdue: boolean;
   text: string;
   rangeStart: string;
+  rangeEnd: string;
   dayWidth: number;
   /** 棒と並べる印は ◆ だけにする。ラベルが棒に重なるため */
   label?: boolean;
 }) {
+  const placed = placeDate(dueDate, rangeStart, rangeEnd, dayWidth);
+  const description = placed.outside ? `${text}（範囲外）` : text;
   return (
     <Link
       to={href}
-      className={cx("timeline-milestone", overdue && "is-overdue")}
+      className={cx("timeline-milestone", overdue && "is-overdue", placed.outside && "is-outside")}
       data-testid="timeline-milestone"
-      title={text}
-      aria-label={text}
-      style={{ left: diffDays(rangeStart, dueDate) * dayWidth + dayWidth / 2, "--mark": color } as CSSProperties}
+      title={description}
+      aria-label={description}
+      style={{ left: placed.left, "--mark": color } as CSSProperties}
     >
       <span className="timeline-milestone-mark" aria-hidden>
         ◆
       </span>
-      {label && <span className="timeline-milestone-label">完了予定 {monthDay(dueDate)}</span>}
+      {label && (
+        <span className="timeline-milestone-label">
+          {placed.outside ? `完了予定 ${slashDate(dueDate)}（範囲外）` : `完了予定 ${monthDay(dueDate)}`}
+        </span>
+      )}
     </Link>
   );
 }
@@ -432,6 +504,7 @@ function Bar({
   text,
   href,
   rangeStart,
+  rangeEnd,
   dayWidth,
   today,
 }: {
@@ -442,6 +515,7 @@ function Bar({
   text: string;
   href: string;
   rangeStart: string;
+  rangeEnd: string;
   dayWidth: number;
   today: string;
 }) {
@@ -460,14 +534,15 @@ function Bar({
     end = task.dueDate;
   }
   if (!end) return null;
-  const box = spanBox(started, end, rangeStart, dayWidth);
+  const box = placeSpan(started, end, rangeStart, rangeEnd, dayWidth);
+  const description = box.clipStart || box.clipEnd ? `${text}（範囲外）` : text;
   return (
     <Link
       to={href}
-      className={cx("timeline-bar", open && "is-open", overdue && "is-overdue")}
+      className={cx("timeline-bar", open && "is-open", overdue && "is-overdue", box.clipStart && "is-clip-start", box.clipEnd && "is-clip-end")}
       data-testid="timeline-bar"
-      title={text}
-      aria-label={text}
+      title={description}
+      aria-label={description}
       style={{ left: box.left, width: box.width, background: color }}
     />
   );

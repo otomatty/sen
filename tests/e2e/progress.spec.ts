@@ -625,6 +625,140 @@ test("日付のない作業の行を押すと WBS へ移り、棒を押すと課
   await expect(page).toHaveURL(new RegExp(`/issue/ENG-1$`));
 });
 
+test("遠い期日が1件あってもタイムラインはすぐ出て、棒と印は期間の端で切れる", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "遠い期日" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  if (!team) throw new Error("チームがありません");
+  const projectId = randomUUID();
+  const milestoneId = randomUUID();
+  const barId = randomUUID();
+  await mutate(page, ws, [
+    { type: "project.create", args: { id: projectId, name: "遠い期日", teamIds: [team.id] } },
+    {
+      type: "issue.create",
+      args: {
+        id: milestoneId,
+        teamId: team.id,
+        projectId,
+        title: "期日だけ遠い課題",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        dueDate: "9999-12-31",
+      },
+    },
+    {
+      type: "issue.create",
+      args: {
+        id: barId,
+        teamId: team.id,
+        projectId,
+        title: "着手して期日が遠い課題",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+        dueDate: "9999-12-31",
+      },
+    },
+    { type: "issue.update", args: { id: barId, patch: { stateId: stateId(data, team.id, "started", "進行中") } } },
+  ]);
+
+  await page.goto(`/${ws}/progress/timeline`);
+  const markRow = page.locator("[data-testid=timeline-row]", { hasText: "期日だけ遠い課題" });
+  const barRow = page.locator("[data-testid=timeline-row]", { hasText: "着手して期日が遠い課題" });
+  const mark = markRow.getByTestId("timeline-milestone");
+  const bar = barRow.getByTestId("timeline-bar");
+  await expect(mark).toBeVisible();
+  await expect(bar).toBeVisible();
+
+  const width = await page.locator(".timeline-sheet").evaluate((el) => {
+    const style = getComputedStyle(el);
+    const chart = Number.parseFloat(style.getPropertyValue("--timeline-chart"));
+    const week = Number.parseFloat(style.getPropertyValue("--timeline-week"));
+    return { chart, day: week / 7, sheet: el.getBoundingClientRect().width };
+  });
+  // 前後 3 年に、週の端と「14日前〜28日後」の余白を足した分まで
+  const maxDays = 365 * 3 * 2 + 14 + 28 + 14;
+  expect(width.day).toBeGreaterThan(0);
+  expect(width.chart, JSON.stringify(width)).toBeLessThanOrEqual(maxDays * width.day + 1);
+  expect(width.sheet, JSON.stringify(width)).toBeLessThanOrEqual(maxDays * width.day + 400);
+  expect(await page.locator(".timeline-week").count()).toBeLessThanOrEqual(Math.ceil(maxDays / 7) + 1);
+
+  await expect(mark).toContainText("完了予定 9999/12/31（範囲外）");
+  await expect(mark).toHaveAttribute("title", /9999\/12\/31/);
+  await expect(bar).toHaveClass(/is-clip-end/);
+  await expect(bar).toHaveAttribute("title", /9999\/12\/31/);
+
+  const placed = await markRow.evaluate((row) => {
+    const markEl = row.querySelector("[data-testid=timeline-milestone]");
+    const track = row.querySelector(".timeline-track");
+    const week = document.querySelector(".timeline-week");
+    if (!(markEl instanceof HTMLElement) || !(track instanceof HTMLElement) || !(week instanceof HTMLElement)) return null;
+    return { left: markEl.offsetLeft, track: track.clientWidth, day: week.getBoundingClientRect().width / 7 };
+  });
+  expect(placed, "印の位置を測れません").toBeTruthy();
+  expect(Math.abs(placed!.left - (placed!.track - placed!.day / 2)), JSON.stringify(placed)).toBeLessThanOrEqual(2);
+
+  const barPlaced = await barRow.evaluate((row) => {
+    const barEl = row.querySelector("[data-testid=timeline-bar]");
+    const track = row.querySelector(".timeline-track");
+    if (!(barEl instanceof HTMLElement) || !(track instanceof HTMLElement)) return null;
+    return { left: barEl.offsetLeft, right: barEl.offsetLeft + barEl.offsetWidth, track: track.clientWidth };
+  });
+  expect(barPlaced, "棒の位置を測れません").toBeTruthy();
+  expect(barPlaced!.right - barPlaced!.left, JSON.stringify(barPlaced)).toBeGreaterThan(barPlaced!.track * 0.2);
+  expect(Math.abs(barPlaced!.right - barPlaced!.track), JSON.stringify(barPlaced)).toBeLessThanOrEqual(1);
+});
+
+test("課題の題名だけを変えても着手日は取り直さず、状態を変えると取り直す", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "着手日の再取得" });
+  const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
+  if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
+  const data = (await bootRes.json()) as BootstrapPayload;
+  const team = data.teams.find((item) => item.key === "ENG") ?? data.teams[0];
+  const project = data.projects.find((item) => !item.archivedAt);
+  if (!team || !project) throw new Error("チームかプロジェクトがありません");
+  const id = randomUUID();
+  await mutate(page, ws, [
+    {
+      type: "issue.create",
+      args: {
+        id,
+        teamId: team.id,
+        projectId: project.id,
+        title: "題名だけの変更",
+        stateId: stateId(data, team.id, "unstarted", "未着手"),
+      },
+    },
+  ]);
+
+  let startedRequests = 0;
+  page.on("request", (req) => {
+    if (req.method() !== "GET") return;
+    if (new URL(req.url()).pathname !== "/api/progress/started") return;
+    startedRequests += 1;
+  });
+
+  await page.goto(`/${ws}/progress/wbs`);
+  const row = page.locator("[data-testid=wbs-row]", { hasText: "題名だけの変更" });
+  await expect(row).toBeVisible();
+  await expect.poll(() => startedRequests).toBeGreaterThan(0);
+  // 開いた直後の取り直し（1.5 秒）が収まってから数える
+  await page.waitForTimeout(2000);
+  const baseline = startedRequests;
+
+  await mutate(page, ws, [{ type: "issue.update", args: { id, patch: { title: "題名だけ変えた" } } }]);
+  const renamed = page.locator("[data-testid=wbs-row]", { hasText: "題名だけ変えた" });
+  await expect(renamed).toBeVisible();
+  await page.waitForTimeout(2000);
+  expect(startedRequests).toBe(baseline);
+
+  await mutate(page, ws, [
+    { type: "issue.update", args: { id, patch: { stateId: stateId(data, team.id, "started", "進行中") } } },
+  ]);
+  await expect(renamed).toContainText("進行中");
+  await expect.poll(() => startedRequests).toBeGreaterThan(baseline);
+});
+
 async function expectBoxInside(page: Page, locator: ReturnType<Page["locator"]>) {
   const box = await locator.boundingBox();
   const viewport = page.viewportSize();

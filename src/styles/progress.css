@@ -537,6 +537,37 @@ a.timeline-label:focus-visible {
 .timeline-bar.is-overdue {
   box-shadow: inset 0 0 0 2px var(--danger);
 }
+/* 期間の外まで続く棒は、切れた端を矢印とぼかしで示す */
+.timeline-bar.is-clip-start {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%);
+}
+.timeline-bar.is-clip-end {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%);
+}
+.timeline-bar.is-clip-start.is-clip-end {
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+}
+.timeline-bar.is-clip-start::before,
+.timeline-bar.is-clip-end::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  pointer-events: none;
+}
+.timeline-bar.is-clip-start::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--panel), transparent);
+}
+.timeline-bar.is-clip-end::after {
+  right: 0;
+  background: linear-gradient(90deg, transparent, var(--panel));
+}
 .timeline-bar:focus-visible,
 .timeline-milestone:focus-visible {
   outline: 2px solid var(--accent);

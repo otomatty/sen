@@ -149,8 +149,17 @@ function earlierYmd(a: string | null, b: string | null): string | null {
   return a <= b ? a : b;
 }
 
-/** ページを開いたときに取り、課題が変わったら 1.5 秒待って取り直す。ワークスペースが違う応答は捨てる */
+/** 着手日の取り直しに使う。題名や並び順は含まない */
+function startedOnSignature(issues: Record<string, Issue>): string {
+  return Object.values(issues)
+    .map((issue) => [issue.id, issue.stateId, issue.startedAt ?? "", issue.projectId ?? "", issue.archivedAt ?? ""].join(":"))
+    .sort()
+    .join("\n");
+}
+
+/** ページを開いたときに取り、着手日に関係する値が変わったら 1.5 秒待って取り直す。ワークスペースが違う応答は捨てる */
 function useStartedOn(wsKey: string, issues: Record<string, Issue>): Record<string, string> {
+  const signature = useMemo(() => startedOnSignature(issues), [issues]);
   const [map, setMap] = useState<Record<string, string>>({});
   const loadedWs = useRef<string | null>(null);
 
@@ -175,7 +184,7 @@ function useStartedOn(wsKey: string, issues: Record<string, Issue>): Record<stri
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [wsKey, issues]);
+  }, [wsKey, signature]);
 
   return map;
 }
