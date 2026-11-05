@@ -118,3 +118,29 @@ export async function waitForSynced(page: Page) {
 export function row(page: Page, identifier: string) {
   return page.locator(`[data-testid=issue-row][data-identifier='${identifier}']`);
 }
+
+/**
+ * 指のドラッグを Chromium の CDP で送る（Playwright の page.touchscreen にはドラッグが無い）。
+ * holdMs のあいだ押し続けてから動かす。beforeMove は動き始める直前に実行する。
+ */
+export async function touchDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  opts: { holdMs?: number; beforeMove?: () => Promise<void> } = {},
+) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from.x, y: from.y }] });
+  if (opts.holdMs) await page.waitForTimeout(opts.holdMs);
+  if (opts.beforeMove) await opts.beforeMove();
+  const steps = 15;
+  for (let i = 1; i <= steps; i++) {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps }],
+    });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
+}

@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { row, seedDemo, signupViaUi, waitForSynced } from "./helpers";
+import { devices, expect, test } from "@playwright/test";
+import { row, seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
 
 test.describe("課題の操作", () => {
   test.beforeEach(async ({ page }) => {
@@ -112,5 +112,66 @@ test.describe("課題の操作", () => {
     await expect(page.getByTestId("issue-row")).toHaveCount(1);
     await page.getByTestId("search-input").fill("決済");
     await expect(page.getByTestId("issue-row").first()).toContainText("決済");
+  });
+});
+
+test.describe("課題の操作（スマホ）", () => {
+  // describe の中で defaultBrowserType を渡すと Playwright がエラーにする
+  const { defaultBrowserType: _browser, ...pixel } = devices["Pixel 7"];
+  test.use(pixel);
+
+  test.beforeEach(async ({ page }) => {
+    const { ws } = await signupViaUi(page);
+    await seedDemo(page.request, ws);
+    await page.goto(`/${ws}/team/ENG/all`);
+    await expect(page.getByTestId("issue-list")).toBeVisible();
+  });
+
+  test("長押ししてから指で動かすと、行を別のステータスに移せる", async ({ page }) => {
+    const src = row(page, "ENG-7");
+    await src.scrollIntoViewIfNeeded();
+    const target = page.locator("[data-testid=issue-group][data-group='進行中'] [data-testid=issue-row]").first();
+    const from = (await src.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    await touchDrag(page, { x: from.x + 200, y: from.y + from.height / 2 }, { x: to.x + 200, y: to.y + 8 }, { holdMs: 400 });
+    await expect(page.locator("[data-testid=issue-group][data-group='進行中']").locator("[data-identifier='ENG-7']")).toBeVisible();
+    await expect(page).not.toHaveURL(/\/issue\//);
+    await waitForSynced(page);
+  });
+
+  test("長押しせずに指を動かしたときは移らない", async ({ page }) => {
+    const src = row(page, "ENG-7");
+    await src.scrollIntoViewIfNeeded();
+    const fromGroup = await src.evaluate((el) => el.closest("[data-testid=issue-group]")?.getAttribute("data-group"));
+    const target = page.locator("[data-testid=issue-group][data-group='進行中'] [data-testid=issue-row]").first();
+    const from = (await src.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    await touchDrag(page, { x: from.x + 200, y: from.y + from.height / 2 }, { x: to.x + 200, y: to.y + 8 }, { holdMs: 0 });
+    await page.waitForTimeout(500);
+    await expect(page.locator(`[data-testid=issue-group][data-group='${fromGroup}']`).locator("[data-identifier='ENG-7']")).toBeVisible();
+  });
+
+  test("長押しで右クリックメニューが開いても、そのまま動かすとメニューが閉じて行が移る", async ({ page }) => {
+    const src = row(page, "ENG-7");
+    await src.scrollIntoViewIfNeeded();
+    const target = page.locator("[data-testid=issue-group][data-group='進行中'] [data-testid=issue-row]").first();
+    const from = (await src.boundingBox())!;
+    const to = (await target.boundingBox())!;
+    const clientX = from.x + 200;
+    const clientY = from.y + from.height / 2;
+    await touchDrag(
+      page,
+      { x: clientX, y: clientY },
+      { x: to.x + 200, y: to.y + 8 },
+      {
+        holdMs: 400,
+        beforeMove: async () => {
+          await row(page, "ENG-7").dispatchEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY });
+          await expect(page.locator(".menu")).toBeVisible();
+        },
+      },
+    );
+    await expect(page.locator(".menu")).toHaveCount(0);
+    await expect(page.locator("[data-testid=issue-group][data-group='進行中']").locator("[data-identifier='ENG-7']")).toBeVisible();
   });
 });

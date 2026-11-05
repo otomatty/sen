@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { api } from "../../lib/api";
 import { Button, Spinner } from "../../components/ui";
 import { GoogleIcon, Logo } from "../../components/icons";
-import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, signInWithGoogle, signOut, useSession } from "../../app/session";
+import { acceptPendingInvitation, devSignIn, lastWorkspaceKey, loadSession, logout, pickWorkspaceKey, signInWithGoogle, signOut, useSession } from "../../app/session";
 import { formatDateTime } from "../../lib/utils";
 import type { InvitePreview, PendingInvitation } from "../../../shared/types";
 
@@ -135,7 +135,7 @@ export function LoginPage() {
     setError(null);
     try {
       const res = await devSignIn("taro@example.com", "山田 太郎");
-      const key = res?.workspaces[0]?.urlKey;
+      const key = res ? pickWorkspaceKey(res.workspaces, res.defaultWorkspaceId ?? null) : null;
       navigate(next ?? (key ? `/${key}/my-issues` : "/new-workspace"), { replace: true });
     } catch (err) {
       setError((err as Error).message);

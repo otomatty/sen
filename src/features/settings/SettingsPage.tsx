@@ -25,6 +25,7 @@ import { TeamIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
 import { PageHeader } from "../../components/PageHeader";
 import { useDocumentTitle, useIsAdmin, useWsPath } from "../../app/hooks";
+import { refreshWorkspaces, setDefaultWorkspace, useSession } from "../../app/session";
 import { api } from "../../lib/api";
 import { confirmDialog } from "../../components/ConfirmDialog";
 import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
@@ -111,8 +112,50 @@ function ProfileSettings() {
           </div>
         </Field>
       </Section>
+      <DefaultWorkspaceSection />
       <AppSection />
     </>
+  );
+}
+
+/** 参加が2つ以上のときだけ。1つなら選ぶ意味がなく、使い方動画の画面にも出したくない */
+function DefaultWorkspaceSection() {
+  const workspaces = useSession((s) => s.workspaces);
+  const defaultWorkspaceId = useSession((s) => s.defaultWorkspaceId);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void refreshWorkspaces();
+  }, []);
+  if (workspaces.length < 2) return null;
+  const value = defaultWorkspaceId && workspaces.some((w) => w.id === defaultWorkspaceId) ? defaultWorkspaceId : "";
+  return (
+    <Section title="最初に開くワークスペース" description="アプリを開いたときやログインしたときに表示するワークスペースです。すべての端末で共通です。">
+      <Field label="ワークスペース">
+        <select
+          className="input"
+          data-testid="default-workspace"
+          value={value}
+          disabled={busy}
+          onChange={async (e) => {
+            setBusy(true);
+            try {
+              await setDefaultWorkspace(e.target.value || null);
+            } catch (err) {
+              toast((err as Error).message, { kind: "error" });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <option value="">最後に開いたワークスペース</option>
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </Section>
   );
 }
 

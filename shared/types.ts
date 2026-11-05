@@ -328,6 +328,14 @@ export type Mutation =
   | { type: "workspace.update"; args: { name?: string } }
   | { type: "workspace.setAllowedDomains"; args: { domains: string[] } }
   | { type: "user.update"; args: { name?: string; avatarColor?: string; settings?: UserSettings } }
+  | {
+      type: "user.updateSettings";
+      args: {
+        set?: Partial<Omit<UserSettings, "favorites">>;
+        addFavorite?: Favorite;
+        removeFavorite?: Favorite;
+      };
+    }
   | { type: "member.update"; args: { userId: string; role: Role } }
   | { type: "member.remove"; args: { userId: string } };
 
