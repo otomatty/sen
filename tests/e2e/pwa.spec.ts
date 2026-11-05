@@ -408,3 +408,31 @@ test("更新する前に、書きかけの説明文は保存し、作成中の�
   await page.getByTestId("sidebar-create").click();
   await expect(page.getByTestId("create-title")).toHaveValue("書きかけの課題");
 });
+
+test("保存できなかった課題の下書きがあるときは、更新する前に確かめる", async ({ page }) => {
+  const ws = await openInstalledApp(page);
+  await page.goto(`/${ws}/projects`);
+  await page.getByTestId("project-row").first().click();
+  await expect(page.getByTestId("project-page")).toBeVisible();
+  await publishNextVersion(page, { version: "next", drop: "js" });
+  const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
+  await expect(notice).toBeVisible();
+
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith("sen:issue-draft:")) {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("保存できない下書き");
+  await page.keyboard.press("Escape");
+  await notice.getByRole("button", { name: "更新" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("保存できなかった作成中の課題の下書き");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  expect(await hasWaiting(page)).toBe(true);
+});

@@ -354,6 +354,28 @@ test("作成中の課題の下書きはアカウントごとに残り、切り�
   await expect(page.getByTestId("create-title")).toHaveValue("次郎の下書き");
 });
 
+test("保存できなかった課題の下書きがあるときは、アカウントを切り替える前に確かめる", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith("sen:issue-draft:")) {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("保存できない下書き");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("保存できなかった作成中の課題の下書き");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+});
+
 test("このアカウントからログアウトするときは、作成中の課題の下書きが消えるので確かめる", async ({ page }) => {
   await signInTwoAccounts(page);
   await waitForSynced(page);

@@ -123,6 +123,14 @@ export function clearAllIssueDrafts(): void {
   }
 }
 
+/** localStorage に保存できず、このタブのメモリにだけある下書き（読み込み直すと消える）があれば true */
+export function hasUnsavedIssueDraft(): boolean {
+  for (const draft of memory.values()) {
+    if (draftHasContent(draft)) return true;
+  }
+  return false;
+}
+
 /** そのユーザーの下書きが、どのワークスペースでも、内容のある状態で残っていれば true */
 export function hasIssueDraftForUser(userId: string): boolean {
   for (const [key, draft] of memory) {
