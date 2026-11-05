@@ -9,11 +9,8 @@ import path from "node:path";
 
 const DEFAULT_MODEL = "gemini-3.8-flash-tts";
 const DEFAULT_VOICE = "Kore";
-const DEFAULT_STYLE = [
-  "Read the following Japanese narration aloud for a software tutorial video. Use a calm, warm and clear voice at a relaxed, slightly slow pace. Read only the transcript.",
-  "",
-  "TRANSCRIPT:",
-].join("\n");
+const DEFAULT_STYLE =
+  "Calm, warm and clear narration for a software tutorial video, at a relaxed, slightly slow pace.";
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
 const DEFAULT_CONCURRENCY = 3;
 const SAMPLE_RATE = 24000;
@@ -230,7 +227,7 @@ export class Narrator {
     const key = createHash("sha256")
       .update(
         JSON.stringify({
-          v: 2,
+          v: 3,
           baseUrl: this.baseUrl,
           model: this.model,
           voice: this.voice,
@@ -292,7 +289,7 @@ export class Narrator {
   private async fetchAudio(speech: string): Promise<{ bytes: Buffer; kind: "wav" | "pcm" | "auto"; rate: number; ext: string }> {
     const url = `${this.baseUrl}/v1beta/models/${this.model}:generateContent`;
     const body = JSON.stringify({
-      contents: [{ parts: [{ text: `${this.style}\n${speech}` }] }],
+      contents: [{ parts: [{ text: speech, speechMetadata: { style: this.style } }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voice } } },
