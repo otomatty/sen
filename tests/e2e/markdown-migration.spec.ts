@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { markdownToText } from "../../shared/markdown";
 import { htmlToMarkdown } from "../../worker/markdown";
 import { migrateBodiesToMarkdown } from "../../worker/markdown-migration";
 
@@ -488,4 +489,32 @@ test("クエリ上限で仕上げが途中で切れても、続きから終わ�
 
   const done = await db.prepare("SELECT COUNT(*) AS c FROM d1_migrations WHERE name = ?").bind("0009_markdown_bodies").first<{ c: number }>();
   expect(Number(done?.c ?? 0)).toBe(1);
+});
+
+test("壊れる行内は書式を外して保存し、警告には行の ID だけを出す", async () => {
+  const html = "<p><strong>a<code>c</code></strong>です</p>";
+  const db = await openDb();
+  await insertWorkspace(db, "ws");
+  await insertIssue(db, { id: "issue-plain", ws: "ws", description: html, updatedAt: 7, number: 1 });
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    await migrateBodiesToMarkdown(db as never, markerFor(db).write);
+  } finally {
+    console.warn = original;
+  }
+  const saved = await value(db, "SELECT description AS value, updated_at FROM issues WHERE id = ?", "issue-plain");
+  expect(saved?.value).not.toContain("*");
+  expect(markdownToText(saved?.value ?? "")).toBe("acです");
+  expect(saved?.updated_at).toBe(7);
+  const warned = warnings.join("\n");
+  expect(warned).toContain("issue-plain");
+  expect(warned).toContain("issues");
+  expect(warned).not.toContain(html);
+  expect(warned).not.toContain("acです");
+  expect(warned).not.toContain("<code>");
+  expect(warned).not.toContain("<strong>");
 });

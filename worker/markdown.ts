@@ -3,6 +3,7 @@
 // Workers とブラウザの両方で動くよう、DOM も Node の API も使わない。
 
 import { HTML4_NAMED_ENTITIES } from "../shared/html4-entities";
+import { markdownToText } from "../shared/markdown";
 
 
 interface El {
@@ -857,9 +858,174 @@ function collapseBlankLines(md: string): string {
   return out.join("\n").trim();
 }
 
+/** strong/b、em/i、s/del/strike、code。前の版の MCP は `**a**__b__` のような Markdown から、同じ種類を隣り合わせて出す */
+const FORMAT_KIND: Record<string, string> = {
+  strong: "strong",
+  b: "strong",
+  em: "em",
+  i: "em",
+  s: "strike",
+  del: "strike",
+  strike: "strike",
+  code: "code",
+};
+
+/**
+ * 行内へ出す前に、間に何も無く隣り合う同じ種類の書式を 1 つにまとめる。
+ * 子は順につなぐ。まとめたことで子どうしが隣り合ったら、そこもまとめる。
+ */
+function mergeAdjacentFormats(nodes: Node[]): Node[] {
+  const out: Node[] = [];
+  for (const node of nodes) {
+    const current: Node =
+      node.type === "text"
+        ? node
+        : { type: "el", tag: node.tag, attrs: node.attrs, children: mergeAdjacentFormats(node.children) };
+    const prev = out[out.length - 1];
+    const kind = current.type === "el" ? FORMAT_KIND[current.tag] : undefined;
+    if (current.type === "el" && kind && prev?.type === "el" && FORMAT_KIND[prev.tag] === kind) {
+      prev.children = mergeAdjacentFormats([...prev.children, ...current.children]);
+      continue;
+    }
+    out.push(current);
+  }
+  return out;
+}
+
+const INLINE_MARK_TAGS = new Set(["strong", "b", "em", "i", "s", "del", "strike", "code", "a"]);
+/** 表示されない中身。script・style と、同じように中を出さないもの */
+const HIDDEN_TAGS = new Set(["script", "style", "noscript", "template"]);
+
+/** 太字・斜体・取り消し線・行内コード・リンクを外し、コードブロックはそのまま残す */
+function stripInlineMarks(nodes: Node[]): Node[] {
+  const out: Node[] = [];
+  for (const node of nodes) {
+    if (node.type === "text") {
+      out.push(node);
+      continue;
+    }
+    if (node.tag === "pre") {
+      out.push(node);
+      continue;
+    }
+    if (INLINE_MARK_TAGS.has(node.tag)) {
+      out.push(...stripInlineMarks(node.children));
+      continue;
+    }
+    out.push({ type: "el", tag: node.tag, attrs: node.attrs, children: stripInlineMarks(node.children) });
+  }
+  return out;
+}
+
+/** テキストノードを順につなぐ。画像は代替テキスト（無ければ空）。script・style などの中は含めない */
+function visibleText(nodes: Node[]): string {
+  let out = "";
+  for (const node of nodes) {
+    if (node.type === "text") {
+      out += node.text;
+      continue;
+    }
+    if (HIDDEN_TAGS.has(node.tag)) continue;
+    if (node.tag === "img") {
+      out += node.attrs.alt ?? "";
+      continue;
+    }
+    out += visibleText(node.children);
+  }
+  return out;
+}
+
+/** ブロックの境で区切った見える文字。つなげると visibleText と同じになる */
+function visibleParagraphs(nodes: Node[]): string[] {
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => {
+    parts.push(buf);
+    buf = "";
+  };
+  const visit = (list: Node[]) => {
+    for (const node of list) {
+      if (node.type === "text") {
+        buf += node.text;
+        continue;
+      }
+      if (HIDDEN_TAGS.has(node.tag)) continue;
+      if (node.tag === "img") {
+        buf += node.attrs.alt ?? "";
+        continue;
+      }
+      if (BLOCK_TAGS.has(node.tag) || node.tag === "td" || node.tag === "th") {
+        flush();
+        visit(node.children);
+        flush();
+        continue;
+      }
+      visit(node.children);
+    }
+  };
+  visit(nodes);
+  flush();
+  return parts;
+}
+
+/** 比べる前に、空白と NBSP をすべて除く */
+function comparableText(s: string): string {
+  return s.replace(/[\s\u00A0]/g, "");
+}
+
+function sameVisible(expected: string, markdown: string): boolean {
+  return comparableText(expected) === comparableText(markdownToText(markdown));
+}
+
+function normalizeHtml(html: string): string {
+  return html.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * 見える文字だけを、段落ごとにエスケープした Markdown にする。
+ * 行頭の # や > は、直後が NBSP でも見出し・引用になる。そこもエスケープしないと文字が消える。
+ */
+function plainParagraphMarkdown(nodes: Node[]): string {
+  const lines: string[] = [];
+  for (const part of visibleParagraphs(nodes)) {
+    const line = escapePlainParagraph(part);
+    if (line) lines.push(line);
+  }
+  return lines.join("\n\n");
+}
+
+function escapePlainParagraph(text: string): string {
+  // 改行は空白と同じ。残すと、次の行が見出しやフェンスとして読まれる。
+  let line = escapeInline(text).replace(/^[ \t]+/, "");
+  if (!line.trim()) return "";
+  if (/^#{1,6}(?=\s|$)/.test(line)) return `\\${line}`;
+  if (line.startsWith(">")) return `\\${line}`;
+  if (/^[-+](?=\s|$)/.test(line)) return `\\${line}`;
+  if (/^(?:`{3,}|~{3,})/.test(line)) return `\\${line}`;
+  if (/^(?:=+|-+)\s*$/.test(line)) return `\\${line}`;
+  if (/^([-*_])(?:\s*\1){2,}\s*$/.test(line)) return `\\${line}`;
+  const ordered = /^(\d{1,9})([.)])(?=\s|$)/.exec(line);
+  if (ordered) return `${ordered[1]}\\${ordered[2]}${line.slice(ordered[0].length)}`;
+  return line;
+}
+
 /** 保存済みの HTML を Markdown にする。データの移行以外では使わない */
 export function htmlToMarkdown(html: string): string {
   if (!html || !html.trim()) return "";
-  const root = parseHtml(html.replace(/\r\n?/g, "\n"));
-  return collapseBlankLines(renderBlocks(root.children));
+  const root = parseHtml(normalizeHtml(html));
+  return collapseBlankLines(renderBlocks(mergeAdjacentFormats(root.children)));
+}
+
+/**
+ * 移行で使う。変換のあと、見える文字が変わっていないかを本文ごとに確かめる。
+ * 変わっていたら行内の書式だけ外してやり直し、それでもダメなら段落ごとの平文にする。
+ */
+export function htmlToMarkdownChecked(html: string): { markdown: string; fallback: boolean } {
+  const markdown = htmlToMarkdown(html);
+  const root = parseHtml(normalizeHtml(html));
+  const expected = visibleText(root.children);
+  if (sameVisible(expected, markdown)) return { markdown, fallback: false };
+  const loose = collapseBlankLines(renderBlocks(stripInlineMarks(mergeAdjacentFormats(root.children))));
+  if (sameVisible(expected, loose)) return { markdown: loose, fallback: true };
+  return { markdown: plainParagraphMarkdown(root.children), fallback: true };
 }
