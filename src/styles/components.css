@@ -803,6 +803,16 @@ select:focus {
   max-width: 380px;
   line-height: 1.7;
 }
+.empty-desc .link-btn {
+  display: inline;
+  padding: 0;
+  font-size: inherit;
+  color: var(--accent-text);
+}
+.empty-desc .link-btn:hover {
+  background: none;
+  text-decoration: underline;
+}
 .empty-action {
   display: flex;
   flex-wrap: wrap;

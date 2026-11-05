@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { NavLink, useNavigate, useParams } from "react-router";
+import { NavLink, useNavigate, useParams, useSearchParams } from "react-router";
 import { Box, Plus } from "lucide-react";
 import type { Project, ProjectStatus } from "../../../shared/types";
 import { PALETTE, PROJECT_STATUSES, projectStatusLabel } from "../../../shared/constants";
@@ -25,8 +25,67 @@ export function StatusChip({ status }: { status: ProjectStatus }) {
   );
 }
 
+const PROJECT_TABS = [
+  { key: "active", label: "進行中", testId: "projects-tab-active", empty: "進行中のプロジェクトはありません" },
+  { key: "planned", label: "計画中", testId: "projects-tab-planned", empty: "計画中のプロジェクトはありません" },
+  { key: "done", label: "完了", testId: "projects-tab-done", empty: "完了したプロジェクトはありません" },
+] as const;
+
+type ProjectTab = (typeof PROJECT_TABS)[number]["key"];
+
+const TAB_STATUSES: Record<ProjectTab, readonly ProjectStatus[]> = {
+  active: ["started", "paused"],
+  planned: ["planned", "backlog"],
+  done: ["completed", "canceled"],
+};
+
+/** クエリ `status`。無い、または planned / done 以外は進行中。進行中のときはパラメータを付けない。 */
+function tabFromStatus(status: string | null): ProjectTab {
+  if (status === "planned" || status === "done") return status;
+  return "active";
+}
+
+function projectInTab(status: ProjectStatus, tab: ProjectTab) {
+  return TAB_STATUSES[tab].includes(status);
+}
+
+/** そのステータスのプロジェクトが並ぶ一覧タブのパス（ワークスペース相対）。進行中ならクエリは付けない */
+export function projectsListPath(status: ProjectStatus): string {
+  const tab = PROJECT_TABS.find((t) => projectInTab(status, t.key))?.key;
+  if (!tab || tab === "active") return "/projects";
+  return `/projects?status=${tab}`;
+}
+
+/** 選択中以外で件数があるタブを「計画中に 2 件、完了に 1 件あります。」の形で案内する */
+function ProjectTabHints({
+  tab,
+  counts,
+  onSelect,
+}: {
+  tab: ProjectTab;
+  counts: Record<ProjectTab, number>;
+  onSelect: (next: ProjectTab) => void;
+}) {
+  const others = PROJECT_TABS.filter((t) => t.key !== tab && counts[t.key] > 0);
+  return (
+    <>
+      {others.map((t, i) => (
+        <span key={t.key}>
+          {i > 0 && "、"}
+          <button type="button" className="link-btn" onClick={() => onSelect(t.key)}>
+            {t.label}
+          </button>
+          に {counts[t.key]} 件{i === others.length - 1 && "あります。"}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function ProjectsPage() {
-  const { teamKey, filter = "all" } = useParams();
+  const { teamKey } = useParams();
+  const [params, setParams] = useSearchParams();
+  const tab = tabFromStatus(params.get("status"));
   const team = useTeamByKey(teamKey);
   const projects = useProjects();
   const issues = useActiveIssues();
@@ -35,16 +94,32 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const p = useWsPath();
   const createOpen = useUI((s) => s.projectCreateOpen);
-  const [tab, setTab] = useState<"all" | "active" | "planned" | "done">(filter as "all");
   useDocumentTitle(team ? `${team.name} のプロジェクト` : "プロジェクト");
 
-  const list = useMemo(() => {
-    let l = team ? projects.filter((pr) => pr.teamIds.includes(team.id)) : projects;
-    if (tab === "active") l = l.filter((pr) => pr.status === "started" || pr.status === "paused");
-    if (tab === "planned") l = l.filter((pr) => pr.status === "planned" || pr.status === "backlog");
-    if (tab === "done") l = l.filter((pr) => pr.status === "completed" || pr.status === "canceled");
-    return l;
-  }, [projects, team, tab]);
+  const selectTab = (next: ProjectTab) => {
+    setParams((prev) => {
+      const nextParams = new URLSearchParams(prev);
+      if (next === "active") nextParams.delete("status");
+      else nextParams.set("status", next);
+      return nextParams;
+    }, { replace: true });
+  };
+
+  const scoped = useMemo(
+    () => (team ? projects.filter((pr) => pr.teamIds.includes(team.id)) : projects),
+    [projects, team],
+  );
+  const counts = useMemo(
+    () => ({
+      active: scoped.filter((pr) => projectInTab(pr.status, "active")).length,
+      planned: scoped.filter((pr) => projectInTab(pr.status, "planned")).length,
+      done: scoped.filter((pr) => projectInTab(pr.status, "done")).length,
+    }),
+    [scoped],
+  );
+  const list = useMemo(() => scoped.filter((pr) => projectInTab(pr.status, tab)), [scoped, tab]);
+  const noProjects = counts.active + counts.planned + counts.done === 0;
+  const tabMeta = PROJECT_TABS.find((t) => t.key === tab) ?? PROJECT_TABS[0];
 
   return (
     <div className="page projects-page" data-testid="projects-page">
@@ -62,17 +137,18 @@ export function ProjectsPage() {
           </Button>
         }
       >
-        <nav className="tabs">
-          {(
-            [
-              ["all", "すべて"],
-              ["active", "進行中"],
-              ["planned", "計画中"],
-              ["done", "完了"],
-            ] as const
-          ).map(([k, l]) => (
-            <button key={k} className={cx("tab", tab === k && "active")} onClick={() => setTab(k)}>
-              {l}
+        <nav className="tabs" role="tablist">
+          {PROJECT_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              className={cx("tab", tab === t.key && "active")}
+              data-testid={t.testId}
+              onClick={() => selectTab(t.key)}
+            >
+              {t.label}<span className="tab-count">{counts[t.key]}</span>
             </button>
           ))}
         </nav>
@@ -81,13 +157,20 @@ export function ProjectsPage() {
         {list.length === 0 ? (
           <EmptyState
             icon={<Box size={28} />}
-            title="プロジェクトはありません"
-            description="複数の課題にまたがる目標は、プロジェクトにまとめると進捗が追いやすくなります。"
+            title={noProjects ? "プロジェクトはありません" : tabMeta.empty}
+            description={
+              noProjects ? (
+                "複数の課題にまたがる目標は、プロジェクトにまとめると進捗が追いやすくなります。"
+              ) : (
+                <ProjectTabHints tab={tab} counts={counts} onSelect={selectTab} />
+              )
+            }
             action={
               <Button variant="primary" onClick={() => useUI.setState({ projectCreateOpen: true })}>
                 プロジェクトを作成
               </Button>
             }
+            testId="projects-empty"
           />
         ) : (
           <div className="table projects-table" role="table">
