@@ -172,6 +172,46 @@ test("平文は、表示が文字参照を戻す所だけ戻す", () => {
   }
 });
 
+test("名前付き文字参照は、表示では参照のまま、平文では HTML 4 の文字に戻す", () => {
+  const shown = markdownToHtml("&copy; 2026 &eacute;t&eacute;");
+  expect(shown.includes("&copy;") || shown.includes("©")).toBe(true);
+  expect(shown).not.toContain("&amp;copy;");
+  expect(markdownToText("&copy; 2026 &eacute;t&eacute;")).toBe("© 2026 été");
+  expect(markdownToPlainLines("&copy; 2026 &eacute;t&eacute;")).toBe("© 2026 été");
+  expect(markdownToText("&reg; &hellip; &mdash; &yen;")).toBe("® … — ¥");
+
+  const unknown = markdownToHtml("&foo;");
+  expect(unknown).toContain("&foo;");
+  expect(unknown).not.toContain("&amp;foo;");
+  expect(markdownToText("&foo;")).toBe("&foo;");
+  expect(markdownToPlainLines("&foo;")).toBe("&foo;");
+
+  const code = markdownToHtml("`&copy;`");
+  expect(code).toContain("<code>&amp;copy;</code>");
+  expect(code).not.toContain("©");
+  expect(markdownToText("`&copy;`")).toBe("&copy;");
+  expect(markdownToPlainLines("`&copy;`")).toBe("&copy;");
+  const block = markdownToHtml("```\n&copy;\n```");
+  expect(block).toContain("&amp;copy;");
+  expect(block).not.toContain("©");
+  expect(markdownToText("```\n&copy;\n```")).toBe("&copy;");
+
+  expect(markdownToText("<div>&copy;</div>")).toBe("&copy;");
+  expect(markdownToPlainLines("<div>&copy;</div>")).toBe("&copy;");
+
+  const link = markdownToHtml("[&copy;](https://example.com)");
+  expect(link).toContain("&copy;");
+  expect(link).not.toContain("&amp;copy;");
+  const alt = markdownToHtml("![&copy;](https://example.com/a.png)");
+  expect(alt).toContain('alt="&copy;"');
+  expect(alt).not.toContain("&amp;copy;");
+
+  const script = markdownToHtml("&lt;script&gt;alert(1)&lt;/script&gt;");
+  expect(script).not.toContain("<script");
+  expect(script).toContain("&lt;script&gt;");
+  expect(script).toContain("&lt;/script&gt;");
+});
+
 test("markdownToHtml は構文を安全な HTML にする", () => {
   expect(markdownToHtml("")).toBe("");
   expect(markdownToHtml("   \n")).toBe("");

@@ -207,6 +207,16 @@ test("文字だったものは、変換後も同じ文字のまま残る", () =>
     "<hr>",
     "<p></p>",
     '<h2>見出し</h2><p>これは <strong>太字</strong> と <code>code</code> です</p><ul><li><p>項目</p></li></ul><ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label><input type="checkbox" checked></label><div><p>済み</p></div></li><li data-type="taskItem" data-checked="false"><label><input type="checkbox"></label><div><p>未</p></div></li></ul><blockquote><p>引用</p></blockquote><p><a href="https://example.com">Sen</a></p>',
+    // 段落のすぐ後ろのリスト。1 以外の番号は空行がないと段落に飲み込まれる。
+    '<p>Steps</p><ol start="3"><li><p>third</p></li></ol>',
+    '<p>Steps</p><ol start="1"><li><p>first</p></li></ol>',
+    "<p>Steps</p><ul><li><p>item</p></li></ul>",
+    '<p>Steps</p><ul data-type="taskList"><li data-checked="false" data-type="taskItem"><label><input type="checkbox"></label><div><p>todo</p></div></li></ul>',
+    // 見出し末尾の「空白 + #」は閉じ記号にしない。C# のように空白が無い # はそのまま。
+    "<h2>Language #</h2>",
+    "<h1>A ##</h1>",
+    "<h3>C# と F#</h3>",
+    "<h2>#1</h2>",
   ];
 
   for (const html of samples) {

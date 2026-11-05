@@ -339,6 +339,14 @@ interface Block {
   kind: "list" | "other";
 }
 
+/** CommonMark では、1 以外から始まる番号付きリストは段落の途中では始まらない */
+function orderedListNeedsBlankLine(text: string): boolean {
+  const nl = text.indexOf("\n");
+  const line = nl === -1 ? text : text.slice(0, nl);
+  const marker = /^(\d{1,9})\./.exec(line);
+  return marker !== null && Number(marker[1]) !== 1;
+}
+
 function joinBlocks(parts: Block[]): string {
   let out = "";
   for (const p of parts) {
@@ -347,7 +355,8 @@ function joinBlocks(parts: Block[]): string {
       out = p.text;
       continue;
     }
-    out += (p.kind === "list" ? "\n" : "\n\n") + p.text;
+    const separate = p.kind !== "list" || orderedListNeedsBlankLine(p.text);
+    out += (separate ? "\n\n" : "\n") + p.text;
   }
   return out;
 }
@@ -531,6 +540,11 @@ function linkDestination(href: string): string {
   return `<${href.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
 }
 
+/** 末尾の「空白 + #」は ATX 見出しの閉じ記号になるので、その # をエスケープする */
+function escapeTrailingHeadingHashes(text: string): string {
+  return text.replace(/(\s)(#+$)/, (_all, space: string, hashes: string) => `${space}${"\\#".repeat(hashes.length)}`);
+}
+
 function renderElement(el: El): string {
   const inline = inlinePieces(el);
   if (inline) return piecesToString(inline);
@@ -541,7 +555,7 @@ function renderElement(el: El): string {
     case "h4":
     case "h5":
     case "h6": {
-      const text = renderInline(el.children).trim();
+      const text = escapeTrailingHeadingHashes(renderInline(el.children).trim());
       return `${"#".repeat(Number(el.tag[1]))} ${text}`.trimEnd();
     }
     case "p":
