@@ -74,7 +74,9 @@ export function UserMenu() {
       else if (e.key === "End") next = items.length - 1;
       else if (e.key === "ArrowDown") next = current < 0 ? 0 : (current + 1) % items.length;
       else next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
-      items[next]?.focus({ preventScroll: true });
+      const target = items[next];
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: "nearest" });
       return;
     }
     if (e.key === "Escape") {

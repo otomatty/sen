@@ -57,3 +57,17 @@ test("スマートフォン幅では引き出しの一番下から個人設定�
   await expect(page).toHaveURL(new RegExp(`/${ws}/settings/profile$`));
   await expect(page.getByTestId("app")).not.toHaveClass(/sidebar-open/);
 });
+
+test("画面の高さが低くても、メニューの最後の項目までキーボードで届く", async ({ page }) => {
+  await signupViaUi(page);
+  await page.setViewportSize({ width: 390, height: 280 });
+  await page.getByRole("button", { name: "メニュー" }).click();
+  await page.getByTestId("user-menu").click();
+  await expect(page.getByTestId("user-menu-popover").getByRole("menu")).toHaveCSS("overflow-y", "auto");
+  await page.keyboard.press("End");
+  await expect(page.getByTestId("user-menu-logout")).toBeFocused();
+  await expect(page.getByTestId("user-menu-logout")).toBeInViewport({ ratio: 1 });
+  await page.keyboard.press("Home");
+  await expect(page.getByTestId("user-menu-profile")).toBeFocused();
+  await expect(page.getByTestId("user-menu-profile")).toBeInViewport({ ratio: 1 });
+});

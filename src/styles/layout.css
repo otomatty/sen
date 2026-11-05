@@ -234,6 +234,11 @@
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
+.user-menu [role="menu"] {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .user-menu-head {
   display: flex;
   align-items: center;
