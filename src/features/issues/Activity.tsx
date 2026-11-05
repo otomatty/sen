@@ -6,7 +6,8 @@ import { priorityLabel } from "../../../shared/constants";
 import { useData } from "../../store/data";
 import { cycleName } from "../../store/selectors";
 import { deleteComment, updateComment } from "../../store/actions";
-import { formatDate, formatDateTime, identifier, isHtmlEmpty, timeAgo } from "../../lib/utils";
+import { isMarkdownBlank, markdownToHtml } from "../../../shared/markdown";
+import { formatDate, formatDateTime, identifier, timeAgo } from "../../lib/utils";
 import { sanitizeHtml } from "../../lib/sanitize";
 import { Avatar, Button, Menu, ViaBadge } from "../../components/ui";
 import { StateIcon } from "../../components/pickers";
@@ -228,7 +229,7 @@ export function CommentCard({ c }: { c: Comment }) {
   const user = useData((s) => s.users[c.userId]);
   const users = useData((s) => s.users);
   const bodyHtml = useMemo(
-    () => highlightMentions(sanitizeHtml(c.body), Object.values(users).map((u) => u.name)),
+    () => highlightMentions(sanitizeHtml(markdownToHtml(c.body)), Object.values(users).map((u) => u.name)),
     [c.body, users],
   );
   const meId = useData((s) => s.meId);
@@ -260,7 +261,7 @@ export function CommentCard({ c }: { c: Comment }) {
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               キャンセル
             </Button>
-            <Button size="sm" variant="primary" onClick={() => save()} disabled={isHtmlEmpty(draft)}>
+            <Button size="sm" variant="primary" onClick={() => save()} disabled={isMarkdownBlank(draft)}>
               保存
             </Button>
           </div>
@@ -294,7 +295,7 @@ export function CommentCard({ c }: { c: Comment }) {
   );
 
   function save() {
-    if (isHtmlEmpty(draft)) return;
+    if (isMarkdownBlank(draft)) return;
     updateComment(c.id, draft);
     setEditing(false);
   }

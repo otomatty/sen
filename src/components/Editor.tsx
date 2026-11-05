@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { markdownToHtml } from "../../shared/markdown";
 import { cx } from "../lib/utils";
 import { sanitizeHtml } from "../lib/sanitize";
 import type { EditorProps } from "./EditorImpl";
@@ -18,7 +19,7 @@ function Fallback({ value, placeholder, className, testId }: EditorProps) {
   return (
     <div className={cx("editor", className)}>
       {value ? (
-        <div className="prose" data-testid={testId} dangerouslySetInnerHTML={{ __html: sanitizeHtml(value) }} />
+        <div className="prose" data-testid={testId} dangerouslySetInnerHTML={{ __html: sanitizeHtml(markdownToHtml(value)) }} />
       ) : (
         <div className="prose" data-testid={testId}>
           <p className="is-editor-empty editor-fallback-empty" data-placeholder={placeholder ?? ""} />

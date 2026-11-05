@@ -5,7 +5,8 @@ import { useData } from "../../store/data";
 import { useActiveIssues, useIssueByIdentifier, useTeamByKey } from "../../store/selectors";
 import { defaultStateFor } from "../../store/actions";
 import { useUI } from "../../store/ui";
-import { cx, fuzzyMatch, identifier, htmlToText } from "../../lib/utils";
+import { markdownToText } from "../../../shared/markdown";
+import { cx, fuzzyMatch, identifier } from "../../lib/utils";
 import { TeamIcon } from "../../components/icons";
 import { EmptyState } from "../../components/ui";
 import { PageHeader } from "../../components/PageHeader";
@@ -158,7 +159,7 @@ export function SearchPage() {
   const results = useMemo(() => {
     if (!q.trim()) return [] as Issue[];
     return issues
-      .filter((i) => fuzzyMatch(`${identifier(i, teams)} ${i.title} ${htmlToText(i.description)}`, q))
+      .filter((i) => fuzzyMatch(`${identifier(i, teams)} ${i.title} ${markdownToText(i.description)}`, q))
       .sort((a, b) => {
         // タイトル一致を優先
         const at = fuzzyMatch(a.title, q) ? 0 : 1;

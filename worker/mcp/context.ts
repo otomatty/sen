@@ -7,7 +7,6 @@ import { normalizeSearch } from "../../shared/text";
 import type { IssueRelation, Me, ProjectStatus, RelationType, StateType } from "../../shared/types";
 import { all, first } from "../db";
 import type { WorkspaceRow } from "../env";
-import { htmlToMarkdown } from "../markdown";
 
 export class ToolError extends Error {
   constructor(message: string) {
@@ -838,7 +837,7 @@ export class Resolver {
       const item: Record<string, unknown> = {
         author: r.author || "不明",
         createdAt: new Date(r.created_at).toISOString(),
-        body: htmlToMarkdown(r.body ?? ""),
+        body: r.body ?? "",
       };
       if (r.via) item.via = r.via;
       return item;
