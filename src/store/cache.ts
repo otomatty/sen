@@ -68,3 +68,32 @@ export async function clearSnapshots(): Promise<void> {
     // noop
   }
 }
+
+/** この利用者のスナップショット（キーが `${userId}:` で始まるもの）だけを消す */
+export async function clearSnapshotsFor(userId: string): Promise<void> {
+  const db = await open();
+  if (!db) return;
+  const prefix = `${userId}:`;
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      const req = store.getAllKeys();
+      req.onsuccess = () => {
+        try {
+          for (const key of req.result) {
+            if (typeof key === "string" && key.startsWith(prefix)) store.delete(key);
+          }
+        } catch {
+          resolve();
+        }
+      };
+      req.onerror = () => resolve();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch {
+    // noop
+  }
+}
