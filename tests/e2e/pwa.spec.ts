@@ -253,8 +253,8 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => hasWaiting(page)).toBe(true);
   await publishNextVersion(page, { version: "c", drop: "js" });
   await expect.poll(() => cacheNames(page)).toEqual([original, "sen-b", "sen-c"]);
-  // sen-c のキャッシュはインストールの始めに作られるので、この時点ではまだ b の案内が出ている。
-  // そのまま押すと b に切り替えを頼んでしまうため、c が待機中になるまで待つ
+  // sen-c のキャッシュはインストールの始めに作られるので、c のインストールが終わって待機中になってから押す。
+  // インストールの途中で押す場合は、次のテストで確かめる
   await expect.poll(() => installedAndWaiting(page)).toBe(true);
   const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
   await expect(notice).toBeVisible();
@@ -269,6 +269,24 @@ test("インストールに失敗した版や使われずに置き換わった�
   await expect.poll(() => settled(page)).toBe(true);
   await publishNextVersion(page, { version: "d" });
   await expect.poll(() => cacheNames(page)).toEqual(["sen-c", "sen-d"]);
+});
+
+test("さらに新しい版のインストール中に更新を押しても、その新しい版に切り替えて読み込み直す", async ({ page }) => {
+  await openInstalledApp(page);
+  const [original] = await cacheNames(page);
+
+  // 待機中の版（b）の案内が出ているところへ、さらに新しい版（c）を公開し、c のインストールが終わるのを待たずに押す
+  await publishNextVersion(page, { version: "b", drop: "js" });
+  await expect.poll(() => hasWaiting(page)).toBe(true);
+  const notice = page.getByTestId("toast").filter({ hasText: "新しいバージョンがあります" });
+  await expect(notice).toBeVisible();
+  await publishNextVersion(page, { version: "c", drop: "js" });
+  const reloaded = page.waitForEvent("load");
+  await notice.getByRole("button", { name: "更新" }).click();
+  // 置き換わって使われなくなった b ではなく、c に切り替わって読み込み直す（止まったまま失敗しない）
+  await reloaded;
+  await expect(page.getByTestId("app")).toBeVisible();
+  await expect.poll(() => cacheNames(page)).toEqual([original, "sen-c"]);
 });
 
 test("以前の版に戻したあとも、直前まで使っていた版を残す", async ({ page }) => {
