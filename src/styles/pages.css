@@ -941,9 +941,34 @@
   border-top: 1px solid var(--border);
 }
 .video-wrap {
+  position: relative;
   background: #000;
   display: flex;
   align-items: center;
+}
+.video-unmute {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 12.5px;
+  box-shadow: var(--shadow-sm);
+}
+.video-unmute:hover {
+  background: rgba(0, 0, 0, 0.84);
+}
+.video-unmute:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 .video-wrap video {
   width: 100%;

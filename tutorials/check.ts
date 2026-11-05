@@ -11,7 +11,7 @@ import type { Scenario } from "./lib/types";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(ROOT, "public/tutorials/manifest.json"), "utf8")) as {
-  tutorials: { id: string; sourceHash?: string }[];
+  tutorials: { id: string; sourceHash?: string; narration?: boolean }[];
 };
 const dir = path.join(ROOT, "tutorials/scenarios");
 const stale: string[] = [];
@@ -22,6 +22,7 @@ for (const f of (await readdir(dir)).filter((x) => x.endsWith(".ts")).sort()) {
   const hash = await sourceHash(ROOT, file);
   if (!entry) stale.push(`${s.id}（未収録）`);
   else if (entry.sourceHash !== hash) stale.push(`${s.id}（画面かシナリオが変わっています）`);
+  else if (entry.narration !== true) stale.push(`${s.id}（ナレーションなし）`);
 }
 if (stale.length) {
   console.error(`撮り直しが必要な動画があります（bun run tutorials）:\n- ${stale.join("\n- ")}`);

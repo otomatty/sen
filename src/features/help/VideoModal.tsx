@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Volume2, X } from "lucide-react";
 import { useUI } from "../../store/ui";
 import { cx } from "../../lib/utils";
 import { Modal } from "../../components/ui";
@@ -18,6 +18,8 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState(0);
   const [rate, setRate] = useState(1);
+  // ブラウザが音声付きの自動再生を拒否したときだけ出す
+  const [needsUnmute, setNeedsUnmute] = useState(false);
   const close = () => useUI.setState({ videoId: null });
   const idx = list.findIndex((x) => x.id === t.id);
   const goto = (d: number) => {
@@ -27,6 +29,34 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
   useEffect(() => {
     if (ref.current) ref.current.playbackRate = rate;
   }, [rate]);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    let alive = true;
+    // ナレーション付きは音声ありで再生する。拒否されたら無音で再生し直し、ボタンで解除できるようにする。
+    if (t.narration) {
+      video.muted = false;
+      video.play().catch(() => {
+        if (!alive) return;
+        video.muted = true;
+        void video.play().catch(() => {});
+        setNeedsUnmute(true);
+      });
+    } else {
+      video.muted = true;
+      void video.play().catch(() => {});
+    }
+    return () => {
+      alive = false;
+    };
+  }, [t.narration]);
+  const unmute = () => {
+    const video = ref.current;
+    if (!video) return;
+    video.muted = false;
+    setNeedsUnmute(false);
+    if (video.paused) void video.play().catch(() => {});
+  };
   const current = [...t.chapters].reverse().find((c) => c.t <= time + 0.05);
   return (
     <Modal onClose={close} width="min(1180px, 96vw)" className="video-modal" testId="video-modal" align="center">
@@ -56,12 +86,19 @@ function Player({ t, list }: { t: Tutorial; list: Tutorial[] }) {
             src={tutorialAsset(t.video)}
             poster={tutorialAsset(t.poster)}
             controls
-            autoPlay
             playsInline
-            muted
             onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+            onVolumeChange={(e) => {
+              if (!e.currentTarget.muted) setNeedsUnmute(false);
+            }}
             data-testid="tutorial-video"
           />
+          {needsUnmute && (
+            <button type="button" className="video-unmute" onClick={unmute} data-testid="tutorial-unmute">
+              <Volume2 size={16} />
+              音声をオンにする
+            </button>
+          )}
         </div>
         <aside className="video-side">
           <p className="video-summary">{t.summary}</p>
