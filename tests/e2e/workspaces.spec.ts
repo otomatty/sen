@@ -1,5 +1,26 @@
+import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
+import type { Mutation } from "../../shared/types";
 import { signupViaUi, waitForSynced } from "./helpers";
+
+async function mutate(page: Page, ws: string, mutations: Mutation[]) {
+  const res = await page.request.post(`/api/mutate?ws=${encodeURIComponent(ws)}`, {
+    headers: { "x-sen-client": "1" },
+    data: { ops: mutations.map((mutation) => ({ clientId: randomUUID(), mutation })) },
+  });
+  const text = await res.text();
+  if (!res.ok()) throw new Error(`mutate が失敗しました (${res.status()}): ${text}`);
+  const body = JSON.parse(text) as { results: { ok: boolean; error?: string }[] };
+  const failed = body.results.filter((result) => !result.ok);
+  if (failed.length) throw new Error(`mutate が拒否されました: ${failed.map((result) => result.error).join(", ")}`);
+}
+
+async function favoritesOf(page: Page): Promise<{ type: string; id: string }[]> {
+  const body = (await (await page.request.get("/api/me")).json()) as {
+    user: { settings?: { favorites?: { type: string; id: string }[] } };
+  };
+  return body.user.settings?.favorites ?? [];
+}
 
 /** ワークスペースのスナップショットが IndexedDB に保存されているか（キーは `${userId}:${urlKey}`） */
 async function hasWorkspaceSnapshot(page: Page, key: string): Promise<boolean> {
@@ -227,4 +248,84 @@ test("参加していないワークスペースは最初に開くワークス�
   });
   expect(noHeader.status()).toBe(403);
   await ctx.close();
+});
+
+test("別のワークスペースでお気に入りを変えても、もう一方のワークスペースのお気に入りが消えない", async ({ page }) => {
+  const { ws: ws1 } = await signupViaUi(page, { workspace: "ワークスペース1" });
+  await waitForSynced(page);
+
+  const boot1 = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws1)}`);
+  expect(boot1.ok()).toBeTruthy();
+  const data1 = (await boot1.json()) as { projects: { id: string }[]; teams: { id: string }[] };
+  let project1 = data1.projects[0]?.id;
+  if (!project1) {
+    const team1 = data1.teams[0]?.id;
+    expect(team1).toBeTruthy();
+    project1 = randomUUID();
+    await mutate(page, ws1, [{ type: "project.create", args: { id: project1, name: "ワークスペース1のプロジェクト", teamIds: [team1!] } }]);
+  }
+
+  const created = await page.request.post("/api/workspaces", {
+    data: { name: "ワークスペース2" },
+    headers: { "x-sen-client": "1" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const ws2 = ((await created.json()) as { workspaceKey: string }).workspaceKey;
+
+  const boot2 = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws2)}`);
+  expect(boot2.ok()).toBeTruthy();
+  const team2 = ((await boot2.json()) as { teams: { id: string }[] }).teams[0]?.id;
+  expect(team2).toBeTruthy();
+  const project2 = randomUUID();
+  await mutate(page, ws2, [{ type: "project.create", args: { id: project2, name: "ワークスペース2のプロジェクト", teamIds: [team2!] } }]);
+
+  const me = (await (await page.request.get("/api/me")).json()) as { user: { id: string } };
+  const userId = me.user.id;
+
+  await page.goto(`/${ws2}/my-issues`);
+  await waitForSynced(page);
+  await expect.poll(() => hasWorkspaceSnapshot(page, `${userId}:${ws2}`), { timeout: 10_000 }).toBe(true);
+
+  await page.goto(`/${ws1}/project/${project1}`);
+  await expect(page.getByTestId("project-page")).toBeVisible();
+  await page.getByTestId("project-favorite").click();
+  await expect.poll(async () => (await favoritesOf(page)).some((f) => f.type === "project" && f.id === project1)).toBe(true);
+
+  await page.goto(`/${ws2}/project/${project2}`);
+  await expect(page.getByTestId("project-page")).toBeVisible();
+  await page.getByTestId("project-favorite").click();
+  await expect.poll(async () => (await favoritesOf(page)).some((f) => f.type === "project" && f.id === project2)).toBe(true);
+
+  const both = await favoritesOf(page);
+  expect(both.some((f) => f.type === "project" && f.id === project1)).toBe(true);
+  expect(both.some((f) => f.type === "project" && f.id === project2)).toBe(true);
+
+  await page.getByTestId("project-favorite").click();
+  await expect.poll(async () => (await favoritesOf(page)).some((f) => f.type === "project" && f.id === project2)).toBe(false);
+  const left = await favoritesOf(page);
+  expect(left.some((f) => f.type === "project" && f.id === project2)).toBe(false);
+  expect(left.some((f) => f.type === "project" && f.id === project1)).toBe(true);
+});
+
+test("設定の変更で、決められた項目以外は受け付けない", async ({ page }) => {
+  const { ws } = await signupViaUi(page, { workspace: "設定の検証" });
+  await waitForSynced(page);
+  const before = await favoritesOf(page);
+
+  const res = await page.request.post(`/api/mutate?ws=${encodeURIComponent(ws)}`, {
+    headers: { "x-sen-client": "1" },
+    data: {
+      ops: [
+        { clientId: randomUUID(), mutation: { type: "user.updateSettings", args: { set: { favorites: [] } } } },
+        { clientId: randomUUID(), mutation: { type: "user.updateSettings", args: { set: { unknownKey: 1 } } } },
+        { clientId: randomUUID(), mutation: { type: "user.updateSettings", args: { addFavorite: { type: "bad", id: "x" } } } },
+      ],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  const body = (await res.json()) as { results: { ok: boolean; error?: string }[] };
+  expect(body.results).toHaveLength(3);
+  for (const result of body.results) expect(result.ok).toBe(false);
+
+  expect(await favoritesOf(page)).toEqual(before);
 });

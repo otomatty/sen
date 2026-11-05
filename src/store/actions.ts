@@ -1,6 +1,7 @@
 import type {
   AppNotification,
   Cycle,
+  Favorite,
   Issue,
   IssuePatch,
   Label,
@@ -583,10 +584,28 @@ export function updateMe(patch: { name?: string; avatarColor?: string; settings?
   m({ type: "user.update", args: patch }, [{ c: "users", id, fn: (v) => v && { ...v, ...patch } }]);
 }
 
-export function updateSettings(patch: Partial<UserSettings>) {
-  const d = getData();
-  const me = d.users[d.meId!] as { settings?: UserSettings } | undefined;
-  updateMe({ settings: { ...(me?.settings ?? {}), ...patch } });
+export function updateSettings(patch: Partial<Omit<UserSettings, "favorites">>) {
+  const id = getData().meId!;
+  m({ type: "user.updateSettings", args: { set: patch } }, [
+    { c: "users", id, fn: (v) => v && { ...v, settings: { ...(v.settings ?? {}), ...patch } } },
+  ]);
+}
+
+export function setFavorite(fav: Favorite, on: boolean) {
+  const id = getData().meId!;
+  m({ type: "user.updateSettings", args: on ? { addFavorite: fav } : { removeFavorite: fav } }, [
+    {
+      c: "users",
+      id,
+      fn: (v) => {
+        if (!v) return v;
+        const current = Array.isArray(v.settings?.favorites) ? v.settings.favorites : [];
+        const same = (f: Favorite) => f?.type === fav.type && f?.id === fav.id;
+        const favorites = on ? (current.some(same) ? current : [...current, fav]) : current.filter((f: Favorite) => !same(f));
+        return { ...v, settings: { ...(v.settings ?? {}), favorites } };
+      },
+    },
+  ]);
 }
 
 export function setMemberRole(userId: string, role: "admin" | "member") {
