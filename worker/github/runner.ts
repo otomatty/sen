@@ -235,6 +235,16 @@ export class GitHubSyncRunner {
 
   private async drain(): Promise<void> {
     this.labels = new Map();
+    // 連携先を変えたあとも、前のワークスペースのアラームは残る。対象でなければ順番待ちは残し、
+    // nextAt を消してアラームを入れ直さない（recomputeNext だと、期限が来ている印ですぐ鳴り続ける）。
+    const runnable = await this.lock(async () => {
+      const meta = await this.loadMeta();
+      if (await this.isCurrentTarget(meta.workspaceId)) return true;
+      await this.saveMeta({ ...meta, nextAt: null });
+      await this.signal();
+      return false;
+    });
+    if (!runnable) return;
     for (let n = 0; n < 50; n++) {
       const current = await this.loadMeta();
       if (current.rateLimitReset != null && current.rateLimitReset > Date.now() + 1500) break;
@@ -257,6 +267,11 @@ export class GitHubSyncRunner {
       });
       await this.ifCurrent(job, () => this.storage.delete(job.key));
     } catch (e) {
+      // 連携が外れたのでやり直さない。sync.ts をここで読むと移行 SQL まで進むため、名前で判別する。
+      if (e instanceof Error && e.name === "RepoUnlinked") {
+        await this.ifCurrent(job, () => this.storage.delete(job.key));
+        return;
+      }
       const gh = e instanceof GitHubError ? e : null;
       const message = gh ? gh.message : "GitHub との同期に失敗しました";
       console.error("github sync failed", gh ? gh.status : e instanceof Error ? e.name : "error");
@@ -337,6 +352,19 @@ export class GitHubSyncRunner {
       await this.saveMeta({ ...meta, nextAt });
       await this.signal();
     });
+  }
+
+  /**
+   * gh:meta のワークスペースが、今の GITHUB_WORKSPACE か。
+   * 設定が無い、行が無い、url_key が違う、なら対象ではない。読み込みは 1 回。
+   * DB が無いときはワークスペースを読めない。順番待ちの仕組みだけのテストは、ここで止めない。
+   */
+  private async isCurrentTarget(workspaceId: string | null): Promise<boolean> {
+    if (!this.env.DB) return true;
+    const cfg = githubConfig(this.env);
+    if (!cfg || !workspaceId) return false;
+    const row = await this.env.DB.prepare("SELECT url_key FROM workspaces WHERE id = ?").bind(workspaceId).first<{ url_key: string }>();
+    return row?.url_key === cfg.workspaceKey;
   }
 
   private async rememberWorkspace(workspaceId: string): Promise<void> {
@@ -481,6 +509,9 @@ export class GitHubSyncRunner {
       prefer,
     };
     try {
+      if (!(await this.isCurrentTarget(workspaceId))) {
+        return Response.json({ error: "このワークスペースでは GitHub 連携が設定されていません" }, { status: 409 });
+      }
       const { lockKeysForManual, runManual } = await import("./sync");
       const keys = this.env.DB ? await lockKeysForManual(this.env.DB, op) : [`issue:${issueId}`];
       await this.rememberWorkspace(workspaceId);
@@ -499,6 +530,7 @@ export class GitHubSyncRunner {
     const body = await readJson<{ workspaceId?: unknown }>(request);
     const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
     if (!workspaceId) return Response.json({ error: "ワークスペースがありません" }, { status: 400 });
+    if (!(await this.isCurrentTarget(workspaceId))) return Response.json({ ok: true });
     try {
       await this.rememberWorkspace(workspaceId);
       const { scanSenUnsynced, scanUpdates } = await import("./sync");

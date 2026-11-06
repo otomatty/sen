@@ -225,23 +225,33 @@ async function rewritePullLinks(
     const row = byIssue.get(issueId);
     if (!row) {
       const id = crypto.randomUUID();
-      await run(
-        ctx.env.DB,
+      // 解除が先に終わっていたら入れない。通知もしない。
+      const inserted = await ctx.env.DB.prepare(
         `INSERT INTO github_pull_links (
            id, workspace_id, issue_id, repo_id, repo, number, title, url, state, author, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        id,
-        ctx.workspaceId,
-        issueId,
-        pull.repoId,
-        pull.repo,
-        pull.number,
-        pull.title,
-        pull.url,
-        pull.state,
-        pull.author,
-        now,
-      );
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM github_repos WHERE workspace_id = ? AND repo_id = ?
+         )`,
+      )
+        .bind(
+          id,
+          ctx.workspaceId,
+          issueId,
+          pull.repoId,
+          pull.repo,
+          pull.number,
+          pull.title,
+          pull.url,
+          pull.state,
+          pull.author,
+          now,
+          ctx.workspaceId,
+          pull.repoId,
+        )
+        .run();
+      if ((inserted.meta?.changes ?? 0) === 0) continue;
       changes.push({ entity: "githubPull", entityId: id, op: "upsert" });
       continue;
     }

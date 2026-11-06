@@ -320,6 +320,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       user: { login: githubMock.login },
     };
     githubMock.issues.push(issue);
+    await pauseIfHeld(method, url.pathname);
     send(201, issueJson(issue));
     return;
   }

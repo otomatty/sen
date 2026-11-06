@@ -261,6 +261,15 @@ export async function pullComment(ctx: SyncCtx, payload: GitHubCommentEvent | nu
 }
 
 export async function runManual(ctx: SyncCtx, op: IssueOp): Promise<void> {
+  try {
+    await runManualOp(ctx, op);
+  } catch (e) {
+    if (e instanceof RepoUnlinked) fail("リポジトリの連携が外れました", 409);
+    throw e;
+  }
+}
+
+async function runManualOp(ctx: SyncCtx, op: IssueOp): Promise<void> {
   await ensureMigrated(ctx.env.DB);
   const ws = await loadWorkspace(ctx.env.DB, op.workspaceId);
   if (!ws || ws.id !== ctx.workspaceId) fail("ワークスペースが見つかりません", 404);
@@ -302,7 +311,7 @@ export async function runManual(ctx: SyncCtx, op: IssueOp): Promise<void> {
   }
   if (remote.pull_request) fail("プルリクエストは課題と紐づけられません");
   const draft = await seededBase(ctx, cfg, repo, issue, remote, op.prefer);
-  await insertLink(ctx.env.DB, ctx.workspaceId, draft);
+  await insertLink(ctx.env.DB, ctx.workspaceId, draft, repo.linked_at);
   try {
     await writeGitHubActivity(ctx, ws, opts, issue.id, "linked", repo, draft.number, draft.url);
     await reconcileIssue(ctx, { issueId: issue.id }, opts);
@@ -586,7 +595,7 @@ async function createFromSen(
         state_reason: stateWrite.state_reason,
       });
     } catch (e) {
-      await insertLink(ctx.env.DB, ctx.workspaceId, draftFrom(issue, repo, remote, final, rejected ? null : assigneeBase, rejected));
+      await insertCreatedLink(ctx, issue.id, repo, draftFrom(issue, repo, remote, final, rejected ? null : assigneeBase, rejected));
       await clearAutoCreateSkip(ctx.env.DB, issue.id);
       await clearAttempt(ctx.env.DB, "issue", issue.id);
       await enqueueUnsentComments(ctx, issue.id);
@@ -594,7 +603,7 @@ async function createFromSen(
     }
   }
   const draft = draftFrom(issue, repo, remote, final, rejected ? null : assigneeBase, rejected);
-  await insertLink(ctx.env.DB, ctx.workspaceId, draft);
+  await insertCreatedLink(ctx, issue.id, repo, draft);
   await clearAutoCreateSkip(ctx.env.DB, issue.id);
   await clearAttempt(ctx.env.DB, "issue", issue.id);
   await enqueueUnsentComments(ctx, issue.id);
@@ -684,6 +693,7 @@ async function importIfNew(
       assigneeLogin,
       null,
     ),
+    repo.linked_at,
   );
   await publishLink(ctx, ws, issueId);
   // 取り込みのやり直し中に先に処理されたコメントは、紐づけが無く成功扱いで消えている
@@ -1028,28 +1038,58 @@ function draftFrom(
   };
 }
 
-async function insertLink(db: D1Database, workspaceId: string, draft: LinkDraft): Promise<void> {
+/** 待ちのあいだに連携が外れた。作った Issue は残し、紐づけは入れず、順番待ちはやり直さない */
+export class RepoUnlinked extends Error {
+  constructor() {
+    super("リポジトリの連携が外れました");
+    this.name = "RepoUnlinked";
+  }
+}
+
+/** GitHub に作ったあとの紐づけ。外れていたら試行の記録を消してから投げる */
+async function insertCreatedLink(ctx: SyncCtx, issueId: string, repo: RepoRow, draft: LinkDraft): Promise<void> {
+  try {
+    await insertLink(ctx.env.DB, ctx.workspaceId, draft, repo.linked_at);
+  } catch (e) {
+    if (e instanceof RepoUnlinked) await clearAttempt(ctx.env.DB, "issue", issueId);
+    throw e;
+  }
+}
+
+/** 同じ workspace・repo・linked_at の連携が残っているときだけ入れる */
+async function insertLink(db: D1Database, workspaceId: string, draft: LinkDraft, linkedAt: number): Promise<void> {
   const now = Date.now();
-  await run(
-    db,
-    `INSERT INTO github_issue_links (
-       issue_id, workspace_id, repo_id, number, url, base_title, base_body, base_state, base_labels, base_assignee,
-       synced_at, last_error, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    draft.issueId,
-    workspaceId,
-    draft.repoId,
-    draft.number,
-    draft.url,
-    draft.title,
-    draft.body,
-    draft.state,
-    JSON.stringify(draft.labels),
-    draft.assignee,
-    now,
-    draft.lastError,
-    now,
-  );
+  const inserted = await db
+    .prepare(
+      `INSERT INTO github_issue_links (
+         issue_id, workspace_id, repo_id, number, url, base_title, base_body, base_state, base_labels, base_assignee,
+         synced_at, last_error, created_at
+       )
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM github_repos WHERE workspace_id = ? AND repo_id = ? AND linked_at = ?
+       )`,
+    )
+    .bind(
+      draft.issueId,
+      workspaceId,
+      draft.repoId,
+      draft.number,
+      draft.url,
+      draft.title,
+      draft.body,
+      draft.state,
+      JSON.stringify(draft.labels),
+      draft.assignee,
+      now,
+      draft.lastError,
+      now,
+      workspaceId,
+      draft.repoId,
+      linkedAt,
+    )
+    .run();
+  if ((inserted.meta?.changes ?? 0) === 0) throw new RepoUnlinked();
 }
 
 async function updateLinkBase(

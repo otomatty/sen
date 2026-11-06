@@ -8,9 +8,10 @@ import { ensureMigrated } from "../../worker/db";
 import type { Env, WorkspaceRow } from "../../worker/env";
 import { insertTeam } from "../../worker/mutations";
 import { scheduleGitHubSync } from "../../worker/github/config";
+import { unlinkGitHubRepo } from "../../worker/github/repos";
 import { GitHubSyncRunner } from "../../worker/github/runner";
 import { syncPull } from "../../worker/github/pull-sync";
-import { pullComment, pushComment, reconcileIssue, runManual, scanUpdates, type SyncCtx } from "../../worker/github/sync";
+import { pullComment, pushComment, reconcileIssue, RepoUnlinked, runManual, scanUpdates, type SyncCtx } from "../../worker/github/sync";
 import { GITHUB_TOKEN, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
 const require = createRequire(import.meta.url);
@@ -331,6 +332,8 @@ async function main(): Promise<void> {
     await scenarioPendingPullRef(db, seeded);
     await scenarioSenUnsynced(db, seeded);
     await scenarioScheduleError(db, seeded);
+    await scenarioStaleWorkspace(db, seeded);
+    await scenarioUnlinkDuringSync(db, seeded);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
@@ -649,7 +652,7 @@ function pushMockComment(number: number, body: string, login = "ghost") {
   return comment;
 }
 
-function holdGet(path: string): { entered: Promise<void>; release: () => void } {
+function holdRequest(method: string, path: string): { entered: Promise<void>; release: () => void } {
   let entered!: () => void;
   let release!: () => void;
   const enteredPromise = new Promise<void>((resolve) => {
@@ -658,8 +661,32 @@ function holdGet(path: string): { entered: Promise<void>; release: () => void } 
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  githubMock.hold = { method: "GET", path, entered, gate };
+  githubMock.hold = { method, path, entered, gate };
   return { entered: enteredPromise, release };
+}
+
+function holdGet(path: string): { entered: Promise<void>; release: () => void } {
+  return holdRequest("GET", path);
+}
+
+/** 応答を止めているあいだに解除し、止めていた処理の結果を返す */
+async function unlinkWhileHeld<T>(
+  held: { entered: Promise<void>; release: () => void },
+  task: Promise<T>,
+  unlink: () => Promise<void>,
+): Promise<T> {
+  let unlinkError: unknown = null;
+  try {
+    await held.entered;
+    await unlink();
+  } catch (e) {
+    unlinkError = e;
+  } finally {
+    held.release();
+  }
+  const result = await task;
+  if (unlinkError) throw unlinkError;
+  return result;
 }
 
 function failNextLinkInsert(db: D1Database): D1Database {
@@ -1455,6 +1482,177 @@ async function insertCommentAt(
     row.via ?? null,
     row.githubAuthor ?? null,
   );
+}
+
+function workspaceRow(seeded: Awaited<ReturnType<typeof seed>>): WorkspaceRow {
+  return { id: seeded.ws, name: "Retry", url_key: "retry", allowed_domains: "[]", created_at: 0, updated_at: 0 };
+}
+
+async function ensureRepo(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  const existing = await q(db, "SELECT team_id FROM github_repos WHERE team_id = ?", seeded.team);
+  if (existing) return;
+  const now = Date.now();
+  await exec(
+    db,
+    `INSERT INTO github_repos (team_id, workspace_id, repo_id, full_name, linked_by, linked_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'acme/widgets', ?, ?, ?, ?)`,
+    seeded.team,
+    seeded.ws,
+    seeded.repo,
+    seeded.user,
+    now - 60_000,
+    now,
+    now,
+  );
+}
+
+async function scenarioStaleWorkspace(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "a1010101-a101-4101-8101-a10101010101";
+  await insertIssue(db, {
+    id: issue,
+    ws: seeded.ws,
+    team: seeded.team,
+    state: seeded.state,
+    user: seeded.user,
+    number: 80,
+    title: "前のワークスペース",
+    description: "本文",
+  });
+  const env = envFor(db);
+  env.GITHUB_WORKSPACE = "other";
+  const storage = memoryStorage();
+  let signaled: number | null = 1;
+  const sync = new GitHubSyncRunner(storage, env, async () => {
+    signaled = await sync.nextAt();
+  });
+  const key = `gh:dirty:issue:${issue}`;
+  const mark = () =>
+    sync.handle(
+      new Request("https://realtime/github/mark", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: seeded.ws, issues: [issue] }),
+      }),
+    );
+  const marked = await mark();
+  check(marked?.status === 200, "L1: 順番待ちを受け付けていない");
+  await sync.alarm();
+  check(githubMock.requests.length === 0, "L1: 対象外なのに模擬 GitHub へ要求した");
+  check((await storage.get(key)) != null, "L1: 順番待ちが消えている");
+  const meta = await storage.get<{ workspaceId: string | null; nextAt: number | null }>("gh:meta");
+  check(meta?.workspaceId === seeded.ws, "L1: 前のワークスペースを覚えていない");
+  check(meta?.nextAt == null, "L1: nextAt が null ではない");
+  check(signaled == null, "L1: アラームが入り直した");
+  await sync.alarm();
+  check(githubMock.requests.length === 0, "L1: もう一度鳴らすと模擬 GitHub へ要求した");
+  check((await storage.get(key)) != null, "L1: もう一度鳴らすと順番待ちが消える");
+  check((await storage.get<{ nextAt: number | null }>("gh:meta"))?.nextAt == null, "L1: もう一度鳴らすと nextAt が入る");
+
+  const denied = await sync.handle(
+    new Request("https://realtime/github/issue", {
+      method: "POST",
+      body: JSON.stringify({ workspaceId: seeded.ws, userId: seeded.user, issueId: issue, action: "create" }),
+    }),
+  );
+  check(denied?.status === 409, `L1: 手での操作が 409 ではない (${denied?.status})`);
+  const reconciled = await sync.handle(
+    new Request("https://realtime/github/reconcile", { method: "POST", body: JSON.stringify({ workspaceId: seeded.ws }) }),
+  );
+  check(reconciled?.status === 200, `L1: 突き合わせを止めていない (${reconciled?.status})`);
+  check(githubMock.requests.length === 0, "L1: 突き合わせが模擬 GitHub へ要求した");
+  check((await storage.get(key)) != null, "L1: 突き合わせが順番待ちを消した");
+  check((await storage.get<{ nextAt: number | null }>("gh:meta"))?.nextAt == null, "L1: 突き合わせがアラームを入れた");
+
+  env.GITHUB_WORKSPACE = "retry";
+  const again = await mark();
+  check(again?.status === 200, "L1: 戻したあとの印を受け付けていない");
+  await sync.alarm();
+  check((await storage.get(key)) === undefined, "L1: 戻したあとの印で処理されていない");
+  check(githubMock.issues.some((item) => item.title === "前のワークスペース"), "L1: 戻したあとに Issue ができていない");
+  check(!!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "L1: 戻したあとに紐づいていない");
+}
+
+async function scenarioUnlinkDuringSync(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const env = envFor(db);
+  const ws = workspaceRow(seeded);
+  const unlink = () => unlinkGitHubRepo(env, ws, "admin", seeded.team);
+  try {
+    const issue = "a2020202-a202-4202-8202-a20202020202";
+    await insertIssue(db, {
+      id: issue,
+      ws: seeded.ws,
+      team: seeded.team,
+      state: seeded.state,
+      user: seeded.user,
+      number: 81,
+      title: "外れる途中",
+      description: "本文",
+    });
+    const storage = memoryStorage();
+    const sync = new GitHubSyncRunner(storage, env, async () => {});
+    const key = `gh:dirty:issue:${issue}`;
+    const held = holdRequest("POST", "/repos/acme/widgets/issues");
+    const marked = await sync.handle(
+      new Request("https://realtime/github/mark", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: seeded.ws, issues: [issue] }),
+      }),
+    );
+    check(marked?.status === 200, "L2: 作成の順番待ちを受け付けていない");
+    await unlinkWhileHeld(held, sync.alarm(), unlink);
+    check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "L2: 解除のあとに紐づけが残っている");
+    check((await storage.get(key)) === undefined, "L2: 連携外れが順番待ちに残ってやり直される");
+    check(!(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'issue' AND target_id = ?", issue)), "L2: 試行の記録が残っている");
+    check(githubMock.issues.some((item) => item.title === "外れる途中"), "L2: 作った Issue が無い");
+    const created = posts("/issues");
+    await sync.alarm();
+    check(posts("/issues") === created, "L2: アラームが作成をやり直した");
+    check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "L2: やり直しで紐づいた");
+
+    await ensureRepo(db, seeded);
+    const manual = "a3030303-a303-4303-8303-a30303030303";
+    await insertIssue(db, {
+      id: manual,
+      ws: seeded.ws,
+      team: seeded.team,
+      state: seeded.state,
+      user: seeded.user,
+      number: 82,
+      title: "手で外れる",
+      description: "本文",
+    });
+    const manualHeld = holdRequest("POST", "/repos/acme/widgets/issues");
+    const op = sync.handle(
+      new Request("https://realtime/github/issue", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: seeded.ws, userId: seeded.user, issueId: manual, action: "create" }),
+      }),
+    );
+    const res = await unlinkWhileHeld(manualHeld, op, unlink);
+    check(res?.status === 409, `L2: 手での作成が 409 ではない (${res?.status})`);
+    const body = (await res?.json()) as { error?: string };
+    check(body.error === "リポジトリの連携が外れました", `L2: 手でのエラーが違う (${body.error ?? ""})`);
+    check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", manual)), "L2: 手での作成が紐づけを残した");
+
+    await ensureRepo(db, seeded);
+    const number = pushRemote("取り込み途中", "外したあとに残さない");
+    const getHeld = holdGet(`/repos/acme/widgets/issues/${number}`);
+    const task = reconcileIssue(ctxFor(db, seeded.ws, []), { repoId: seeded.repo, number });
+    await getHeld.entered;
+    await unlink();
+    getHeld.release();
+    let dropped = false;
+    try {
+      await task;
+    } catch (e) {
+      dropped = e instanceof RepoUnlinked;
+    }
+    check(dropped, "L2: 取り込みが連携外れで終わっていない");
+    check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE repo_id = ? AND number = ?", seeded.repo, number)), "L2: 取り込みの紐づけが残っている");
+  } finally {
+    await ensureRepo(db, seeded);
+  }
 }
 
 async function scenarioScheduleError(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

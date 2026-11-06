@@ -158,21 +158,23 @@ export async function unlinkGitHubRepo(env: Env, ws: WorkspaceRow, role: Role, t
       console.error("github hook delete failed", e instanceof GitHubError ? e.status : e instanceof Error ? e.name : "error");
     }
   }
+  // 先に連携の行を消す。待ちの同期がこのあと紐づけを入れても、条件を満たさず入らない。
+  // それより前に入った紐づけは、続く DELETE で消える。
+  await run(env.DB, "DELETE FROM github_repos WHERE team_id = ? AND workspace_id = ?", teamId, ws.id);
   const links = await all<{ issue_id: string }>(
     env.DB,
     "SELECT issue_id FROM github_issue_links WHERE workspace_id = ? AND repo_id = ?",
     ws.id,
     row.repo_id,
   );
+  await run(env.DB, "DELETE FROM github_issue_links WHERE workspace_id = ? AND repo_id = ?", ws.id, row.repo_id);
   const pulls = await all<{ id: string }>(
     env.DB,
     "SELECT id FROM github_pull_links WHERE workspace_id = ? AND repo_id = ?",
     ws.id,
     row.repo_id,
   );
-  await run(env.DB, "DELETE FROM github_issue_links WHERE workspace_id = ? AND repo_id = ?", ws.id, row.repo_id);
   await run(env.DB, "DELETE FROM github_pull_links WHERE workspace_id = ? AND repo_id = ?", ws.id, row.repo_id);
-  await run(env.DB, "DELETE FROM github_repos WHERE team_id = ? AND workspace_id = ?", teamId, ws.id);
   const last = await writeChanges(env.DB, ws.id, [
     { entity: "githubRepo", entityId: teamId, op: "delete" },
     ...links.map((link) => ({ entity: "githubLink" as const, entityId: link.issue_id, op: "delete" as const })),
