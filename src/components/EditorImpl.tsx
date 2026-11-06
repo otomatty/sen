@@ -108,7 +108,10 @@ export default function EditorImpl({
               return false;
             },
             Escape: () => {
-              this.editor.commands.blur();
+              // Tiptap の blur は requestAnimationFrame まで遅れる。同じフレームの
+              // 2 回目の Escape も説明欄に届き、ダイアログが閉じなくなる。
+              (this.editor.view.dom as HTMLElement).blur();
+              window.getSelection()?.removeAllRanges();
               return true;
             },
           };
