@@ -30,6 +30,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **AI 連携（MCP）**：Claude Code・Cursor・VS Code などの AI ツールから、課題の作成・更新・検索・コメント・関係づけ。AI の変更には「Claude Code 経由」の印（[詳しく](docs/guide/10-ai.md)）
 - **AI アシスタント**：画面の中で Sen の使い方を質問できる。説明・画面を開くボタン・使い方動画・聞き返しまでで、課題などのデータは AI に送らない（[詳しく](docs/guide/13-help.md)）
 - **進捗**：ワークスペースのメンバーが、プロジェクト（活動）ごとの完了率・直近期限・活動状況と、作業の WBS・タイムラインをアプリの中で見られます（[詳しく](docs/guide/07-progress.md)）
+- **GitHub 連携**：タイトル・説明・開閉・コメント（追加のみ）・同じ名前のラベル・登録した担当者を双方向に同期し、プルリクエストを課題に紐づけます（[詳しく](docs/guide/14-github.md)）
 - **ログイン**：Google アカウントのみ（[Better Auth](https://www.better-auth.com)）。初めての人はログイン後にワークスペースを作るか、招待されたメールアドレスの招待リンクから参加。複数の Google アカウントでログインして、サイドバー下部のメニューから切り替えられます
 - **設定**：プロフィール、テーマ（ライト / ダーク / システム）、最初に開くワークスペース（すべての端末で共通）、メール指定の招待・権限、利用できるドメイン、ラベル、チーム、ワークフロー、サイクル期間
 - **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`bun run tutorials:check` で古い動画も検出）
@@ -50,6 +51,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - [AI ツールとの連携](docs/guide/10-ai.md)
 - [アプリ・オフライン・同期](docs/guide/12-app.md)
 - [使い方動画と AI アシスタント](docs/guide/13-help.md)
+- [GitHub 連携](docs/guide/14-github.md)
 
 ## 構成
 
@@ -71,6 +73,8 @@ flowchart LR
   Worker --> D1
   Worker -- "新しい syncId を通知" --> DO
   DO -- "WebSocket" --> Engine
+  DO -- "書き込み" --> GH["GitHub（REST API）"]
+  GH -- "Webhook" --> Worker
   Browser --> Assets
 ```
 
@@ -132,6 +136,57 @@ bunx wrangler secret put ANTHROPIC_API_KEY
 キーが無いときは AI アシスタントを使いません。ブラウザ内のデモ版でも使えません。
 
 使い方の知識は、`docs/guide/` や画面・コマンド・使い方動画の一覧から、ビルドのときに作られます。
+
+## GitHub 連携
+
+使い方は [GitHub 連携](docs/guide/14-github.md) にあります。
+
+### 設定のしかた
+
+書き込みは個人のアクセストークン（fine-grained を推奨）で行い、リポジトリの Webhook で変更を受け取ります。
+
+1. GitHub で fine-grained の個人アクセストークンを作ります。対象は、連携するリポジトリです。権限は、Issues の読み書き、Pull requests の読み取り、Metadata の読み取りです。Webhook を自動で作るなら、Webhooks の読み書きも付けます。
+2. Webhook の secret を決めます。例：`openssl rand -hex 32`
+3. Worker に登録します。`GITHUB_WORKSPACE` は、ワークスペースの URL の名前です（例：`ses`）。
+
+   ```bash
+   bunx wrangler secret put GITHUB_WORKSPACE
+   bunx wrangler secret put GITHUB_TOKEN
+   bunx wrangler secret put GITHUB_WEBHOOK_SECRET
+   ```
+
+Webhook（Issues、Issue comments、Pull requests。JSON。secret 付き）は自動で作られます。手で作るときは、URL を `https://<Sen のドメイン>/api/github/webhook`、Content type を `application/json`、secret を環境変数 `GITHUB_WEBHOOK_SECRET` の値、イベントを Issues、Issue comments、Pull requests にします。
+
+連携されるのは `GITHUB_WORKSPACE` のワークスペースだけです。それ以外では、設定画面にこの区画は出ません。
+
+手元で試すときは、`.env.local` に同じ名前で書きます。
+
+```bash
+GITHUB_WORKSPACE=ses
+GITHUB_TOKEN=github_pat_xxxxxxxx
+GITHUB_WEBHOOK_SECRET=xxxxxxxx
+```
+
+| 変数 | 内容 |
+| --- | --- |
+| `GITHUB_WORKSPACE` | 連携するワークスペースの URL の名前（例：`ses`） |
+| `GITHUB_TOKEN` | 個人のアクセストークン。対象リポジトリの Issues の読み書き、Pull requests の読み取り、Metadata の読み取り。Webhook を自動で作るなら Webhooks の読み書き |
+| `GITHUB_WEBHOOK_SECRET` | Webhook の secret |
+| `GITHUB_SYNC_DELAY_MS` | Sen の変更を GitHub に送るまでの待ち時間（ミリ秒）。省略時は `3000`。0 は待たずに送ります |
+| `GITHUB_API_ORIGIN_FOR_TESTS` | E2E 用。`DEV_TOOLS=1` のときだけ有効で、`https://api.github.com` の代わりにこのオリジンへ送ります。本番では無視します |
+
+### 仕組みと安全のために
+
+- Webhook の `X-Hub-Signature-256` を secret で HMAC-SHA256 し、長さを揃えて比べます。設定が無ければ 503、署名が無い・違うときは 401 です。同じ配送 ID は、もう一度処理しません。
+- 受け付けたら、ワークスペースごとの Durable Object に渡してすぐ返します。処理は 1 件ずつです。突き合わせでは、いつも GitHub から最新の Issue を取り直して比べます。
+- Sen 側の変更は、`GITHUB_SYNC_DELAY_MS`（省略時 3 秒）待ってから送ります。GitHub 側の出来事は、待たずに順番に処理します。
+- 失敗したときは、30 秒、2 分、10 分、1 時間、6 時間後にやり直します。それでも失敗したら、課題の画面に理由が出ます。トークンが無効なときと、利用制限に達したときは、設定画面にも出ます。
+- トークンの値と secret は、画面・ログ・同期ログに出しません。設定画面には、トークンのユーザー名と、失敗した理由が出ます。
+- GitHub のユーザー名は、本人確認をしません。各自が、自分のプロフィールに登録します。
+
+### 制限
+
+- 連携できるのは、`GITHUB_WORKSPACE` の 1 つのワークスペースだけです。
 
 ## はじめかた（ローカル）
 
@@ -259,7 +314,7 @@ bun run typecheck
 bun run test:e2e     # ビルド → まっさらな DB で起動 → Playwright で実際に操作して検証
 ```
 
-Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、メール指定の招待と利用できるドメイン、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、Markdown のエディタ（記法の入力、表の操作、往復しても失われないこと、開いただけでは保存しないこと）、本文の移行、タイトルと説明・コメントの上限、招待メンバーへのリアルタイム反映と通知、オフライン時の再送、PWA（マニフェストとアイコン、オフラインでの起動、ショートカット、インストールの案内、新しいバージョンへの更新）、AI 連携（トークンの発行、MCP からの課題の作成・更新・検索・コメント・関係づけ、閲覧のみと認証）などを確認します。
+Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、メール指定の招待と利用できるドメイン、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、Markdown のエディタ（記法の入力、表の操作、往復しても失われないこと、開いただけでは保存しないこと）、本文の移行、タイトルと説明・コメントの上限、招待メンバーへのリアルタイム反映と通知、オフライン時の再送、PWA（マニフェストとアイコン、オフラインでの起動、ショートカット、インストールの案内、新しいバージョンへの更新）、AI 連携（トークンの発行、MCP からの課題の作成・更新・検索・コメント・関係づけ、閲覧のみと認証）、GitHub 連携（Webhook の署名と重複、リポジトリの連携、課題とコメントの双方向の同期、手での紐づけ、PR の紐づけと自動の移動、模擬 GitHub サーバーを使うこと）などを確認します。
 Google ログインは、ダミーの認証情報で「Google の画面へ移るところ」と「戻ってきたときの表示」までを確かめます（実際の Google には接続しません）。それ以外のテストは開発用のログインを使います。
 
 ## 利用者向けガイド
@@ -278,6 +333,7 @@ Google ログインは、ダミーの認証情報で「Google の画面へ移る
 - [AI ツールとの連携](docs/guide/10-ai.md)
 - [アプリ・オフライン・同期](docs/guide/12-app.md)
 - [使い方動画と AI アシスタント](docs/guide/13-help.md)
+- [GitHub 連携](docs/guide/14-github.md)
 
 ```bash
 bun run assistant:check      # ガイドと画面の一覧がずれていないか確認する
@@ -287,7 +343,7 @@ bun run assistant:knowledge  # 確認に加えて、作った知識を .tmp/assi
 ## ディレクトリ構成
 
 ```
-worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object）
+worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object・GitHub 連携）
 shared/        クライアントとサーバーで共有する型・定数（`progress.ts` は進捗の集計、`markdown.ts` は本文の Markdown の処理）
 migrations/    D1 のスキーマ
 src/           React アプリ

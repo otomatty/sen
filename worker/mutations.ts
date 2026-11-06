@@ -22,6 +22,14 @@ export class MutationError extends Error {
   }
 }
 
+/** GitHub からの課題の書き込みが、読んだときの updated_at と合わなかった */
+export class StaleIssueWrite extends Error {
+  constructor() {
+    super("課題が更新されたため、GitHub からの反映をやり直します");
+    this.name = "StaleIssueWrite";
+  }
+}
+
 export interface MutationCtx {
   db: D1Database;
   ws: WorkspaceRow;
@@ -31,6 +39,13 @@ export interface MutationCtx {
   changes: Change[];
   /** AI ツール（MCP）からの操作のとき、そのツールの名前。履歴・コメント・通知に記録する */
   via?: string | null;
+  /**
+   * サーバーの GitHub 同期だけが付ける。クライアントのミューテーション引数では指定できない。
+   * 設定されているとき、comment.create は github_author に author を保存し、@名前 のメンションは検出しない。
+   */
+  githubComment?: { author: string | null } | null;
+  /** 設定したとき、issue.update は課題の updated_at がこの値のままのときだけ書く */
+  expectedUpdatedAt?: number;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -38,10 +53,31 @@ type Row = Record<string, any>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COLOR = /^#[0-9a-f]{6}$/i;
+/** GitHub のユーザー名。空は登録を消す。保存前に小文字にする */
+const GITHUB_LOGIN = /^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/;
+/** コメントの投稿者。ユーザー名の規則に、末尾の [bot] だけ足す */
+const GITHUB_AUTHOR = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/;
 const STATE_TYPES: StateType[] = ["backlog", "unstarted", "started", "completed", "canceled"];
 
 function fail(msg: string, status = 400): never {
   throw new MutationError(msg, status);
+}
+
+/** 同期が渡した GitHub ユーザー名。規則に合わなければ保存しない（コメント自体は作る） */
+function storedGitHubAuthor(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const login = value.trim().toLowerCase();
+  return GITHUB_AUTHOR.test(login) ? login : null;
+}
+
+/** 空は登録を消す。それ以外は GitHub の規則に合い、小文字で返す */
+function normalizeGitHubLogin(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") fail("GitHub のユーザー名が不正です");
+  const login = value.trim().toLowerCase();
+  if (!login) return null;
+  if (!GITHUB_LOGIN.test(login)) fail("GitHub のユーザー名の形式が正しくありません");
+  return login;
 }
 
 function assertId(id: unknown): asserts id is string {
@@ -182,6 +218,15 @@ function assertAdmin(ctx: MutationCtx) {
 }
 
 // ---- 記録系ヘルパー ----
+/** GitHub の紐づけ・作成・取り込み。同期の処理だけが呼ぶ */
+export async function recordGitHubActivity(
+  ctx: MutationCtx,
+  issueId: string,
+  data: { action: "created" | "linked" | "unlinked" | "imported"; repo: string; number: number; url: string },
+) {
+  await addActivity(ctx, issueId, "github", data);
+}
+
 async function addActivity(ctx: MutationCtx, issueId: string, type: ActivityType, data: Record<string, unknown> = {}) {
   const id = crypto.randomUUID();
   const via = ctx.via ?? null;
@@ -211,8 +256,9 @@ async function addNotifications(
   issueId: string,
   type: NotificationType,
   data: Record<string, unknown> = {},
+  includeActor = false,
 ) {
-  const targets = [...new Set(userIds)].filter((u) => u && u !== ctx.user.id);
+  const targets = [...new Set(userIds)].filter((u) => u && (includeActor || u !== ctx.user.id));
   for (const userId of targets) {
     const id = crypto.randomUUID();
     await run(
@@ -233,12 +279,26 @@ async function addNotifications(
   }
 }
 
+/** changes が 1 なら書けた。無い・0 のときは、updated_at が今の時刻になっているときだけ書けたとみなす */
+async function issueWriteLanded(db: D1Database, changes: number | undefined, issueId: string, now: number): Promise<boolean> {
+  if (changes === 1) return true;
+  const still = await first<{ updated_at: number }>(db, "SELECT updated_at FROM issues WHERE id = ?", issueId);
+  return still?.updated_at === now;
+}
+
 function touch(ctx: MutationCtx, entity: Change["entity"], entityId: string) {
   ctx.changes.push({ entity, entityId, op: "upsert" });
 }
 
 /** user.update と同じ形で、本人にだけ設定を含むユーザー行を知らせる */
-function notifyUser(ctx: MutationCtx, cur: Row, name: string, avatarColor: string, settings: string) {
+function notifyUser(
+  ctx: MutationCtx,
+  cur: Row,
+  name: string,
+  avatarColor: string,
+  settings: string,
+  githubLogin: string | null,
+) {
   const user = ctx.user;
   touch(ctx, "user", user.id);
   ctx.changes.push({
@@ -252,6 +312,7 @@ function notifyUser(ctx: MutationCtx, cur: Row, name: string, avatarColor: strin
       email: cur.email,
       avatarColor,
       role: ctx.role,
+      githubLogin,
       createdAt: cur.created_at,
       settings: JSON.parse(settings || "{}"),
     },
@@ -563,12 +624,17 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       if (!cols.length) return;
       set.updated_at = now;
       const keys = Object.keys(set);
-      await run(
-        db,
-        `UPDATE issues SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`,
-        ...keys.map((k) => set[k]),
-        row.id,
-      );
+      const params = keys.map((k) => set[k]);
+      let sql = `UPDATE issues SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`;
+      params.push(row.id);
+      if (ctx.expectedUpdatedAt != null) {
+        sql += " AND updated_at = ?";
+        params.push(ctx.expectedUpdatedAt);
+      }
+      const result = await db.prepare(sql).bind(...params).run();
+      if (ctx.expectedUpdatedAt != null && !(await issueWriteLanded(db, result.meta?.changes, row.id, now))) {
+        throw new StaleIssueWrite();
+      }
       touch(ctx, "issue", row.id);
       for (const [type, data] of acts) await addActivity(ctx, row.id, type, data);
       for (const [targets, type, data] of notify) await addNotifications(ctx, targets, row.id, type, data);
@@ -629,9 +695,12 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const body = cleanMarkdown(a.body, "コメント");
       if (isMarkdownBlank(body)) fail("コメントを入力してください");
       const text = markdownToText(body);
+      // githubAuthor は引数では受け付けない。同期が MutationCtx.githubComment を付けたときだけ保存する。
+      const fromGitHub = ctx.githubComment != null;
+      const githubAuthor = fromGitHub ? storedGitHubAuthor(ctx.githubComment?.author) : null;
       await run(
         db,
-        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via, github_author) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         a.id,
         ws.id,
         issue.id,
@@ -640,6 +709,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         now,
         now,
         ctx.via ?? null,
+        githubAuthor,
       );
       touch(ctx, "comment", a.id);
       const members = await all<Row>(
@@ -647,7 +717,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         "SELECT u.id, u.name FROM users u JOIN members m ON m.user_id = u.id WHERE m.workspace_id = ?",
         ws.id,
       );
-      const mentioned = mentionedUserIds(text, members);
+      const mentioned = fromGitHub ? [] : mentionedUserIds(text, members);
       const subscribers = parseJsonArray(issue.subscriber_ids);
       const nextSubs = [...new Set([...subscribers, user.id, ...mentioned])];
       if (nextSubs.length !== subscribers.length) {
@@ -655,13 +725,15 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         touch(ctx, "issue", issue.id);
       }
       const snippet = text.slice(0, 140);
-      await addNotifications(ctx, mentioned, issue.id, "mention", { commentId: a.id, snippet });
+      if (!fromGitHub) await addNotifications(ctx, mentioned, issue.id, "mention", { commentId: a.id, snippet });
+      // 投稿者がメンバーでない（github_author がある）ときは、代わりに記録した人を通知から外さない
       await addNotifications(
         ctx,
         subscribers.filter((s) => !mentioned.includes(s)),
         issue.id,
         "comment",
         { commentId: a.id, snippet },
+        githubAuthor != null,
       );
       return;
     }
@@ -1083,16 +1155,22 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         if (s.length > 20_000) fail("設定が大きすぎます");
         settings = s;
       }
+      const githubLogin = a.githubLogin !== undefined ? normalizeGitHubLogin(a.githubLogin) : (cur.github_login ?? null);
+      if (githubLogin) {
+        const other = await first<{ id: string }>(db, "SELECT id FROM users WHERE github_login = ? AND id != ?", githubLogin, user.id);
+        if (other) fail("この GitHub ユーザー名は、ほかの人が登録しています", 409);
+      }
       await run(
         db,
-        "UPDATE users SET name = ?, avatar_color = ?, settings = ?, updated_at = ? WHERE id = ?",
+        "UPDATE users SET name = ?, avatar_color = ?, settings = ?, github_login = ?, updated_at = ? WHERE id = ?",
         name,
         color,
         settings,
+        githubLogin,
         now,
         user.id,
       );
-      notifyUser(ctx, cur, name, color, settings);
+      notifyUser(ctx, cur, name, color, settings, githubLogin);
       return;
     }
 
@@ -1127,7 +1205,8 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const serialized = JSON.stringify(settings);
       if (serialized.length > 20_000) fail("設定が大きすぎます");
       await run(db, "UPDATE users SET settings = ?, updated_at = ? WHERE id = ?", serialized, now, user.id);
-      notifyUser(ctx, cur, cur.name, cur.avatar_color, serialized);
+      const githubLogin = typeof cur.github_login === "string" && cur.github_login ? cur.github_login : null;
+      notifyUser(ctx, cur, cur.name, cur.avatar_color, serialized, githubLogin);
       return;
     }
 

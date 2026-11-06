@@ -188,6 +188,7 @@ interface AuthRow {
   user_name: string;
   avatar_color: string;
   settings: string;
+  github_login: string | null;
   user_created_at: number;
 }
 
@@ -224,6 +225,7 @@ export async function authenticateApiToken(
        u.name AS user_name,
        u.avatar_color AS avatar_color,
        u.settings AS settings,
+       u.github_login AS github_login,
        u.created_at AS user_created_at
      FROM api_tokens t
      JOIN members m ON m.workspace_id = t.workspace_id AND m.user_id = t.user_id
@@ -259,6 +261,7 @@ export async function authenticateApiToken(
       avatar_color: row.avatar_color,
       role: row.role,
       settings: row.settings,
+      github_login: row.github_login,
       created_at: row.user_created_at,
     }),
     ws,

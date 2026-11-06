@@ -1,5 +1,5 @@
 import { memo, type MouseEvent } from "react";
-import { Check } from "lucide-react";
+import { Check, GitPullRequest } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { openPicker, useUI, type PickerKind } from "../../store/ui";
@@ -87,6 +87,7 @@ export const IssueRow = memo(function IssueRow({
       )}
       <span className="row-title">
         <span className="row-title-text">{issue.title}</span>
+        <OpenPullMark issueId={issue.id} />
         <SubIssueCount issue={issue} />
         <BlockedChip issueId={issue.id} />
       </span>
@@ -110,3 +111,22 @@ export const IssueRow = memo(function IssueRow({
     </div>
   );
 });
+
+/** 下書きとレビュー待ちの件数。マージ済み・閉じただけなら出さない */
+function OpenPullMark({ issueId }: { issueId: string }) {
+  const count = useData((s) => {
+    let n = 0;
+    for (const pull of Object.values(s.githubPulls)) {
+      if (pull.issueId === issueId && (pull.state === "draft" || pull.state === "open")) n += 1;
+    }
+    return n;
+  });
+  if (count === 0) return null;
+  const label = `開いているプルリクエスト ${count} 件`;
+  return (
+    <span className="chip row-pr" title={label} aria-label={label} data-testid="issue-pr-mark">
+      <GitPullRequest size={12} aria-hidden />
+      {count}
+    </span>
+  );
+}

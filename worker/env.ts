@@ -1,3 +1,4 @@
+import type { SendEmail } from "@cloudflare/workers-types";
 import type { Me, Role } from "../shared/types";
 
 export interface RealtimeNotifier {
@@ -23,6 +24,19 @@ export interface Env {
   /** Google Cloud の OAuth クライアント（ログインに使う） */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  /** GitHub 連携の対象ワークスペース（url_key。例: "ses"） */
+  GITHUB_WORKSPACE?: string;
+  /** 個人のアクセストークン。画面・ログ・同期ログには出さない */
+  GITHUB_TOKEN?: string;
+  /** Webhook の secret。画面・ログ・同期ログには出さない */
+  GITHUB_WEBHOOK_SECRET?: string;
+  /** Sen の変更を GitHub に送るまでの待ち時間（ミリ秒）。省略時は 3000 */
+  GITHUB_SYNC_DELAY_MS?: string;
+  /**
+   * DEV_TOOLS が "1" のときだけ有効。
+   * 設定されていれば https://api.github.com の代わりにこのオリジンへ送る（E2E の模擬サーバー用）。本番では無視する。
+   */
+  GITHUB_API_ORIGIN_FOR_TESTS?: string;
   /** Claude API のキー（`wrangler secret put ANTHROPIC_API_KEY`）。無ければ AI アシスタントは無効 */
   ANTHROPIC_API_KEY?: string;
   /** 1 人が 1 日（日本時間）に質問できる回数。省略時は 30。正の整数でなければ 30 */

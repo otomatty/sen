@@ -566,6 +566,52 @@
 .invite-row .input {
   flex: 1;
 }
+.github-block {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.github-block .field-label {
+  margin-bottom: 8px;
+}
+.github-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  min-width: 0;
+}
+.github-row .input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.github-hook {
+  padding: 4px 0 8px;
+  min-width: 0;
+}
+.github-hook p {
+  margin: 4px 0;
+}
+.github-url {
+  word-break: break-all;
+}
+.github-pr {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.github-pr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.github-pr-field .input,
+.github-pr-field select {
+  width: 100%;
+  max-width: none;
+}
 .member-row {
   display: flex;
   align-items: center;
@@ -2110,6 +2156,12 @@
   .field {
     grid-template-columns: 1fr;
     padding: 10px 0;
+  }
+  .github-pr {
+    grid-template-columns: 1fr;
+  }
+  .github-row .btn {
+    flex: 1 1 auto;
   }
   .ai-connect .segmented.wide button {
     height: auto;

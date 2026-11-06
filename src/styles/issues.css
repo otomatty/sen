@@ -570,6 +570,127 @@
   padding: 0 8px;
   margin-bottom: 4px;
 }
+.github-issue {
+  margin: 8px 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+  max-width: 100%;
+}
+.github-issue .section-title {
+  margin-bottom: 8px;
+}
+.github-issue-actions,
+.github-issue-row,
+.github-issue-prefer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.github-issue-row a {
+  overflow-wrap: anywhere;
+}
+.github-issue-error {
+  margin: 8px 0 0;
+  color: var(--warn);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.github-issue-prefer {
+  margin: 12px 0;
+}
+.github-issue-prefer label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.github-pulls {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.github-pull {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.github-pull a {
+  overflow-wrap: anywhere;
+}
+.pr-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.pr-badge-draft {
+  color: var(--text);
+  background: var(--panel-3);
+}
+/* ライト・ダークのどちらでも文字が背景から 4.5:1 以上離れる色 */
+.pr-badge-open {
+  color: #8ee0b8;
+  background: #143028;
+  border-color: #2f7a56;
+}
+.pr-badge-merged {
+  color: #bac0ff;
+  background: #1c2040;
+  border-color: #3d468c;
+}
+.pr-badge-closed {
+  color: #ffa8a8;
+  background: #3a1c1c;
+  border-color: #8a3a3a;
+}
+[data-theme="light"] .pr-badge-open {
+  color: #0f6b42;
+  background: #e5f6ee;
+  border-color: #8fceb0;
+}
+[data-theme="light"] .pr-badge-merged {
+  color: #3d48b0;
+  background: #e8eafc;
+  border-color: #b7bdef;
+}
+[data-theme="light"] .pr-badge-closed {
+  color: #b02a2a;
+  background: #fcecec;
+  border-color: #e7b4b4;
+}
+.row-pr {
+  height: 20px;
+  padding: 0 6px;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+}
+.avatar-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #24292f;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  flex: none;
+}
 .relation-group + .relation-group {
   margin-top: 4px;
 }

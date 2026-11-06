@@ -3,6 +3,8 @@ import { addDays, todayYmd } from "../shared/dates";
 import { createApp } from "./app";
 import { all, ensureMigrated, run } from "./db";
 import type { Env } from "./env";
+import { requestGitHubReconcile } from "./github/issues";
+import { GitHubSyncRunner } from "./github/runner";
 
 const app = createApp();
 
@@ -49,6 +51,17 @@ export default {
     );
     // 7日より前の利用回数（日本時間の日付。YYYY-MM-DD なので文字列の比較で足りる）
     await run(env.DB, "DELETE FROM assistant_usage WHERE day < ?", addDays(todayYmd(), -7));
+    // Webhook の重複除け。7 日より古い行を消す。失敗しても、下の突き合わせは頼む。
+    try {
+      await run(env.DB, "DELETE FROM github_deliveries WHERE received_at < ?", Date.now() - 7 * 86_400_000);
+    } catch (e) {
+      console.error("github delivery cleanup failed", e instanceof Error ? e.name : "error");
+    }
+    try {
+      await requestGitHubReconcile(env);
+    } catch (e) {
+      console.error("github reconcile failed", e instanceof Error ? e.name : "error");
+    }
   },
 } satisfies ExportedHandler<Env>;
 
@@ -59,12 +72,19 @@ export default {
  * Hibernation API を使うので、接続が待機中の間は課金されない。
  */
 export class WorkspaceRealtime extends DurableObject<Env> {
+  private github: GitHubSyncRunner;
+  private alarmChain: Promise<void> = Promise.resolve();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    const signal = () => this.syncAlarm();
+    this.github = new GitHubSyncRunner(ctx.storage, env, signal);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
   async fetch(request: Request): Promise<Response> {
+    const github = await this.github.handle(request);
+    if (github) return github;
     const url = new URL(request.url);
     if (url.pathname === "/notify" && request.method === "POST") {
       const { lastSyncId } = (await request.json()) as { lastSyncId: number };
@@ -88,11 +108,33 @@ export class WorkspaceRealtime extends DurableObject<Env> {
   }
 
   /**
-   * 以前のスプレッドシート連携が予約したアラームが残っていたときだけ呼ばれる。
-   * 連携の状態（キー "sheets"）を消すだけで、次の予約はしない。
+   * GitHub の順番待ちの時刻になると呼ばれる。
+   * 以前のスプレッドシート連携が残した状態（キー "sheets"）があれば消す。シートの次の予約はしない。
+   * そのあと、GitHub の順番待ちを処理し、次のアラームを GitHub の nextAt に合わせる。
    */
   async alarm() {
     await this.ctx.storage.delete("sheets");
+    await this.github.alarm();
+    await this.syncAlarm();
+  }
+
+  /** GitHub の次の時刻にアラームを合わせる */
+  private syncAlarm(): Promise<void> {
+    const run = this.alarmChain.then(() => this.writeAlarm(), () => this.writeAlarm());
+    this.alarmChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async writeAlarm(): Promise<void> {
+    const next = await this.github.nextAt();
+    if (next == null) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(next);
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {

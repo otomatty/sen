@@ -33,6 +33,7 @@ import { HelpVideoButton } from "../../components/PageHeader";
 import { useWsPath } from "../../app/hooks";
 import { ActivityLine, CommentCard } from "./Activity";
 import { CommentComposer } from "./CommentComposer";
+import { IssueGitHubSection } from "./GitHubSection";
 import { AddRelationButton, RelationMenu, Relations } from "./Relations";
 
 function PropRow({ label, children, kind, issueId, testId }: { label: string; children: ReactNode; kind: PickerKind; issueId: string; testId?: string }) {
@@ -460,6 +461,7 @@ export function IssueDetail({ issueId, embedded, onClose }: { issueId: string; e
               onBlur={flushDesc}
             />
             <Relations issue={issue} />
+            <IssueGitHubSection issueId={issue.id} teamId={issue.teamId} />
             <SubIssues issue={issue} adding={addingSub} setAdding={setAddingSub} />
             {((!hasSubs && !addingSub) || !hasRelations) && (
               <div className="detail-adders">
