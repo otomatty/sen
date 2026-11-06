@@ -301,10 +301,31 @@
   font-size: 15px;
   margin-right: 4px;
 }
-.project-issues-cta {
+.project-issues {
+  margin-top: 28px;
+}
+.project-issues-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.project-issues-title {
+  font-weight: 600;
+}
+.project-issues-count {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.project-issues-empty {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
 }
 
 /* バーンアップ */

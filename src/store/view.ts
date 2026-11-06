@@ -161,8 +161,17 @@ export interface IssueGroup {
   issues: Issue[];
   /** このグループに新規作成するときの初期値 */
   defaults: CreateIssueDefaults;
+  /** 作成するチームが決まったときに足す初期値（チームをまたぐグループ用） */
+  defaultsFor?: (teamId: string) => CreateIssueDefaults;
   /** ボードのドロップ時に適用する変更（null = 移動不可） */
   patchFor: ((issue: Issue) => Partial<Issue>) | null;
+}
+
+/** グループの「＋」で使う作成初期値。チームが決まったときだけ defaultsFor を足す */
+export function groupCreateDefaults(group: IssueGroup, base: CreateIssueDefaults): CreateIssueDefaults {
+  const merged = { ...base, ...group.defaults };
+  if (merged.teamId && group.defaultsFor) return { ...merged, ...group.defaultsFor(merged.teamId) };
+  return merged;
 }
 
 export function groupIssues(
@@ -211,6 +220,12 @@ export function groupIssues(
             kind: "status",
             value: st.id,
             defaults: {},
+            defaultsFor: (teamId) => {
+              const target = Object.values(ctx.states).find((s) => s.teamId === teamId && s.type === st.type && s.name === st.name);
+              const fallback = Object.values(ctx.states).find((s) => s.teamId === teamId && s.type === st.type);
+              const found = target ?? fallback;
+              return found ? { stateId: found.id } : {};
+            },
             patchFor: (issue) => {
               const target = Object.values(ctx.states).find(
                 (s) => s.teamId === issue.teamId && s.type === st.type && s.name === st.name,

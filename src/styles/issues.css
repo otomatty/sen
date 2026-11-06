@@ -41,6 +41,26 @@
 .group-header:hover .group-add {
   opacity: 1;
 }
+/* ページの途中に置く一覧。見出しは貼り付けず、外枠と線が重ならないようにする */
+.issue-list.embedded {
+  padding-bottom: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.issue-list.embedded .group-header {
+  position: static;
+}
+.issue-list.embedded .issue-group:first-child .group-header {
+  border-top: none;
+  margin-top: 0;
+}
+.issue-list.embedded .issue-group:last-child .issue-row:last-of-type {
+  border-bottom: none;
+}
+.issue-list.embedded .issue-group:last-child .group-header:last-of-type {
+  border-bottom: none;
+}
 
 .issue-row {
   display: flex;

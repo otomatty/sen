@@ -19,8 +19,8 @@ import { Plus } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { updateIssues } from "../../store/actions";
-import { openCreateIssue, toast, useUI } from "../../store/ui";
-import type { IssueGroup, ViewOptions } from "../../store/view";
+import { openCreateIssue, toast, useUI, type CreateIssueDefaults } from "../../store/ui";
+import { groupCreateDefaults, type IssueGroup, type ViewOptions } from "../../store/view";
 import { cx, identifier } from "../../lib/utils";
 import { PriorityIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
@@ -113,11 +113,13 @@ function Column({
   children,
   teamId,
   canDrop,
+  createDefaults,
 }: {
   group: IssueGroup;
   children: React.ReactNode;
   teamId?: string | null;
   canDrop: boolean;
+  createDefaults?: CreateIssueDefaults;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${group.key}`, disabled: !canDrop });
   return (
@@ -128,7 +130,11 @@ function Column({
         <span className="group-count">{group.issues.length}</span>
         <span className="spacer" />
         <Tooltip label="課題を作成">
-          <button className="icon-btn" aria-label="課題を作成" onClick={() => openCreateIssue({ teamId: teamId ?? undefined, ...group.defaults })}>
+          <button
+            className="icon-btn"
+            aria-label="課題を作成"
+            onClick={() => openCreateIssue(groupCreateDefaults(group, { teamId: teamId ?? undefined, ...createDefaults }))}
+          >
             <Plus size={14} />
           </button>
         </Tooltip>
@@ -145,11 +151,13 @@ export function IssueBoard({
   view,
   listLabel,
   teamId,
+  createDefaults,
 }: {
   groups: IssueGroup[];
   view: ViewOptions;
   listLabel: string;
   teamId?: string | null;
+  createDefaults?: CreateIssueDefaults;
 }) {
   const navigate = useNavigate();
   const p = useWsPath();
@@ -224,7 +232,7 @@ export function IssueBoard({
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <div className="board" data-testid="board">
         {groups.map((g) => (
-          <Column key={g.key} group={g} teamId={teamId} canDrop={!!g.patchFor}>
+          <Column key={g.key} group={g} teamId={teamId} canDrop={!!g.patchFor} createDefaults={createDefaults}>
             {g.issues.map((issue) => (
               <Card
                 key={issue.id}

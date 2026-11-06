@@ -1,14 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
 import { Layers } from "lucide-react";
 import type { Issue, StateType } from "../../../shared/types";
-import { useData } from "../../store/data";
-import { filterIssues, groupIssues, useViewState, type FilterKey, type Filters, type ViewOptions } from "../../store/view";
+import { useViewState, type FilterKey, type Filters, type ViewOptions } from "../../store/view";
 import { openCreateIssue } from "../../store/ui";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { Button, EmptyState, Kbd } from "../../components/ui";
 import { PageHeader } from "../../components/PageHeader";
 import type { ScreenKey } from "../help/tutorials";
 import { IssueList } from "./IssueList";
+import { useIssueGroups } from "./useIssueGroups";
 const IssueBoard = lazy(() => import("./IssueBoard").then((m) => ({ default: m.IssueBoard })));
 import { DisplayButton, FilterButton, FilterChips } from "./ViewControls";
 
@@ -47,29 +47,8 @@ export function IssuesView({
   stateTypes?: StateType[];
 }) {
   const { view, filters, setView, setFilters } = useViewState(viewKey, defaults);
-  const states = useData((s) => s.states);
-  const users = useData((s) => s.users);
-  const projects = useData((s) => s.projects);
-  const cycles = useData((s) => s.cycles);
-  const labels = useData((s) => s.labels);
-  const teams = useData((s) => s.teams);
-  const meId = useData((s) => s.meId);
-  const ctx = useMemo(() => ({ states, users, projects, cycles, labels, teams, meId }), [states, users, projects, cycles, labels, teams, meId]);
-
-  const filtered = useMemo(
-    () => filterIssues(issues, { ...filters, ...baseFilters }, view, ctx),
-    [issues, filters, baseFilters, view, ctx],
-  );
-  const groups = useMemo(
-    () =>
-      groupIssues(filtered, view, ctx, {
-        teamId,
-        includeEmpty: view.layout === "board" && view.grouping === "status" ? true : undefined,
-        workflowOrder: view.layout === "board",
-        stateTypes,
-      }),
-    [filtered, view, ctx, teamId, stateTypes],
-  );
+  const mergedFilters = useMemo(() => ({ ...filters, ...baseFilters }), [filters, baseFilters]);
+  const { filtered, groups } = useIssueGroups(issues, view, mergedFilters, { teamId, stateTypes });
 
   useHotkeys("mod+b", () => setView({ layout: view.layout === "list" ? "board" : "list" }), { scope: SCOPE.view });
   // コマンドパレットからの切り替え
@@ -125,11 +104,19 @@ export function IssuesView({
             empty
           ) : (
             <Suspense fallback={null}>
-              <IssueBoard groups={groups} view={view} listLabel={listLabel} teamId={teamId} />
+              <IssueBoard groups={groups} view={view} listLabel={listLabel} teamId={teamId} createDefaults={createDefaults} />
             </Suspense>
           )
         ) : (
-          <IssueList groups={groups} view={view} listKey={viewKey} listLabel={listLabel} teamId={teamId} empty={empty} />
+          <IssueList
+            groups={groups}
+            view={view}
+            listKey={viewKey}
+            listLabel={listLabel}
+            teamId={teamId}
+            empty={empty}
+            createDefaults={createDefaults}
+          />
         )}
       </div>
     </div>
