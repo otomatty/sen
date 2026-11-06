@@ -16,7 +16,7 @@ import { useLocation, useNavigate } from "react-router";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
-import { openCreateIssue, toast, useUI } from "../../store/ui";
+import { openCreateIssue, toast, useUI, type CreateIssueDefaults } from "../../store/ui";
 import { updateIssues } from "../../store/actions";
 import type { IssueGroup, ViewOptions } from "../../store/view";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
@@ -193,6 +193,9 @@ export function IssueList({
   onOpenIssue,
   keyboard = true,
   hideGroupHeaders,
+  createDefaults,
+  defaultCollapsed,
+  variant = "page",
 }: {
   groups: IssueGroup[];
   view: ViewOptions;
@@ -203,6 +206,10 @@ export function IssueList({
   onOpenIssue?: (issue: Issue) => void;
   keyboard?: boolean;
   hideGroupHeaders?: boolean;
+  createDefaults?: CreateIssueDefaults;
+  /** 保存された開閉が無いときの初期値。保存値があればそちらを優先する */
+  defaultCollapsed?: (group: IssueGroup) => boolean;
+  variant?: "page" | "embedded";
 }) {
   const navigate = useNavigate();
   const p = useWsPath();
@@ -211,12 +218,16 @@ export function IssueList({
   const selected = useUI((s) => s.selectedIssueIds);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => readLocal(`sen:collapsed:${listKey}`, {}));
   useEffect(() => setCollapsed(readLocal(`sen:collapsed:${listKey}`, {})), [listKey]);
+  const isCollapsed = useCallback(
+    (g: IssueGroup) => collapsed[g.key] ?? defaultCollapsed?.(g) ?? false,
+    [collapsed, defaultCollapsed],
+  );
 
   const flatIds = useMemo(() => {
     const out: string[] = [];
     const seen = new Set<string>();
     for (const g of groups) {
-      if (collapsed[g.key]) continue;
+      if (isCollapsed(g)) continue;
       for (const i of g.issues)
         if (!seen.has(i.id)) {
           seen.add(i.id);
@@ -224,7 +235,7 @@ export function IssueList({
         }
     }
     return out;
-  }, [groups, collapsed]);
+  }, [groups, isCollapsed]);
 
   const open = useCallback(
     (issue: Issue) => {
@@ -264,8 +275,8 @@ export function IssueList({
     useUI.setState({ contextMenu: { x: e.clientX, y: e.clientY, issueIds: ids }, focusedIssueId: id });
   }, []);
 
-  const toggleGroup = (key: string) => {
-    const next = { ...collapsed, [key]: !collapsed[key] };
+  const toggleGroup = (g: IssueGroup) => {
+    const next = { ...collapsed, [g.key]: !isCollapsed(g) };
     setCollapsed(next);
     writeLocal(`sen:collapsed:${listKey}`, next);
   };
@@ -336,13 +347,15 @@ export function IssueList({
       onDragEnd={onDragEnd}
       onDragCancel={() => setDragId(null)}
     >
-    <div className="issue-list" role="grid" data-testid="issue-list">
-      {groups.map((g) => (
+    <div className={cx("issue-list", variant === "embedded" && "embedded")} role="grid" data-testid="issue-list">
+      {groups.map((g) => {
+        const closed = isCollapsed(g);
+        return (
         <section key={g.key} className="issue-group" data-testid="issue-group" data-group={g.label}>
           <GroupDropZone groupKey={g.key} enabled={dndEnabled && !!g.patchFor}>
           {!hideGroupHeaders && view.grouping !== "none" && (
-            <div className="group-header" onClick={() => toggleGroup(g.key)}>
-              <span className="group-chevron">{collapsed[g.key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span>
+            <div className="group-header" onClick={() => toggleGroup(g)}>
+              <span className="group-chevron">{closed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span>
               <GroupIcon group={g} />
               <span className="group-label">{g.label}</span>
               <span className="group-count">{g.issues.length}</span>
@@ -353,7 +366,7 @@ export function IssueList({
                   aria-label="課題を作成"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openCreateIssue({ teamId: teamId ?? undefined, ...g.defaults });
+                    openCreateIssue({ teamId: teamId ?? undefined, ...createDefaults, ...g.defaults });
                   }}
                 >
                   <Plus size={14} />
@@ -361,7 +374,7 @@ export function IssueList({
               </Tooltip>
             </div>
           )}
-          {!collapsed[g.key] &&
+          {!closed &&
             g.issues.map((issue) => (
               <DraggableRow
                 key={`${g.key}:${issue.id}`}
@@ -379,7 +392,8 @@ export function IssueList({
             ))}
           </GroupDropZone>
         </section>
-      ))}
+        );
+      })}
     </div>
       <DragOverlay dropAnimation={null}>
         {dragIssue ? (

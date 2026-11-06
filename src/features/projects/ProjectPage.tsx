@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { MoreHorizontal, Plus, Star, Trash2 } from "lucide-react";
+import { MoreHorizontal, Star, Trash2 } from "lucide-react";
 import type { ProjectStatus } from "../../../shared/types";
 import { PALETTE, PROJECT_STATUSES } from "../../../shared/constants";
 import { useData } from "../../store/data";
 import { archiveProject, setFavorite, updateProject } from "../../store/actions";
 import { projectProgress, useActiveIssues, useMembers, useTeams } from "../../store/selectors";
-import { openCreateIssue, toast } from "../../store/ui";
+import { toast } from "../../store/ui";
 import { cx, formatDate, localYmd } from "../../lib/utils";
 import { AutoTextarea, Avatar, Button, EmptyState, Menu, Tooltip } from "../../components/ui";
 import { ProjectIcon, TeamIcon } from "../../components/icons";
@@ -19,6 +19,7 @@ import { confirmDialog } from "../../components/ConfirmDialog";
 import { useDocumentTitle, useWsPath } from "../../app/hooks";
 import { IssuesView } from "../issues/IssuesView";
 import { ProjectTabs, StatusChip, projectsListPath } from "./ProjectsPage";
+import { ProjectIssues } from "./ProjectIssues";
 import type { Me } from "../../../shared/types";
 
 export function ProjectPage() {
@@ -207,14 +208,7 @@ export function ProjectPage() {
               <BurnupChart issues={scoped} states={states} start={start} end={end < start ? start : end} />
               <ChartLegend />
             </section>
-            <div className="project-issues-cta">
-              <Button icon={<Plus size={14} />} onClick={() => openCreateIssue({ projectId: project.id, teamId: project.teamIds[0] })}>
-                課題を追加
-              </Button>
-              <Link to={p(`/project/${project.id}/issues`)} className="link-btn">
-                課題一覧を見る（{scoped.length}件）→
-              </Link>
-            </div>
+            <ProjectIssues project={project} issues={scoped} />
           </div>
         </div>
       </div>

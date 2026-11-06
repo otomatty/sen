@@ -186,3 +186,60 @@ test.describe("プロジェクト一覧（スマホ）", () => {
     await expect(names).toHaveText(before);
   });
 });
+
+test.describe("プロジェクトの概要", () => {
+  let ws: string;
+
+  test.beforeEach(async ({ page }) => {
+    ({ ws } = await signupViaUi(page));
+    await seedDemo(page.request, ws);
+  });
+
+  test("課題がステータスごとに並び、完了は最初畳まれている", async ({ page }) => {
+    await page.goto(`/${ws}/projects`);
+    await page.getByTestId("project-row").filter({ hasText: "モバイルアプリ v2.0" }).click();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+
+    const issues = page.getByTestId("project-issues");
+    await expect(issues).toBeVisible();
+    await expect(issues.getByTestId("issue-group").first()).toBeVisible();
+    await expect(issues.getByTestId("issue-row").filter({ hasText: "ウィジェット機能の技術調査" })).toBeVisible();
+
+    const done = issues.locator("[data-testid=issue-group][data-group='完了']");
+    await expect(done.locator(".group-header")).toBeVisible();
+    await expect(done.getByTestId("issue-row").filter({ hasText: "Android 15 の対応" })).toHaveCount(0);
+    await done.locator(".group-header").click();
+    await expect(done.getByTestId("issue-row").filter({ hasText: "Android 15 の対応" })).toBeVisible();
+
+    await issues.getByTestId("issue-row").filter({ hasText: "ウィジェット機能の技術調査" }).locator(".row-title-text").click();
+    await expect(page.getByTestId("issue-detail")).toBeVisible();
+    await expect(page.getByTestId("issue-title")).toHaveValue("ウィジェット機能の技術調査");
+  });
+
+  test("課題タブで開き、このプロジェクト付きで課題を作れる", async ({ page }) => {
+    await page.goto(`/${ws}/projects`);
+    await page.getByTestId("project-row").filter({ hasText: "モバイルアプリ v2.0" }).click();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+    const id = new URL(page.url()).pathname.split("/").pop();
+
+    const issues = page.getByTestId("project-issues");
+    await issues.getByTestId("project-issues-open-tab").click();
+    await expect(page).toHaveURL(new RegExp(`/${ws}/project/${id}/issues$`));
+    await expect(page.getByTestId("issues-view")).toBeVisible();
+
+    await page.goBack();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+    await page.getByTestId("project-issues-add").click();
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("create-project")).toContainText("モバイルアプリ v2.0");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    const header = page.getByTestId("project-issues").locator("[data-testid=issue-group][data-group='バックログ'] .group-header");
+    await header.hover();
+    await header.getByRole("button", { name: "課題を作成" }).click();
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("create-project")).toContainText("モバイルアプリ v2.0");
+  });
+});
