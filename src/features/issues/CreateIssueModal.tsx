@@ -29,6 +29,9 @@ function CreateIssueDialog() {
   const p = useWsPath();
   const [keepOpen, setKeepOpen] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
+  // 説明欄のエディタは遅延読み込み。Enter の時点でまだ無ければ、読み込みが終わったときにフォーカスを移す。
+  // タイトルから外れたら待つのをやめ、ほかの場所へ移ったあとで説明欄がフォーカスを奪わないようにする。
+  const [focusDescriptionOnLoad, setFocusDescriptionOnLoad] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [picker, setPicker] = useState<{ kind: PickerKind; anchor: DOMRect } | null>(null);
 
@@ -78,6 +81,7 @@ function CreateIssueDialog() {
     if (keepOpen) {
       set({ title: "", description: "" });
       setEditorKey((k) => k + 1);
+      setFocusDescriptionOnLoad(false);
       titleRef.current?.focus();
     } else close();
   };
@@ -120,11 +124,14 @@ function CreateIssueDialog() {
           maxLength={ISSUE_TITLE_MAX_LENGTH}
           data-testid="create-title"
           onChange={(e) => set({ title: e.target.value.replace(/\n/g, "") })}
+          onBlur={() => setFocusDescriptionOnLoad(false)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter" && !(e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              (document.querySelector(".create-description .ProseMirror") as HTMLElement | null)?.focus();
+              const description = document.querySelector(".create-description .ProseMirror") as HTMLElement | null;
+              if (description) description.focus();
+              else setFocusDescriptionOnLoad(true);
             }
           }}
         />
@@ -134,6 +141,7 @@ function CreateIssueDialog() {
           onChange={(markdown) => set({ description: markdown })}
           placeholder="説明を追加…"
           className="create-description"
+          autoFocus={focusDescriptionOnLoad}
           onSubmit={submit}
           testId="create-description"
         />

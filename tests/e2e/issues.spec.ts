@@ -34,6 +34,7 @@ test.describe("課題の操作", () => {
     const title = page.getByTestId("create-title");
     await title.fill("下書きの課題");
     await title.press("Enter");
+    await expect(page.getByTestId("create-description")).toBeFocused();
     await page.keyboard.type("説明の下書き");
     // 説明欄の Escape は編集を終える。もう一度でダイアログを閉じる
     await page.keyboard.press("Escape");
@@ -98,6 +99,37 @@ test.describe("課題の操作", () => {
       down();
     });
     await expect(modal).toBeHidden();
+  });
+
+  test.describe("説明欄の読み込みが遅いとき", () => {
+    // 本番ビルドの Service Worker が JS をキャッシュから返すと page.route で止められない
+    test.use({ serviceWorkers: "block" });
+
+    test("タイトルで Enter を押してから説明欄が読み込まれても、説明欄に移る", async ({ page }) => {
+      let release!: () => void;
+      const loaded = new Promise<void>((resolve) => (release = resolve));
+      // 説明欄のエディタ（遅延読み込み）の JS を、合図があるまで返さない
+      await page.route(/\/EditorImpl[^/]*\.js(\?|$)/, async (route) => {
+        await loaded;
+        await route.continue();
+      });
+      await page.reload();
+      await expect(page.getByTestId("issue-list")).toBeVisible();
+      await page.locator("body").click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press("c");
+      const modal = page.getByTestId("create-issue-modal");
+      await expect(modal).toBeVisible();
+      const title = page.getByTestId("create-title");
+      await title.fill("読み込み待ちの課題");
+      await title.press("Enter");
+      await expect(title).toBeFocused();
+      release();
+      const description = page.getByTestId("create-description");
+      await expect(description).toBeFocused();
+      await page.keyboard.type("あとから入力した説明");
+      await expect(description).toContainText("あとから入力した説明");
+      await expect(title).toHaveValue("読み込み待ちの課題");
+    });
   });
 
   test("下書きを保存できなくなっても、閉じて開き直すと最新の内容が出る", async ({ page }) => {
