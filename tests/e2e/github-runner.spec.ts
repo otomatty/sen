@@ -2,6 +2,9 @@
 // drain() の処理中に同じキーへ新しい印が入っても消えないことと、
 // 処理が遅くても /github/event がすぐ返ることを確かめる。
 
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "@playwright/test";
 import type { Env } from "../../worker/env";
 import { GitHubSyncRunner, processors } from "../../worker/github/runner";
@@ -288,4 +291,10 @@ test("順番待ちは印を消さず、受け付けは処理を待たない", as
   await testEventReturnsWhileDraining();
   await testEarliestNextAt();
   await testDrainsDoNotOverlap();
+});
+
+test("送信と取り込みのやり直しは重複も消失もしない", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts"], { cwd: root, encoding: "utf8" });
+  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
 });

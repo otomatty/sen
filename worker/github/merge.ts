@@ -1,5 +1,6 @@
 // 課題の 3-way 比較と、開閉・ラベル・担当者の対応。DB も fetch も使わない。
 
+import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import type { StateType } from "../../shared/types";
 
 export type OpenClosed = "open" | "closed";
@@ -132,8 +133,27 @@ export function initialStateId(states: WorkflowStateRef[], ghState: OpenClosed, 
   return stateIdForGitHub(states, ghState, reason, "completed");
 }
 
+const COMMENT_OMISSION = "…（長いため一部を省きました。全文は Sen にあります）";
+
+/** 名前と印を足しても Sen の上限を超えない。印は残し、サロゲートペアの途中では切らない */
 export function formatOutboundComment(name: string, body: string, commentId: string): string {
-  return `**${name}**（Sen）\n\n${body}\n\n<!-- sen:comment:${commentId} -->`;
+  const head = `**${name}**（Sen）\n\n`;
+  const marker = `\n\n<!-- sen:comment:${commentId} -->`;
+  const full = `${head}${body}${marker}`;
+  if (full.length <= MARKDOWN_MAX_LENGTH) return full;
+  const note = `\n\n${COMMENT_OMISSION}`;
+  const room = MARKDOWN_MAX_LENGTH - head.length - note.length - marker.length;
+  if (room < 0) return `${truncateUtf16(head, Math.max(0, MARKDOWN_MAX_LENGTH - marker.length))}${marker}`;
+  return `${head}${truncateUtf16(body, room)}${note}${marker}`;
+}
+
+function truncateUtf16(text: string, maxUnits: number): string {
+  if (maxUnits <= 0) return "";
+  if (text.length <= maxUnits) return text;
+  let end = maxUnits;
+  const unit = text.charCodeAt(end - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
+  return text.slice(0, end);
 }
 
 export function isOwnGitHubComment(body: string | null | undefined): boolean {

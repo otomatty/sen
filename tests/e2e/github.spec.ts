@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import type { Activity, BootstrapPayload, Comment, GitHubLink, GitHubRepo, Issue, Mutation, StateType } from "../../shared/types";
 import {
   advanceStateId,
+  formatOutboundComment,
   initialStateId,
   mergeLabels,
   mergeOpenClosed,
@@ -935,6 +937,137 @@ test.describe.serial("GitHub 連携の設定", () => {
     const data = await bootstrap(page, ws);
     await expect.poll(async () => (await senIssue(page, ws, created.id)).stateId, { timeout: 15_000 }).toBe(stateId(data, teamId, "started", "進行中"));
   });
+
+  test("コメントの応答が失われても、やり直しで二重に投稿しない", async () => {
+    const created = await createSenIssue(page, ws, { title: "コメントを一度だけ送る", description: "本文" });
+    const remote = await waitMockIssue("コメントを一度だけ送る");
+    await waitLink(page, ws, created.id);
+    const commentId = randomUUID();
+    const posts = () => githubMock.requests.filter((item) => item.method === "POST" && item.path === `/repos/acme/widgets/issues/${remote.number}/comments`).length;
+    const before = posts();
+    githubMock.loseOnce = { method: "POST", suffix: "/comments" };
+    try {
+      expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body: "最初の本文" } })).ok).toBe(true);
+      await expect.poll(() => githubMock.comments.filter((comment) => comment.number === remote.number).length).toBe(1);
+      expect(githubMock.loseOnce).toBeNull();
+      expect((await postMutation(page, ws, { type: "comment.update", args: { id: commentId, body: "最初の本文のまま" } })).ok).toBe(true);
+      await expect.poll(() => githubMock.requests.filter((item) => item.method === "GET" && item.path === `/repos/acme/widgets/issues/${remote.number}/comments`).length).toBeGreaterThan(0);
+    } finally {
+      githubMock.loseOnce = null;
+    }
+    const posted = githubMock.comments.filter((comment) => comment.number === remote.number);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.body).toContain("最初の本文");
+    expect(posted[0]?.body).toContain(`<!-- sen:comment:${commentId} -->`);
+    expect(posts()).toBe(before + 1);
+  });
+
+  test("Issue の応答が失われても、やり直しで二重に作らない", async () => {
+    const title = "Issue を一度だけ作る";
+    const description = "失われた応答の本文";
+    githubMock.loseOnce = { method: "POST", suffix: "/issues" };
+    try {
+      const created = await createSenIssue(page, ws, { title, description });
+      await expect.poll(() => githubMock.issues.filter((issue) => issue.title === title).length).toBe(1);
+      expect(githubMock.loseOnce).toBeNull();
+      expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { priority: 2 } } })).ok).toBe(true);
+      await waitLink(page, ws, created.id);
+    } finally {
+      githubMock.loseOnce = null;
+    }
+    expect(githubMock.issues.filter((issue) => issue.title === title)).toHaveLength(1);
+    expect(githubMock.issues.find((issue) => issue.title === title)?.body).toBe(description);
+    expect(githubMock.requests.filter((item) => item.method === "POST" && item.path === "/repos/acme/widgets/issues" && (item.body as { title?: string } | null)?.title === title)).toHaveLength(1);
+    expect(githubMock.requests.some((item) => item.method === "GET" && item.path === "/repos/acme/widgets/issues" && item.search.includes("creator="))).toBe(true);
+  });
+
+  test("Issue の作成待ちのあいだのコメントは、できたあとに届く", async () => {
+    const title = "コメントを後から送る";
+    githubMock.failOnce = { method: "POST", suffix: "/issues" };
+    try {
+      const created = await createSenIssue(page, ws, { title, description: "あとで" });
+      await expect.poll(() => githubMock.requests.some((item) => item.method === "POST" && item.path === "/repos/acme/widgets/issues" && (item.body as { title?: string } | null)?.title === title)).toBe(true);
+      expect(githubMock.issues.some((issue) => issue.title === title)).toBe(false);
+      const commentId = randomUUID();
+      expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body: "作成を待っていた" } })).ok).toBe(true);
+      expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { priority: 3 } } })).ok).toBe(true);
+      await waitLink(page, ws, created.id);
+      await expect.poll(() => githubMock.comments.some((comment) => comment.body.includes("作成を待っていた") && comment.body.includes(`<!-- sen:comment:${commentId} -->`))).toBe(true);
+    } finally {
+      githubMock.failOnce = null;
+    }
+    expect(githubMock.issues.filter((issue) => issue.title === title)).toHaveLength(1);
+  });
+
+  test("送る前の編集は届き、送ったあとの編集は届かない", async () => {
+    const created = await createSenIssue(page, ws, { title: "編集のタイミング", description: "本文" });
+    const remote = await waitMockIssue("編集のタイミング");
+    await waitLink(page, ws, created.id);
+    const commentId = randomUUID();
+    const posts = () => githubMock.requests.filter((item) => item.method === "POST" && item.path === `/repos/acme/widgets/issues/${remote.number}/comments`).length;
+    githubMock.failOnce = { method: "POST", suffix: "/comments" };
+    try {
+      expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body: "送信前" } })).ok).toBe(true);
+      await expect.poll(() => posts()).toBeGreaterThan(0);
+      expect(githubMock.comments.filter((comment) => comment.number === remote.number)).toHaveLength(0);
+      expect((await postMutation(page, ws, { type: "comment.update", args: { id: commentId, body: "送信前に直した" } })).ok).toBe(true);
+      await expect.poll(() => githubMock.comments.find((comment) => comment.number === remote.number)?.body ?? "").toContain("送信前に直した");
+    } finally {
+      githubMock.failOnce = null;
+    }
+    const sent = posts();
+    expect(githubMock.comments.filter((comment) => comment.number === remote.number)).toHaveLength(1);
+    expect((await postMutation(page, ws, { type: "comment.update", args: { id: commentId, body: "送ったあと" } })).ok).toBe(true);
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { title: "編集のタイミングを確認" } } })).ok).toBe(true);
+    await expect.poll(() => mockIssue(remote.number)?.title ?? "").toBe("編集のタイミングを確認");
+    expect(posts()).toBe(sent);
+    expect(githubMock.comments.find((comment) => comment.number === remote.number)?.body ?? "").not.toContain("送ったあと");
+    expect(githubMock.comments.find((comment) => comment.number === remote.number)?.body ?? "").toContain("送信前に直した");
+  });
+
+  test("上限いっぱいのコメントは印を残して GitHub に届く", async () => {
+    const created = await createSenIssue(page, ws, { title: "長いコメント", description: "本文" });
+    const remote = await waitMockIssue("長いコメント");
+    await waitLink(page, ws, created.id);
+    const commentId = randomUUID();
+    const body = "あ".repeat(MARKDOWN_MAX_LENGTH);
+    expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body } })).ok).toBe(true);
+    await expect.poll(() => githubMock.comments.find((comment) => comment.number === remote.number)?.body ?? "").toContain(`<!-- sen:comment:${commentId} -->`);
+    const posted = githubMock.comments.find((comment) => comment.number === remote.number)!;
+    expect(posted.body.length).toBeLessThanOrEqual(MARKDOWN_MAX_LENGTH);
+    expect(posted.body).toContain("…（長いため一部を省きました。全文は Sen にあります）");
+    expect(posted.body.endsWith(`<!-- sen:comment:${commentId} -->`)).toBe(true);
+    const saved = (await threadOf(page, ws, created.id)).comments.find((comment) => comment.id === commentId);
+    expect(saved?.body).toHaveLength(MARKDOWN_MAX_LENGTH);
+  });
+});
+
+test("長いコメントは印を残して 65,536 文字以内に収まる", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  expect(formatOutboundComment("太郎", "本文", id)).toBe(`**太郎**（Sen）\n\n本文\n\n<!-- sen:comment:${id} -->`);
+
+  const name = "A";
+  const head = `**${name}**（Sen）\n\n`;
+  const marker = `\n\n<!-- sen:comment:${id} -->`;
+  const note = "\n\n…（長いため一部を省きました。全文は Sen にあります）";
+  const room = MARKDOWN_MAX_LENGTH - head.length - note.length - marker.length;
+  const body = (room % 2 === 0 ? "x" : "") + "😀".repeat(40_000);
+  expect(body.length).toBeGreaterThan(MARKDOWN_MAX_LENGTH);
+  const out = formatOutboundComment(name, body, id);
+  expect(out.length).toBeLessThanOrEqual(MARKDOWN_MAX_LENGTH);
+  expect(out).toContain("…（長いため一部を省きました。全文は Sen にあります）");
+  expect(out.endsWith(`<!-- sen:comment:${id} -->`)).toBe(true);
+  for (let i = 0; i < out.length; i++) {
+    const code = out.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = out.charCodeAt(i + 1);
+      expect(next).toBeGreaterThanOrEqual(0xdc00);
+      expect(next).toBeLessThanOrEqual(0xdfff);
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new Error("サロゲートの下位だけが残っている");
+    }
+  }
 });
 
 test("課題の 3-way 比較はブラウザを使わない", () => {

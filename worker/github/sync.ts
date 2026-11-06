@@ -13,8 +13,11 @@ import {
   createComment,
   createIssue,
   getIssue,
+  getUser,
   listComments,
+  listIssueComments,
   listIssues,
+  listIssuesByCreator,
   listLabels,
   listPullsSince,
   updateIssue,
@@ -109,6 +112,8 @@ interface LabelRow {
 }
 
 const ASSIGNEE_ERROR = /^担当者を GitHub に反映できませんでした（(.+)）$/;
+/** 時計のずれを吸収する。このぶん前から GitHub を読む */
+const RECOVERY_MARGIN_MS = 60_000;
 
 export async function reconcileIssue(
   ctx: SyncCtx,
@@ -158,28 +163,47 @@ export async function pushComment(ctx: SyncCtx, commentId: string): Promise<void
     issue_id: string;
     user_id: string;
     body: string;
-    edited_at: number | null;
     github_author: string | null;
-  }>(ctx.env.DB, "SELECT id, issue_id, user_id, body, edited_at, github_author FROM comments WHERE id = ? AND workspace_id = ?", commentId, ctx.workspaceId);
-  if (!comment || comment.edited_at != null || comment.github_author) return;
+    created_at: number;
+  }>(
+    ctx.env.DB,
+    "SELECT id, issue_id, user_id, body, github_author, created_at FROM comments WHERE id = ? AND workspace_id = ?",
+    commentId,
+    ctx.workspaceId,
+  );
+  if (!comment || comment.github_author) return;
   const known = await first(ctx.env.DB, "SELECT comment_id FROM github_comment_links WHERE comment_id = ?", comment.id);
   if (known) return;
   const link = await linkByIssue(ctx.env.DB, ctx.workspaceId, comment.issue_id);
-  if (!link) return;
+  if (!link) {
+    if (await waitsForGitHubIssue(ctx, comment.issue_id)) throw new Error("GitHub の Issue ができるまで待ちます");
+    return;
+  }
   const repo = await repoById(ctx.env.DB, ctx.workspaceId, link.repo_id);
   const parts = repo ? splitFullName(repo.full_name) : null;
   const cfg = githubConfig(ctx.env);
   if (!repo || !parts || !cfg) return;
+  const attempt = await readAttempt(ctx.env.DB, "comment", comment.id);
+  if (attempt != null) {
+    const existing = await findPostedComment(cfg, parts.owner, parts.repo, link.number, comment);
+    if (existing) {
+      await insertCommentLink(ctx.env.DB, ctx.workspaceId, comment.id, existing.id);
+      await clearAttempt(ctx.env.DB, "comment", comment.id);
+      return;
+    }
+  } else {
+    await writeAttempt(ctx.env.DB, "comment", comment.id, ctx.workspaceId, Date.now());
+  }
   const user = await first<{ name: string }>(ctx.env.DB, "SELECT name FROM users WHERE id = ?", comment.user_id);
-  const created = await createComment(cfg, parts.owner, parts.repo, link.number, formatOutboundComment(user?.name || "Sen", comment.body, comment.id));
-  await run(
-    ctx.env.DB,
-    "INSERT INTO github_comment_links (comment_id, workspace_id, github_comment_id, created_at) VALUES (?, ?, ?, ?)",
-    comment.id,
-    ctx.workspaceId,
-    created.id,
-    Date.now(),
+  const created = await createComment(
+    cfg,
+    parts.owner,
+    parts.repo,
+    link.number,
+    formatOutboundComment(user?.name || "Sen", comment.body, comment.id),
   );
+  await insertCommentLink(ctx.env.DB, ctx.workspaceId, comment.id, created.id);
+  await clearAttempt(ctx.env.DB, "comment", comment.id);
 }
 
 export async function pullComment(ctx: SyncCtx, payload: GitHubCommentEvent | null | undefined): Promise<void> {
@@ -411,31 +435,40 @@ async function createFromSen(
     labels: githubLabelList([], repoLabels, final, common),
   };
   if (senLogin) write.assignees = [senLogin];
-  let remote: GhIssue;
+  const attemptedAt = await readAttempt(ctx.env.DB, "issue", issue.id);
+  let remote: GhIssue | null = null;
   let rejected: string | null = null;
-  try {
-    remote = await createIssue(cfg, parts.owner, parts.repo, write);
-  } catch (e) {
-    if (!(e instanceof GitHubError) || e.status !== 422 || !write.assignees?.length) throw e;
-    const { assignees: _assignees, ...rest } = write;
-    remote = await createIssue(cfg, parts.owner, parts.repo, rest);
-    rejected = senLogin;
+  if (attemptedAt != null) remote = await findCreatedIssue(ctx, cfg, parts.owner, parts.repo, repo, issue, attemptedAt);
+  if (!remote) {
+    if (attemptedAt == null) await writeAttempt(ctx.env.DB, "issue", issue.id, ctx.workspaceId, Date.now());
+    try {
+      remote = await createIssue(cfg, parts.owner, parts.repo, write);
+    } catch (e) {
+      if (!(e instanceof GitHubError) || e.status !== 422 || !write.assignees?.length) throw e;
+      const { assignees: _assignees, ...rest } = write;
+      remote = await createIssue(cfg, parts.owner, parts.repo, rest);
+      rejected = senLogin;
+    }
   }
   const senState = senSyncState(issue.state_type, issue.state_name);
   if (senState !== "open") {
     try {
-      const write = githubStateWrite(senState);
+      const stateWrite = githubStateWrite(senState);
       remote = await updateIssue(cfg, parts.owner, parts.repo, remote.number, {
-        state: write.state,
-        state_reason: write.state_reason,
+        state: stateWrite.state,
+        state_reason: stateWrite.state_reason,
       });
     } catch (e) {
       await insertLink(ctx.env.DB, ctx.workspaceId, draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected));
+      await clearAttempt(ctx.env.DB, "issue", issue.id);
+      await enqueueUnsentComments(ctx, issue.id);
       throw e;
     }
   }
   const draft = draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected);
   await insertLink(ctx.env.DB, ctx.workspaceId, draft);
+  await clearAttempt(ctx.env.DB, "issue", issue.id);
+  await enqueueUnsentComments(ctx, issue.id);
   await publishLink(ctx, ws, issue.id);
   const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, null));
   await writeGitHubActivity(ctx, ws, { actor, via: opts.via }, issue.id, "created", repo, remote.number, draft.url);
@@ -476,30 +509,34 @@ async function importIfNew(
     null,
     new Set(byLogin.keys()),
   );
-  const issueId = crypto.randomUUID();
-  const actor = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null);
-  const url = remote.html_url || `https://github.com/${repo.full_name}/issues/${remote.number}`;
-  await applyGitHubChanges({
-    env: ctx.env,
-    ws,
-    actor,
-    scheduleSheets: ctx.scheduleSheets,
-    mutations: [
-      {
-        type: "issue.create",
-        args: {
-          id: issueId,
-          teamId: repo.team_id,
-          title: remote.title,
-          description: remote.body ?? "",
-          stateId,
-          assigneeId: assigneeLogin ? (byLogin.get(assigneeLogin) ?? null) : null,
-          labelIds: senLabelIds([], catalog, final, common),
+  const issueId = await issueUuid(repo.repo_id, remote.number);
+  const existing = await first(ctx.env.DB, "SELECT id FROM issues WHERE id = ? AND workspace_id = ?", issueId, ctx.workspaceId);
+  if (!existing) {
+    const actor = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null);
+    const url = remote.html_url || `https://github.com/${repo.full_name}/issues/${remote.number}`;
+    await applyGitHubChanges({
+      env: ctx.env,
+      ws,
+      actor,
+      scheduleSheets: ctx.scheduleSheets,
+      mutations: [
+        {
+          type: "issue.create",
+          args: {
+            id: issueId,
+            teamId: repo.team_id,
+            title: remote.title,
+            description: remote.body ?? "",
+            stateId,
+            assigneeId: assigneeLogin ? (byLogin.get(assigneeLogin) ?? null) : null,
+            labelIds: senLabelIds([], catalog, final, common),
+          },
         },
-      },
-    ],
-    activities: [{ issueId, data: { action: "imported", repo: repo.full_name, number: remote.number, url } }],
-  });
+      ],
+      activities: [{ issueId, data: { action: "imported", repo: repo.full_name, number: remote.number, url } }],
+    });
+  }
+  if (await linkByIssue(ctx.env.DB, ctx.workspaceId, issueId)) return;
   await insertLink(
     ctx.env.DB,
     ctx.workspaceId,
@@ -988,10 +1025,124 @@ function githubLabelList(current: string[], repoLabels: GhLabel[], final: string
 }
 
 async function commentUuid(githubCommentId: number): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`sen:gh-comment:${githubCommentId}`));
+  return uuidFromKey(`sen:gh-comment:${githubCommentId}`);
+}
+
+async function issueUuid(repoId: number, number: number): Promise<string> {
+  return uuidFromKey(`sen:gh-issue:${repoId}:${number}`);
+}
+
+async function uuidFromKey(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   const bytes = new Uint8Array(digest).slice(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function waitsForGitHubIssue(ctx: SyncCtx, issueId: string): Promise<boolean> {
+  const issue = await loadIssue(ctx.env.DB, ctx.workspaceId, issueId);
+  if (!issue || issue.archived_at) return false;
+  const repo = await repoByTeam(ctx.env.DB, ctx.workspaceId, issue.team_id);
+  if (!repo) return false;
+  if (issue.created_at < repo.linked_at) return false;
+  if (await createdViaGitHub(ctx.env.DB, issue.id)) return false;
+  return true;
+}
+
+async function findPostedComment(
+  cfg: NonNullable<ReturnType<typeof githubConfig>>,
+  owner: string,
+  repo: string,
+  number: number,
+  comment: { id: string; created_at: number },
+): Promise<{ id: number } | null> {
+  const since = new Date(comment.created_at - RECOVERY_MARGIN_MS).toISOString();
+  const marker = `<!-- sen:comment:${comment.id} -->`;
+  const comments = await listIssueComments(cfg, owner, repo, number, since);
+  for (const item of comments) {
+    if (!item || !Number.isSafeInteger(item.id)) continue;
+    if ((item.body ?? "").includes(marker)) return { id: item.id };
+  }
+  return null;
+}
+
+async function findCreatedIssue(
+  ctx: SyncCtx,
+  cfg: NonNullable<ReturnType<typeof githubConfig>>,
+  owner: string,
+  repoName: string,
+  repo: RepoRow,
+  issue: IssueRow,
+  attemptedAt: number,
+): Promise<GhIssue | null> {
+  const user = await getUser(cfg);
+  const login = typeof user.login === "string" ? user.login.trim() : "";
+  if (!login) throw new GitHubError(0, "GitHub のユーザーを確認できませんでした");
+  const sinceMs = attemptedAt - RECOVERY_MARGIN_MS;
+  const found = await listIssuesByCreator(cfg, owner, repoName, new Date(sinceMs).toISOString(), login);
+  const matches: GhIssue[] = [];
+  for (const remote of found) {
+    if (!remote || remote.pull_request || !Number.isSafeInteger(remote.number)) continue;
+    const created = Date.parse(remote.created_at);
+    if (!Number.isFinite(created) || created < sinceMs) continue;
+    if (remote.user?.login && remote.user.login.toLowerCase() !== login.toLowerCase()) continue;
+    if (remote.title !== issue.title || (remote.body ?? "") !== issue.description) continue;
+    const taken = await linkByNumber(ctx.env.DB, ctx.workspaceId, repo.repo_id, remote.number);
+    if (taken) continue;
+    matches.push(remote);
+  }
+  matches.sort((a, b) => a.number - b.number);
+  return matches[0] ?? null;
+}
+
+async function enqueueUnsentComments(ctx: SyncCtx, issueId: string): Promise<void> {
+  const rows = await all<{ id: string }>(
+    ctx.env.DB,
+    `SELECT c.id FROM comments c
+     WHERE c.workspace_id = ? AND c.issue_id = ?
+       AND c.github_author IS NULL
+       AND (c.via IS NULL OR c.via != 'GitHub')
+       AND NOT EXISTS (SELECT 1 FROM github_comment_links l WHERE l.comment_id = c.id)`,
+    ctx.workspaceId,
+    issueId,
+  );
+  for (const row of rows) await ctx.enqueueComment(row.id);
+}
+
+async function readAttempt(db: D1Database, kind: string, targetId: string): Promise<number | null> {
+  const row = await first<{ attempted_at: number }>(
+    db,
+    "SELECT attempted_at FROM github_sync_attempts WHERE kind = ? AND target_id = ?",
+    kind,
+    targetId,
+  );
+  return row ? row.attempted_at : null;
+}
+
+async function writeAttempt(db: D1Database, kind: string, targetId: string, workspaceId: string, at: number): Promise<void> {
+  await run(
+    db,
+    "INSERT OR IGNORE INTO github_sync_attempts (kind, target_id, workspace_id, attempted_at) VALUES (?, ?, ?, ?)",
+    kind,
+    targetId,
+    workspaceId,
+    at,
+  );
+}
+
+async function clearAttempt(db: D1Database, kind: string, targetId: string): Promise<void> {
+  await run(db, "DELETE FROM github_sync_attempts WHERE kind = ? AND target_id = ?", kind, targetId);
+}
+
+async function insertCommentLink(db: D1Database, workspaceId: string, commentId: string, githubCommentId: number): Promise<void> {
+  await run(
+    db,
+    "INSERT INTO github_comment_links (comment_id, workspace_id, github_comment_id, created_at) VALUES (?, ?, ?, ?)",
+    commentId,
+    workspaceId,
+    githubCommentId,
+    Date.now(),
+  );
 }

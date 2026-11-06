@@ -80,7 +80,7 @@ export async function githubRealtime(env: Env, workspaceId: string, path: string
   });
 }
 
-/** 編集済みと、GitHub から取り込んだコメントは印を付けない */
+/** まだ GitHub に送っていないコメントだけ印を付ける。送ったあとの編集と、GitHub から来たコメントは付けない */
 async function addedCommentIds(env: Env, workspaceId: string, ids: string[]): Promise<string[]> {
   const { all } = await import("../db");
   const found: string[] = [];
@@ -90,7 +90,11 @@ async function addedCommentIds(env: Env, workspaceId: string, ids: string[]): Pr
     const placeholders = chunk.map(() => "?").join(", ");
     const rows = await all<{ id: string }>(
       env.DB,
-      `SELECT id FROM comments WHERE workspace_id = ? AND edited_at IS NULL AND github_author IS NULL AND id IN (${placeholders})`,
+      `SELECT c.id FROM comments c
+       WHERE c.workspace_id = ? AND c.github_author IS NULL
+         AND (c.via IS NULL OR c.via != 'GitHub')
+         AND c.id IN (${placeholders})
+         AND NOT EXISTS (SELECT 1 FROM github_comment_links l WHERE l.comment_id = c.id)`,
       workspaceId,
       ...chunk,
     );

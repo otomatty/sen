@@ -43,6 +43,7 @@ export interface GhIssue {
   pull_request?: unknown;
   created_at: string;
   updated_at: string;
+  user?: { login: string } | null;
 }
 
 export interface GhComment {
@@ -121,6 +122,12 @@ export function listIssues(cfg: GitHubConfig, owner: string, repo: string, since
   return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${q}`);
 }
 
+/** トークンの持ち主が作った Issue。since 以降をページごと */
+export function listIssuesByCreator(cfg: GitHubConfig, owner: string, repo: string, since: string, creator: string): Promise<GhIssue[]> {
+  const q = `state=all&since=${encodeURIComponent(since)}&creator=${encodeURIComponent(creator)}`;
+  return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${q}`);
+}
+
 export function createComment(cfg: GitHubConfig, owner: string, repo: string, number: number, body: string): Promise<GhComment> {
   return request(cfg, "POST", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments`, { body });
 }
@@ -129,6 +136,14 @@ export function listComments(cfg: GitHubConfig, owner: string, repo: string, sin
   return paginate(
     cfg,
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments?since=${encodeURIComponent(since)}`,
+  );
+}
+
+/** 1 つの Issue のコメント。since 以降をページごと */
+export function listIssueComments(cfg: GitHubConfig, owner: string, repo: string, number: number, since: string): Promise<GhComment[]> {
+  return paginate(
+    cfg,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments?since=${encodeURIComponent(since)}`,
   );
 }
 

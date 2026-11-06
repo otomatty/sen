@@ -35,6 +35,8 @@ export interface MockIssue {
   created_at: string;
   updated_at: string;
   pull_request?: unknown;
+  /** POST で作ったときはトークンのユーザー。テストが足した Issue は省略できる */
+  user?: { login: string };
 }
 
 export interface MockComment {
@@ -64,7 +66,13 @@ export interface MockPull {
 export interface RecordedRequest {
   method: string;
   path: string;
+  search: string;
   body: unknown;
+}
+
+export interface OnceRule {
+  method: string;
+  suffix: string;
 }
 
 export const githubMock = {
@@ -80,6 +88,10 @@ export const githubMock = {
   hookStatus: 201,
   /** 担当者を含む作成・更新を 422 で断る */
   rejectAssignees: false,
+  /** 次の一致するリクエストを 500 で一度だけ断る。資源は作らない */
+  failOnce: null as OnceRule | null,
+  /** 次の一致する成功応答の本文を一度だけ空にする。資源は作る */
+  loseOnce: null as OnceRule | null,
   nextRepoId: 1000,
   nextHookId: 1,
   nextIssueId: 1,
@@ -98,6 +110,8 @@ export function resetGitHubMock() {
   githubMock.requests = [];
   githubMock.hookStatus = 201;
   githubMock.rejectAssignees = false;
+  githubMock.failOnce = null;
+  githubMock.loseOnce = null;
   githubMock.nextRepoId = 1000;
   githubMock.nextHookId = 1;
   githubMock.nextIssueId = 1;
@@ -133,7 +147,9 @@ export function startGitHubMock(): Promise<Server> {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse) {
+  const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${GITHUB_PORT}`);
+  const send = (status: number, body: unknown) => sendJson(res, status, body, { method, path: url.pathname });
   const bodyText = await readBody(req);
   let body: unknown = null;
   if (bodyText) {
@@ -143,19 +159,24 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       body = bodyText;
     }
   }
-  githubMock.requests.push({ method: req.method ?? "GET", path: url.pathname, body });
+  githubMock.requests.push({ method: req.method ?? "GET", path: url.pathname, search: url.search, body });
 
   if (req.headers.authorization !== `Bearer ${GITHUB_TOKEN}`) {
-    sendJson(res, 401, { message: "Bad credentials" });
+    send(401, { message: "Bad credentials" });
     return;
   }
   if (req.headers.accept !== "application/vnd.github+json") {
-    sendJson(res, 400, { message: "accept" });
+    send(400, { message: "accept" });
+    return;
+  }
+  if (consumeOnce(githubMock.failOnce, method, url.pathname)) {
+    githubMock.failOnce = null;
+    send(500, { message: "temporary" });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/user") {
-    sendJson(res, 200, { login: githubMock.login });
+    send(200, { login: githubMock.login });
     return;
   }
 
@@ -163,21 +184,21 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (req.method === "GET" && repoMatch) {
     const repo = findRepo(repoMatch[1], repoMatch[2]);
     if (!repo) {
-      sendJson(res, 404, { message: "Not Found" });
+      send(404, { message: "Not Found" });
       return;
     }
-    sendJson(res, 200, repo);
+    send(200, repo);
     return;
   }
 
   const sub = /^\/repos\/([^/]+)\/([^/]+)\/(.+)$/.exec(url.pathname);
   if (!sub) {
-    sendJson(res, 404, { message: "Not Found" });
+    send(404, { message: "Not Found" });
     return;
   }
   const repo = findRepo(sub[1], sub[2]);
   if (!repo) {
-    sendJson(res, 404, { message: "Not Found" });
+    send(404, { message: "Not Found" });
     return;
   }
   const fullName = repo.full_name;
@@ -186,13 +207,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (req.method === "GET" && rest === "labels") {
     const labels = githubMock.labels.get(fullName.toLowerCase()) ?? [];
     const page = Number(url.searchParams.get("page") ?? "1");
-    sendJson(res, 200, page > 1 ? [] : labels);
+    send(200, page > 1 ? [] : labels);
     return;
   }
 
   if (req.method === "POST" && rest === "hooks") {
     if (githubMock.hookStatus !== 201) {
-      sendJson(res, githubMock.hookStatus, { message: "Resource not accessible by integration" });
+      send(githubMock.hookStatus, { message: "Resource not accessible by integration" });
       return;
     }
     const input = body as { events?: string[]; config?: { url?: string; secret?: string; content_type?: string } };
@@ -206,7 +227,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       active: true,
     };
     githubMock.hooks.push(hook);
-    sendJson(res, 201, { id: hook.id, active: true, events: hook.events, config: input.config ?? {} });
+    send(201, { id: hook.id, active: true, events: hook.events, config: input.config ?? {} });
     return;
   }
 
@@ -222,19 +243,23 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (rest === "issues" && req.method === "GET") {
     const page = Number(url.searchParams.get("page") ?? "1");
     const since = url.searchParams.get("since");
+    const creator = url.searchParams.get("creator");
     const list =
       page > 1
         ? []
         : githubMock.issues.filter(
-            (issue) => issue.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(issue.updated_at, since),
+            (issue) =>
+              issue.fullName.toLowerCase() === fullName.toLowerCase() &&
+              updatedSince(issue.updated_at, since) &&
+              (!creator || issue.user?.login.toLowerCase() === creator.toLowerCase()),
           );
-    sendJson(res, 200, list.map(issueJson));
+    send(200, list.map(issueJson));
     return;
   }
   if (rest === "issues" && req.method === "POST") {
     const input = body as { title?: string; body?: string; state?: "open" | "closed"; state_reason?: string | null; labels?: unknown; assignees?: unknown };
     if (rejectedAssignees(input.assignees)) {
-      sendJson(res, 422, { message: "Validation Failed" });
+      send(422, { message: "Validation Failed" });
       return;
     }
     const number = githubMock.issues.filter((issue) => issue.fullName.toLowerCase() === fullName.toLowerCase()).reduce((max, issue) => Math.max(max, issue.number), 0) + 1;
@@ -251,9 +276,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       assignees: assigneeList(input.assignees),
       created_at: now,
       updated_at: now,
+      user: { login: githubMock.login },
     };
     githubMock.issues.push(issue);
-    sendJson(res, 201, issueJson(issue));
+    send(201, issueJson(issue));
     return;
   }
 
@@ -261,21 +287,21 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (issueMatch && req.method === "GET") {
     const issue = findIssue(fullName, Number(issueMatch[1]));
     if (!issue) {
-      sendJson(res, 404, { message: "Not Found" });
+      send(404, { message: "Not Found" });
       return;
     }
-    sendJson(res, 200, issueJson(issue));
+    send(200, issueJson(issue));
     return;
   }
   if (issueMatch && req.method === "PATCH") {
     const issue = findIssue(fullName, Number(issueMatch[1]));
     if (!issue) {
-      sendJson(res, 404, { message: "Not Found" });
+      send(404, { message: "Not Found" });
       return;
     }
     const input = body as { title?: string; body?: string; state?: "open" | "closed"; state_reason?: string | null; labels?: unknown; assignees?: unknown };
     if (rejectedAssignees(input.assignees)) {
-      sendJson(res, 422, { message: "Validation Failed" });
+      send(422, { message: "Validation Failed" });
       return;
     }
     if (typeof input.title === "string") issue.title = input.title;
@@ -285,11 +311,27 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if ("labels" in input) issue.labels = labelList(input.labels);
     if ("assignees" in input) issue.assignees = assigneeList(input.assignees);
     issue.updated_at = new Date().toISOString();
-    sendJson(res, 200, issueJson(issue));
+    send(200, issueJson(issue));
     return;
   }
 
   const commentPost = /^issues\/(\d+)\/comments$/.exec(rest);
+  if (commentPost && req.method === "GET") {
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const since = url.searchParams.get("since");
+    const number = Number(commentPost[1]);
+    const list =
+      page > 1
+        ? []
+        : githubMock.comments.filter(
+            (comment) =>
+              comment.fullName.toLowerCase() === fullName.toLowerCase() &&
+              comment.number === number &&
+              updatedSince(comment.updated_at, since),
+          );
+    send(200, list.map(commentJson));
+    return;
+  }
   if (commentPost && req.method === "POST") {
     const input = body as { body?: string };
     const now = new Date().toISOString();
@@ -303,7 +345,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       updated_at: now,
     };
     githubMock.comments.push(comment);
-    sendJson(res, 201, { ...comment, html_url: `https://github.com/${fullName}/issues/${comment.number}#issuecomment-${comment.id}` });
+    send(201, { ...comment, html_url: `https://github.com/${fullName}/issues/${comment.number}#issuecomment-${comment.id}` });
     return;
   }
 
@@ -315,7 +357,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         : githubMock.pulls
             .filter((pull) => pull.fullName.toLowerCase() === fullName.toLowerCase())
             .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.number - a.number));
-    sendJson(res, 200, list.map(pullJson));
+    send(200, list.map(pullJson));
     return;
   }
 
@@ -326,11 +368,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       page > 1
         ? []
         : githubMock.comments.filter((comment) => comment.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(comment.updated_at, since));
-    sendJson(res, 200, list.map(commentJson));
+    send(200, list.map(commentJson));
     return;
   }
 
-  sendJson(res, 404, { message: "Not Found" });
+  send(404, { message: "Not Found" });
 }
 
 function findRepo(owner: string, repo: string): MockRepo | undefined {
@@ -400,11 +442,22 @@ function issueJson(issue: MockIssue) {
     assignees: issue.assignees,
     created_at: issue.created_at,
     updated_at: issue.updated_at,
+    ...(issue.user ? { user: issue.user } : {}),
     ...(issue.pull_request ? { pull_request: issue.pull_request } : {}),
   };
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown) {
+function consumeOnce(rule: OnceRule | null, method: string, path: string): boolean {
+  return !!rule && rule.method === method && path.endsWith(rule.suffix);
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown, route?: { method: string; path: string }) {
+  if (route && status >= 200 && status < 300 && consumeOnce(githubMock.loseOnce, route.method, route.path)) {
+    githubMock.loseOnce = null;
+    res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+    res.end();
+    return;
+  }
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
 }
