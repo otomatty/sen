@@ -242,4 +242,19 @@ test.describe("プロジェクトの概要", () => {
     await expect(modal).toBeVisible();
     await expect(page.getByTestId("create-project")).toContainText("モバイルアプリ v2.0");
   });
+
+  test("進行中のグループから作ると、そのステータスとプロジェクトが入る", async ({ page }) => {
+    await page.goto(`/${ws}/projects`);
+    await page.getByTestId("project-row").filter({ hasText: "モバイルアプリ v2.0" }).click();
+    await expect(page.getByTestId("project-page")).toBeVisible();
+
+    const header = page.getByTestId("project-issues").locator("[data-testid=issue-group][data-group='進行中'] .group-header");
+    await header.hover();
+    await header.getByRole("button", { name: "課題を作成" }).click();
+
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("create-status")).toContainText("進行中");
+    await expect(page.getByTestId("create-project")).toContainText("モバイルアプリ v2.0");
+  });
 });

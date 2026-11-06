@@ -18,7 +18,7 @@ import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { openCreateIssue, toast, useUI, type CreateIssueDefaults } from "../../store/ui";
 import { updateIssues } from "../../store/actions";
-import type { IssueGroup, ViewOptions } from "../../store/view";
+import { groupCreateDefaults, type IssueGroup, type ViewOptions } from "../../store/view";
 import { SCOPE, useHotkeys } from "../../lib/hotkeys";
 import { cx, identifier, readLocal, writeLocal } from "../../lib/utils";
 import { Avatar, Tooltip } from "../../components/ui";
@@ -366,7 +366,7 @@ export function IssueList({
                   aria-label="課題を作成"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openCreateIssue({ teamId: teamId ?? undefined, ...createDefaults, ...g.defaults });
+                    openCreateIssue(groupCreateDefaults(g, { teamId: teamId ?? undefined, ...createDefaults }));
                   }}
                 >
                   <Plus size={14} />

@@ -20,7 +20,7 @@ import type { Issue } from "../../../shared/types";
 import { useData } from "../../store/data";
 import { updateIssues } from "../../store/actions";
 import { openCreateIssue, toast, useUI, type CreateIssueDefaults } from "../../store/ui";
-import type { IssueGroup, ViewOptions } from "../../store/view";
+import { groupCreateDefaults, type IssueGroup, type ViewOptions } from "../../store/view";
 import { cx, identifier } from "../../lib/utils";
 import { PriorityIcon } from "../../components/icons";
 import { StateIcon } from "../../components/pickers";
@@ -133,7 +133,7 @@ function Column({
           <button
             className="icon-btn"
             aria-label="課題を作成"
-            onClick={() => openCreateIssue({ teamId: teamId ?? undefined, ...createDefaults, ...group.defaults })}
+            onClick={() => openCreateIssue(groupCreateDefaults(group, { teamId: teamId ?? undefined, ...createDefaults }))}
           >
             <Plus size={14} />
           </button>
