@@ -81,3 +81,13 @@ CREATE TABLE IF NOT EXISTS github_issue_create_skips (
   workspace_id TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+-- 手で外した紐づけと、GitHub で削除・移動されて外れた紐づけ。
+-- 自動では取り込まない。画面からその Issue を指定して紐づけると消す。
+CREATE TABLE IF NOT EXISTS github_import_skips (
+  repo_id INTEGER NOT NULL,
+  number INTEGER NOT NULL,
+  workspace_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, number)
+);

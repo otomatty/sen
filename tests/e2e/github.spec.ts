@@ -1255,6 +1255,58 @@ test.describe.serial("GitHub 連携の設定", () => {
     expect(mockIssue(remote.number)?.title).toBe(title);
   });
 
+  test("手で外した紐づけは GitHub の編集では戻らず、指定すればまた紐づく", async () => {
+    const sen = await createSenIssue(page, ws, { title: "外したあとに戻さない Sen", description: "Sen の本文" });
+    const senRemote = await waitMockIssue("外したあとに戻さない Sen");
+    await waitLink(page, ws, sen.id);
+    const importedRemote = pushMockIssue({
+      title: "外したあとに戻さない GitHub",
+      body: "GitHub の本文",
+      created_at: new Date().toISOString(),
+    });
+    expect((await postIssueWebhook(page, importedRemote.number, "opened")).status()).toBe(202);
+    await expect.poll(async () => (await bootstrap(page, ws)).issues.some((issue) => issue.title === "外したあとに戻さない GitHub"), { timeout: 15_000 }).toBe(true);
+    const imported = (await bootstrap(page, ws)).issues.find((issue) => issue.title === "外したあとに戻さない GitHub");
+    expect(imported).toBeTruthy();
+    await waitLink(page, ws, imported!.id);
+    const countAfter = (await bootstrap(page, ws)).issues.length;
+
+    await page.goto(`/${ws}/issue/DEF-${sen.number}`);
+    await page.getByTestId("github-unlink").click();
+    await expect(page.getByTestId("github-create")).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/${ws}/issue/DEF-${imported!.number}`);
+    await page.getByTestId("github-unlink").click();
+    await expect.poll(async () => (await bootstrap(page, ws)).githubLinks.some((link) => link.issueId === imported!.id), { timeout: 15_000 }).toBe(false);
+
+    senRemote.title = "GitHub で編集した Sen";
+    senRemote.updated_at = new Date().toISOString();
+    importedRemote.title = "GitHub で編集した取り込み";
+    importedRemote.updated_at = new Date().toISOString();
+    expect((await postIssueWebhook(page, senRemote.number, "edited")).status()).toBe(202);
+    expect((await postIssueWebhook(page, importedRemote.number, "edited")).status()).toBe(202);
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      const data = await bootstrap(page, ws);
+      expect(data.issues).toHaveLength(countAfter);
+      expect(data.githubLinks.some((link) => link.number === senRemote.number || link.number === importedRemote.number)).toBe(false);
+      await page.waitForTimeout(200);
+    }
+
+    await page.goto(`/${ws}/issue/DEF-${sen.number}`);
+    await page.getByTestId("github-link-existing").click();
+    await page.getByTestId("github-link-ref").fill(String(senRemote.number));
+    await page.getByTestId("github-link-prefer-sen").check();
+    await page.getByTestId("github-link-submit").click();
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${senRemote.number}`, { timeout: 15_000 });
+    await page.goto(`/${ws}/issue/DEF-${imported!.number}`);
+    await page.getByTestId("github-link-existing").click();
+    await page.getByTestId("github-link-ref").fill(`acme/widgets#${importedRemote.number}`);
+    await page.getByTestId("github-link-prefer-github").check();
+    await page.getByTestId("github-link-submit").click();
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${importedRemote.number}`, { timeout: 15_000 });
+    expect((await bootstrap(page, ws)).issues).toHaveLength(countAfter);
+  });
+
   test("毎日の突き合わせは 3,000 件で打ち切っても続きを読む", async () => {
     test.setTimeout(180_000);
     const created = await createSenIssue(page, ws, { title: "続きの受け皿", description: "" });

@@ -5,10 +5,11 @@ import { createRequire } from "node:module";
 import type { Server } from "node:http";
 import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import { ensureMigrated } from "../../worker/db";
-import type { Env } from "../../worker/env";
+import type { Env, WorkspaceRow } from "../../worker/env";
 import { insertTeam } from "../../worker/mutations";
+import { scheduleGitHubSync } from "../../worker/github/config";
 import { GitHubSyncRunner } from "../../worker/github/runner";
-import { pushComment, reconcileIssue, runManual, type SyncCtx } from "../../worker/github/sync";
+import { pullComment, pushComment, reconcileIssue, runManual, type SyncCtx } from "../../worker/github/sync";
 import { GITHUB_TOKEN, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
 const require = createRequire(import.meta.url);
@@ -188,6 +189,7 @@ async function resetRows(db: D1Database): Promise<void> {
     "github_issue_links",
     "github_sync_attempts",
     "github_issue_create_skips",
+    "github_import_skips",
     "comments",
     "notifications",
     "activities",
@@ -296,6 +298,11 @@ async function main(): Promise<void> {
     await scenarioDeletedUnlink(db, seeded);
     await scenarioEdit(db, seeded);
     await scenarioLong(db, seeded);
+    await scenarioMissedComments(db, seeded);
+    await scenarioDecoyIssue(db, seeded);
+    await scenarioImportSkip(db, seeded);
+    await scenarioSentBase(db, seeded);
+    await scenarioScheduleError(db, seeded);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
@@ -542,7 +549,323 @@ async function scenarioLong(db: D1Database, seeded: Awaited<ReturnType<typeof se
   check(posted.includes(`<!-- sen:comment:${comment} -->`), "A6: 印がない");
 }
 
-main().catch((e) => {
+function pushMockComment(number: number, body: string, login = "ghost") {
+  const now = new Date().toISOString();
+  const comment = {
+    id: githubMock.nextCommentId++,
+    fullName: "acme/widgets",
+    number,
+    body,
+    user: { login },
+    created_at: now,
+    updated_at: now,
+  };
+  githubMock.comments.push(comment);
+  return comment;
+}
+
+function holdGet(path: string): { entered: Promise<void>; release: () => void } {
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  githubMock.hold = { method: "GET", path, entered, gate };
+  return { entered: enteredPromise, release };
+}
+
+function failNextLinkInsert(db: D1Database): D1Database {
+  let armed = true;
+  return {
+    prepare(sql: string) {
+      const statement = db.prepare(sql);
+      return {
+        bind(...params: unknown[]) {
+          const bound = statement.bind(...params);
+          return new Proxy(bound, {
+            get(target, prop, receiver) {
+              if (prop === "run") {
+                return async () => {
+                  if (armed && sql.includes("INSERT INTO github_issue_links")) {
+                    armed = false;
+                    throw new Error("link insert failed once");
+                  }
+                  return target.run();
+                };
+              }
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    },
+    batch: (statements: D1PreparedStatement[]) => db.batch(statements),
+  } as unknown as D1Database;
+}
+
+async function scenarioMissedComments(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const number = pushRemote("取り込み中の Issue", "GitHub の本文");
+  const repo = githubMock.repos.get("acme/widgets")!;
+  for (let i = 0; i < 100; i++) pushMockComment(number, `<!-- sen:comment:own-${i} --> 自分のコメント`);
+  const kept = pushMockComment(number, "取り込み前のコメント", "ghost");
+  pushMockComment(number, "   ");
+  const ctx = ctxFor(db, seeded.ws, []);
+  await pullComment(ctx, {
+    action: "created",
+    comment: {
+      id: kept.id,
+      body: kept.body,
+      html_url: `https://github.com/acme/widgets/issues/${number}#issuecomment-${kept.id}`,
+      created_at: kept.created_at,
+      user: kept.user,
+    },
+    issue: { number },
+    repository: { id: repo.id, full_name: "acme/widgets" },
+    sender: kept.user,
+  });
+  check(!(await q(db, "SELECT id FROM comments WHERE body = ?", kept.body)), "E1: 紐づけ前なのにコメントが入った");
+  await reconcileIssue(ctx, { repoId: repo.id, number });
+  const row = await q<{ id: string }>(db, "SELECT id FROM comments WHERE body = ?", kept.body);
+  check(!!row, "E1: 新しく取り込んだ Issue のコメントが入っていない");
+  const count = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments");
+  check(count?.n === 1, `E1: 自分のコメントか空のコメントが入った (${count?.n})`);
+  check(
+    githubMock.requests.some((item) => item.method === "GET" && item.path === `/repos/acme/widgets/issues/${number}/comments` && item.search.includes("page=2")),
+    "E1: コメントの 2 ページ目を読んでいない",
+  );
+  await reconcileIssue(ctx, { repoId: repo.id, number });
+  const again = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments WHERE body = ?", kept.body);
+  check(again?.n === 1, "E1: コメントが二重になった");
+
+  await resetRows(db);
+  const later = pushRemote("紐づけをやり直す Issue", "本文");
+  const late = pushMockComment(later, "やり直しのあいだのコメント");
+  const wrapped = failNextLinkInsert(db);
+  const failing = ctxFor(wrapped, seeded.ws, []);
+  let failed = false;
+  try {
+    await reconcileIssue(failing, { repoId: repo.id, number: later });
+  } catch (e) {
+    failed = e instanceof Error && e.message === "link insert failed once";
+  }
+  check(failed, "E1: 既存の課題へ紐づける前に失敗していない");
+  await pullComment(ctx, {
+    action: "created",
+    comment: {
+      id: late.id,
+      body: late.body,
+      html_url: `https://github.com/acme/widgets/issues/${later}#issuecomment-${late.id}`,
+      created_at: late.created_at,
+      user: late.user,
+    },
+    issue: { number: later },
+    repository: { id: repo.id, full_name: "acme/widgets" },
+    sender: late.user,
+  });
+  check(!(await q(db, "SELECT id FROM comments WHERE body = ?", late.body)), "E1: 紐づけ前のやり直しでコメントが入った");
+  await reconcileIssue(ctx, { repoId: repo.id, number: later });
+  const linked = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues WHERE title = ?", "紐づけをやり直す Issue");
+  check(linked?.n === 1, "E1: 既存の課題が二重になった");
+  check(!!(await q(db, "SELECT id FROM comments WHERE body = ?", late.body)), "E1: 既存の課題へ紐づけたときコメントが入っていない");
+}
+
+async function scenarioDecoyIssue(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "12121212-1212-4212-8212-121212121212";
+  const title = "取り違えない Issue";
+  const description = "同じ本文";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 8, title, description });
+  const decoyAt = new Date(Date.now() - 59_000).toISOString();
+  githubMock.issues.push({
+    id: githubMock.nextIssueId++,
+    number: 70,
+    fullName: "acme/widgets",
+    title,
+    body: description,
+    state: "open",
+    state_reason: null,
+    labels: [],
+    assignees: [],
+    created_at: decoyAt,
+    updated_at: new Date().toISOString(),
+    user: { login: "sen-bot" },
+  });
+  const ctx = ctxFor(db, seeded.ws, []);
+  githubMock.loseOnce = { method: "POST", suffix: "/issues" };
+  let lost = false;
+  try {
+    await reconcileIssue(ctx, { issueId: issue });
+  } catch {
+    lost = true;
+  }
+  check(lost, "E2: 応答の喪失で失敗していない");
+  check(githubMock.issues.length === 2, "E2: 新しい Issue ができていない");
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 2, "E2: やり直しで Issue が増えた");
+  const link = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", issue);
+  const created = githubMock.issues.find((item) => item.number !== 70);
+  check(link?.number === created?.number, `E2: 新しく作った Issue と紐づいていない (${link?.number})`);
+  check(link?.number !== 70, "E2: 試行の 1 分前の Issue を取り違えた");
+}
+
+async function scenarioImportSkip(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const repo = githubMock.repos.get("acme/widgets")!;
+  const senIssue = "14141414-1414-4414-8414-141414141414";
+  await insertIssue(db, {
+    id: senIssue,
+    ws: seeded.ws,
+    team: seeded.team,
+    state: seeded.state,
+    user: seeded.user,
+    number: 9,
+    title: "Sen から作って外す",
+    description: "Sen の本文",
+  });
+  const ctx = ctxFor(db, seeded.ws, []);
+  await reconcileIssue(ctx, { issueId: senIssue });
+  const senRemote = githubMock.issues.find((item) => item.title === "Sen から作って外す");
+  if (!senRemote) throw new Error("E3: Sen の Issue ができていない");
+  const importedNumber = pushRemote("GitHub から取り込んで外す", "GitHub の本文");
+  await reconcileIssue(ctx, { repoId: repo.id, number: importedNumber });
+  const before = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues");
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: senIssue, action: "unlink" });
+  const imported = await q<{ id: string }>(db, "SELECT id FROM issues WHERE title = ?", "GitHub から取り込んで外す");
+  if (!imported) throw new Error("E3: 取り込んだ課題が無い");
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: imported.id, action: "unlink" });
+  check(!!(await q(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repo.id, senRemote.number)), "E3: Sen 側の取り込み禁止が無い");
+  check(!!(await q(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repo.id, importedNumber)), "E3: GitHub 側の取り込み禁止が無い");
+  senRemote.title = "編集した Sen の Issue";
+  senRemote.updated_at = new Date().toISOString();
+  const importedRemote = githubMock.issues.find((item) => item.number === importedNumber);
+  if (!importedRemote) throw new Error("E3: 取り込んだ Issue が無い");
+  importedRemote.title = "編集した GitHub の Issue";
+  importedRemote.updated_at = new Date().toISOString();
+  await reconcileIssue(ctx, { repoId: repo.id, number: senRemote.number });
+  await reconcileIssue(ctx, { repoId: repo.id, number: importedNumber });
+  const after = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues");
+  check(after?.n === before?.n, `E3: 編集で課題が増えた (${after?.n})`);
+  check(!(await q(db, "SELECT issue_id FROM github_issue_links")), "E3: 編集で紐づけが戻った");
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: senIssue, action: "link", ref: String(senRemote.number), prefer: "sen" });
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: imported.id, action: "link", ref: String(importedNumber), prefer: "github" });
+  const senLink = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", senIssue);
+  const ghLink = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", imported.id);
+  check(senLink?.number === senRemote.number, "E3: Sen の課題を指定しても紐づかない");
+  check(ghLink?.number === importedNumber, "E3: 取り込んだ課題を指定しても紐づかない");
+  check(!(await q(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repo.id, senRemote.number)), "E3: 指定したあとも Sen の記録が残っている");
+  check(!(await q(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repo.id, importedNumber)), "E3: 指定したあとも GitHub の記録が残っている");
+  check(after?.n === (await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues"))?.n, "E3: 指定したときに課題が増えた");
+}
+
+async function scenarioSentBase(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "13131313-1313-4313-8313-131313131313";
+  const title = "送ったあとの説明";
+  const number = pushRemote(title, "A");
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 10, title, description: "B" });
+  await insertLink(db, seeded.ws, issue, githubMock.repos.get("acme/widgets")!.id, number);
+  await exec(db, "UPDATE github_issue_links SET base_title = ?, base_body = ? WHERE issue_id = ?", title, "A", issue);
+  const ctx = ctxFor(db, seeded.ws, []);
+  const held = holdGet(`/repos/acme/widgets/issues/${number}`);
+  const running = reconcileIssue(ctx, { issueId: issue });
+  const entered = await Promise.race([
+    held.entered.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (!entered) {
+    held.release();
+    throw new Error("E4: Issue の取得が止まれなかった");
+  }
+  await exec(db, "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?", "C", Date.now() + 5, issue);
+  held.release();
+  await running;
+  const remote = githubMock.issues.find((item) => item.number === number);
+  check(remote?.body === "B", `E4: 送った説明が GitHub に無い (${remote?.body})`);
+  const base = await q<{ base_body: string }>(db, "SELECT base_body FROM github_issue_links WHERE issue_id = ?", issue);
+  check(base?.base_body === "B", `E4: 送った説明が base に無い (${base?.base_body})`);
+  check((await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments"))?.n === 0, "E4: 送った直後に衝突のコメントができた");
+  await reconcileIssue(ctx, { issueId: issue });
+  check(remote?.body === "C", `E4: 次の突き合わせで新しい説明が届いていない (${remote?.body})`);
+  check((await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments"))?.n === 0, "E4: 次の突き合わせで衝突のコメントができた");
+  const sen = await q<{ description: string }>(db, "SELECT description FROM issues WHERE id = ?", issue);
+  check(sen?.description === "C", "E4: Sen の説明が戻った");
+}
+
+async function scenarioScheduleError(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  const env = envFor(db);
+  const badEnv = {
+    ...env,
+    DB: {
+      prepare() {
+        throw new Error("db down");
+      },
+    },
+  } as unknown as Env;
+  let escaped = false;
+  try {
+    await scheduleGitHubSync(badEnv, { id: seeded.ws, url_key: "retry" } as WorkspaceRow, [{ entity: "comment", entityId: "comment-1", op: "upsert" }], null);
+  } catch {
+    escaped = true;
+  }
+  check(!escaped, "E7: コメントの送信予約の失敗が呼び出し元に出た");
+}
+
+async function runReconcileAlarm(): Promise<void> {
+  resetGitHubMock();
+  const server: Server = await startGitHubMock();
+  try {
+    const db = await openDb();
+    const seeded = await seed(db);
+    await resetRows(db);
+    const repo = githubMock.repos.get("acme/widgets")!;
+    const at = new Date().toISOString();
+    githubMock.issues.push({
+      id: githubMock.nextIssueId++,
+      number: 42,
+      fullName: "acme/widgets",
+      title: "突き合わせで待つ",
+      body: "本文",
+      state: "open",
+      state_reason: null,
+      labels: [],
+      assignees: [],
+      created_at: at,
+      updated_at: at,
+      user: { login: "someone" },
+    });
+    githubMock.failOnce = { method: "GET", suffix: "/issues/comments" };
+    const storage = memoryStorage();
+    let alarm: number | null = null;
+    let sync!: GitHubSyncRunner;
+    const signal = async () => {
+      alarm = await sync.nextAt();
+    };
+    sync = new GitHubSyncRunner(storage, envFor(db), signal);
+    const res = await sync.handle(
+      new Request("https://realtime/github/reconcile", { method: "POST", body: JSON.stringify({ workspaceId: seeded.ws }) }),
+    );
+    check(res?.status === 500, `E9: コメント取得の失敗が 500 になっていない (${res?.status})`);
+    const key = `gh:dirty:gh:${repo.id}:42`;
+    const item = await storage.get<{ nextAt: number }>(key);
+    check(item != null && typeof item.nextAt === "number", "E9: Issue が順番待ちに入っていない");
+    const meta = await storage.get<{ nextAt: number | null }>("gh:meta");
+    check(meta?.nextAt != null, "E9: 順番待ちの次の時刻が無い");
+    check(alarm === meta?.nextAt, "E9: アラームが鳴らない");
+    await sync.alarm();
+    check((await storage.get(key)) === undefined, "E9: アラームで順番待ちが処理されていない");
+    check(!!(await q(db, "SELECT id FROM issues WHERE title = ?", "突き合わせで待つ")), "E9: アラームで課題が取り込まれていない");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+}
+
+const job = process.argv.includes("--reconcile-alarm") ? runReconcileAlarm : main;
+job().catch((e) => {
   console.error(e instanceof Error ? e.stack ?? e.message : e);
   process.exit(1);
 });

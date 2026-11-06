@@ -101,6 +101,12 @@ async function migrate(db: D1Database) {
     }
     const statements = splitSql(m.sql).map((s) => db.prepare(s));
     statements.push(db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(m.name));
-    await db.batch(statements);
+    try {
+      await db.batch(statements);
+    } catch (e) {
+      // 別の Worker が同じ SQL を終えていれば、列の重複で落ちても続ける
+      const done = await first<{ name: string }>(db, "SELECT name FROM d1_migrations WHERE name = ?", m.name);
+      if (!done) throw e;
+    }
   }
 }

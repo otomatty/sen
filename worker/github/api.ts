@@ -241,10 +241,13 @@ async function toError(res: Response): Promise<GitHubError> {
   const resetHeader = res.headers.get("x-ratelimit-reset");
   const resetSec = Number(resetHeader);
   const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : null;
-  if ((res.status === 403 && remaining === "0") || res.status === 429) {
-    const retryAfter = Number(res.headers.get("retry-after"));
-    const when = res.status === 429 && Number.isFinite(retryAfter) && retryAfter >= 0 ? Date.now() + retryAfter * 1000 : resetMs;
-    return new GitHubError(res.status, "GitHub の利用制限に達しました", when);
+  const retryAfterHeader = res.headers.get("retry-after");
+  const retryAfterSec = Number(retryAfterHeader);
+  const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0 ? Date.now() + retryAfterSec * 1000 : null;
+  // 二次制限は 403 に retry-after が付く。残り回数 0 や 429 と同じ利用制限
+  const limited = res.status === 429 || (res.status === 403 && (remaining === "0" || retryAfterHeader !== null));
+  if (limited) {
+    return new GitHubError(res.status, "GitHub の利用制限に達しました", retryAfterMs ?? resetMs);
   }
   // 本文は読まない。トークンや secret が混ざる余地を残さない
   try {

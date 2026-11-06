@@ -512,13 +512,15 @@ export class GitHubSyncRunner {
           },
         },
       );
-      await this.recomputeNext();
       return Response.json({ ok: true });
     } catch (e) {
       const gh = e instanceof GitHubError ? e : null;
       console.error("github reconcile failed", gh ? gh.status : e instanceof Error ? e.name : "error");
       if (gh && (gh.status === 401 || gh.status === 429 || gh.rateLimitReset != null)) await this.note({ error: gh.message, rateLimitReset: gh.rateLimitReset });
       return Response.json({ error: gh?.message ?? "突き合わせに失敗しました" }, { status: 500 });
+    } finally {
+      // 途中で落ちても、入れた順番待ちの時刻とアラームは決める
+      await this.recomputeNext();
     }
   }
 }

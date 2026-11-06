@@ -83,6 +83,15 @@ export interface GitHubHold {
   gate: Promise<void>;
 }
 
+/** 一致するリクエストを、一度だけこの応答にする */
+export interface ForcedResponse {
+  method: string;
+  suffix: string;
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
 export const githubMock = {
   login: "sen-bot",
   repos: new Map<string, MockRepo>(),
@@ -102,6 +111,8 @@ export const githubMock = {
   loseOnce: null as OnceRule | null,
   /** 次の一致するリクエストを、gate まで止める。一致したら外れる */
   hold: null as GitHubHold | null,
+  /** 次の一致するリクエストを、一度だけこのステータスとヘッダーで返す */
+  respondOnce: null as ForcedResponse | null,
   nextRepoId: 1000,
   nextHookId: 1,
   nextIssueId: 1,
@@ -123,6 +134,7 @@ export function resetGitHubMock() {
   githubMock.failOnce = null;
   githubMock.loseOnce = null;
   githubMock.hold = null;
+  githubMock.respondOnce = null;
   githubMock.nextRepoId = 1000;
   githubMock.nextHookId = 1;
   githubMock.nextIssueId = 1;
@@ -183,6 +195,12 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (consumeOnce(githubMock.failOnce, method, url.pathname)) {
     githubMock.failOnce = null;
     send(500, { message: "temporary" });
+    return;
+  }
+  const forced = githubMock.respondOnce;
+  if (forced && forced.method === method && url.pathname.endsWith(forced.suffix)) {
+    githubMock.respondOnce = null;
+    sendJson(res, forced.status, forced.body ?? { message: "forced" }, undefined, forced.headers);
     return;
   }
 
@@ -493,14 +511,15 @@ function consumeOnce(rule: OnceRule | null, method: string, path: string): boole
   return !!rule && rule.method === method && path.endsWith(rule.suffix);
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown, route?: { method: string; path: string }) {
+function sendJson(res: ServerResponse, status: number, body: unknown, route?: { method: string; path: string }, headers?: Record<string, string>) {
+  const head: Record<string, string> = { "content-type": "application/json; charset=utf-8", ...headers };
   if (route && status >= 200 && status < 300 && consumeOnce(githubMock.loseOnce, route.method, route.path)) {
     githubMock.loseOnce = null;
-    res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+    res.writeHead(status, head);
     res.end();
     return;
   }
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(status, head);
   res.end(JSON.stringify(body));
 }
 

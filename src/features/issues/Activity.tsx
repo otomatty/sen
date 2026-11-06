@@ -204,7 +204,8 @@ export function ActivityLine({ a }: { a: Activity }) {
       const repo = typeof d.repo === "string" ? d.repo : "";
       const number = typeof d.number === "number" || typeof d.number === "string" ? String(d.number) : "";
       const label = `${repo}#${number}`;
-      const href = typeof d.url === "string" ? d.url : "";
+      const rawUrl = typeof d.url === "string" ? d.url : "";
+      const href = rawUrl.startsWith("https://") ? rawUrl : "";
       const ref = href ? (
         <a href={href} target="_blank" rel="noopener noreferrer" className="act-issue">
           {label}

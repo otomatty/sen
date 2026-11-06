@@ -114,8 +114,10 @@ interface LabelRow {
 }
 
 const ASSIGNEE_ERROR = /^担当者を GitHub に反映できませんでした（(.+)）$/;
-/** 時計のずれを吸収する。このぶん前から GitHub を読む */
+/** 時計のずれを吸収する。コメントのやり直しは、このぶん前から GitHub を読む */
 const RECOVERY_MARGIN_MS = 60_000;
+/** Issue の作り直し防止。時計のずれの分だけ、試行時刻より前を見る */
+const CREATE_MATCH_MARGIN_MS = 5_000;
 
 export async function reconcileIssue(
   ctx: SyncCtx,
@@ -299,6 +301,7 @@ export async function runManual(ctx: SyncCtx, op: IssueOp): Promise<void> {
     await deleteLink(ctx, ws, issue.id);
     throw e;
   }
+  await clearImportSkip(ctx.env.DB, repo.repo_id, ref.number);
   await clearAutoCreateSkip(ctx.env.DB, issue.id);
 }
 
@@ -492,6 +495,7 @@ async function importIfNew(
   number: number,
   opts: { senderLogin?: string | null } = {},
 ): Promise<void> {
+  if (await importSkipped(ctx.env.DB, repo.repo_id, number)) return;
   const cfg = requireConfig(ctx.env);
   const parts = splitFullName(repo.full_name);
   if (!parts) return;
@@ -560,6 +564,8 @@ async function importIfNew(
     ),
   );
   await publishLink(ctx, ws, issueId);
+  // 取り込みのやり直し中に先に処理されたコメントは、紐づけが無く成功扱いで消えている
+  await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number);
 }
 
 async function reconcileLinked(
@@ -645,14 +651,19 @@ async function reconcileLinked(
     if (!sameNameSet(wantAssignees, (remote.assignees ?? []).map((user) => user.login))) ghPatch.assignees = wantAssignees;
   }
 
+  let sent: GhIssueWrite = {};
   let rejected: string | null = null;
   if (Object.keys(ghPatch).length) {
     try {
       remote = await updateIssue(cfg, parts.owner, parts.repo, link.number, ghPatch);
+      sent = ghPatch;
     } catch (e) {
       if (!(e instanceof GitHubError) || e.status !== 422 || !ghPatch.assignees) throw e;
       const { assignees: _assignees, ...rest } = ghPatch;
-      remote = Object.keys(rest).length ? await updateIssue(cfg, parts.owner, parts.repo, link.number, rest) : remote;
+      if (Object.keys(rest).length) {
+        remote = await updateIssue(cfg, parts.owner, parts.repo, link.number, rest);
+        sent = rest;
+      }
       rejected = senLogin;
     }
   }
@@ -671,6 +682,7 @@ async function reconcileLinked(
   }
   const fresh = await loadIssue(ctx.env.DB, ctx.workspaceId, issue.id);
   if (!fresh || senDrifted(issue, fresh)) {
+    await saveSentBase(ctx.env.DB, link, remote, sent, senState, final, senLogin);
     await ctx.enqueueIssue?.(issue.id);
     return;
   }
@@ -684,6 +696,7 @@ async function reconcileLinked(
       mutations,
     });
     if (!applied) {
+      await saveSentBase(ctx.env.DB, link, remote, sent, senState, final, senLogin);
       await ctx.enqueueIssue?.(issue.id);
       return;
     }
@@ -717,6 +730,7 @@ async function unlink(
   await writeGitHubActivity(ctx, ws, { actor, via: opts.via }, link.issue_id, "unlinked", { full_name: fullName }, link.number, link.url);
   // 手で外したときも、GitHub で削除・移動されて外れたときも、次の編集では作り直さない。
   await skipAutoCreate(ctx.env.DB, ctx.workspaceId, link.issue_id);
+  await rememberImportSkip(ctx.env.DB, ctx.workspaceId, link.repo_id, link.number);
   await deleteLink(ctx, ws, link.issue_id);
 }
 
@@ -1119,6 +1133,78 @@ async function clearAutoCreateSkip(db: D1Database, issueId: string): Promise<voi
   await run(db, "DELETE FROM github_issue_create_skips WHERE issue_id = ?", issueId);
 }
 
+async function rememberImportSkip(db: D1Database, workspaceId: string, repoId: number, number: number): Promise<void> {
+  await run(
+    db,
+    "INSERT OR REPLACE INTO github_import_skips (repo_id, number, workspace_id, created_at) VALUES (?, ?, ?, ?)",
+    repoId,
+    number,
+    workspaceId,
+    Date.now(),
+  );
+}
+
+async function clearImportSkip(db: D1Database, repoId: number, number: number): Promise<void> {
+  await run(db, "DELETE FROM github_import_skips WHERE repo_id = ? AND number = ?", repoId, number);
+}
+
+async function importSkipped(db: D1Database, repoId: number, number: number): Promise<boolean> {
+  const row = await first(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repoId, number);
+  return !!row;
+}
+
+/** 紐づけができた直後に、まだ無いコメントを pullComment と同じ規則で入れる */
+async function importIssueComments(
+  ctx: SyncCtx,
+  cfg: NonNullable<ReturnType<typeof githubConfig>>,
+  owner: string,
+  repoName: string,
+  repo: RepoRow,
+  number: number,
+): Promise<void> {
+  const comments = await listIssueComments(cfg, owner, repoName, number, new Date(0).toISOString());
+  for (const comment of comments) {
+    if (!comment || !Number.isSafeInteger(comment.id)) continue;
+    const login = comment.user?.login?.trim() ? comment.user.login : null;
+    await pullComment(ctx, {
+      action: "created",
+      comment: {
+        id: comment.id,
+        body: comment.body ?? "",
+        html_url: comment.html_url ?? "",
+        created_at: comment.created_at,
+        user: login ? { login } : null,
+      },
+      issue: { number },
+      repository: { id: repo.repo_id, full_name: repo.full_name },
+      sender: login ? { login } : null,
+    });
+  }
+}
+
+/** 送った項目だけ base を GitHub の今の値へ進める。送っていない項目は残す */
+async function saveSentBase(
+  db: D1Database,
+  link: LinkRow,
+  remote: GhIssue,
+  sent: GhIssueWrite,
+  senState: SyncState,
+  labels: string[],
+  senLogin: string | null,
+): Promise<void> {
+  if (sent.title === undefined && sent.body === undefined && sent.state === undefined && sent.labels === undefined && sent.assignees === undefined) return;
+  await updateLinkBase(db, {
+    issueId: link.issue_id,
+    url: link.url,
+    title: sent.title !== undefined ? remote.title : link.base_title,
+    body: sent.body !== undefined ? (remote.body ?? "") : link.base_body,
+    state: sent.state !== undefined ? senState : link.base_state,
+    labels: sent.labels !== undefined ? labels : parseNames(link.base_labels),
+    assignee: sent.assignees !== undefined ? senLogin : link.base_assignee,
+    lastError: link.last_error,
+  });
+}
+
 async function autoCreateSkipped(db: D1Database, issueId: string): Promise<boolean> {
   const row = await first(db, "SELECT issue_id FROM github_issue_create_skips WHERE issue_id = ?", issueId);
   return !!row;
@@ -1153,7 +1239,7 @@ async function findCreatedIssue(
   const user = await getUser(cfg);
   const login = typeof user.login === "string" ? user.login.trim() : "";
   if (!login) throw new GitHubError(0, "GitHub のユーザーを確認できませんでした");
-  const sinceMs = attemptedAt - RECOVERY_MARGIN_MS;
+  const sinceMs = attemptedAt - CREATE_MATCH_MARGIN_MS;
   const found = await listIssuesByCreator(cfg, owner, repoName, new Date(sinceMs).toISOString(), login);
   const matches: GhIssue[] = [];
   for (const remote of found) {
@@ -1166,7 +1252,7 @@ async function findCreatedIssue(
     if (taken) continue;
     matches.push(remote);
   }
-  matches.sort((a, b) => a.number - b.number);
+  matches.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.number - b.number);
   return matches[0] ?? null;
 }
 

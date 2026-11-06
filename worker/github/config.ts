@@ -60,9 +60,9 @@ export async function scheduleGitHubSync(
   if (!isGitHubTarget(env, ws.url_key)) return;
   const issues = [...new Set(changes.filter((ch) => ch.entity === "issue" && ch.op === "upsert").map((ch) => ch.entityId))];
   const commentIds = [...new Set(changes.filter((ch) => ch.entity === "comment" && ch.op === "upsert").map((ch) => ch.entityId))];
-  const comments = await addedCommentIds(env, ws.id, commentIds);
-  if (issues.length === 0 && comments.length === 0) return;
   try {
+    const comments = await addedCommentIds(env, ws.id, commentIds);
+    if (issues.length === 0 && comments.length === 0) return;
     const res = await githubRealtime(env, ws.id, "/github/mark", { workspaceId: ws.id, issues, comments });
     if (!res.ok) console.error("github schedule failed", res.status);
   } catch (e) {

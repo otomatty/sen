@@ -73,9 +73,15 @@ function PullList({ pulls }: { pulls: GitHubPull[] }) {
     <ul className="github-pulls" data-testid="github-pulls">
       {pulls.map((pull) => (
         <li key={pull.id} className="github-pull" data-testid="github-pull">
-          <a href={pull.url} target="_blank" rel="noreferrer">
-            #{pull.number} {pull.title}
-          </a>
+          {pull.url.startsWith("https://") ? (
+            <a href={pull.url} target="_blank" rel="noreferrer">
+              #{pull.number} {pull.title}
+            </a>
+          ) : (
+            <span>
+              #{pull.number} {pull.title}
+            </span>
+          )}
           <span className={`pr-badge pr-badge-${pull.state}`} data-testid="github-pull-state">
             {PULL_LABEL[pull.state]}
           </span>
@@ -95,9 +101,13 @@ function Linked({ link, busy, onUnlink }: { link: GitHubLink; busy: boolean; onU
   return (
     <div className="github-issue-body">
       <div className="github-issue-row">
-        <a href={link.url} target="_blank" rel="noreferrer" data-testid="github-issue-link">
-          {label}
-        </a>
+        {link.url.startsWith("https://") ? (
+          <a href={link.url} target="_blank" rel="noreferrer" data-testid="github-issue-link">
+            {label}
+          </a>
+        ) : (
+          <span data-testid="github-issue-link">{label}</span>
+        )}
         {link.syncedAt != null && (
           <span className="muted" data-testid="github-synced-at">
             最終同期 {formatDateTime(link.syncedAt)}
