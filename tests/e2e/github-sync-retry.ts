@@ -321,6 +321,7 @@ async function main(): Promise<void> {
     await scenarioLong(db, seeded);
     await scenarioMissedComments(db, seeded);
     await scenarioImportCommentRetry(db, seeded);
+    await scenarioImportCommentPages(db, seeded);
     await scenarioDecoyIssue(db, seeded);
     await scenarioImportSkip(db, seeded);
     await scenarioSentBase(db, seeded);
@@ -940,6 +941,63 @@ async function scenarioImportCommentRetry(db: D1Database, seeded: Awaited<Return
     !(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'import-comments' AND target_id = ?", created.id)),
     "F2: 印が残っている",
   );
+}
+
+async function scenarioImportCommentPages(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const number = pushRemote("コメントが多い Issue", "GitHub の本文");
+  const repo = githubMock.repos.get("acme/widgets")!;
+  const total = 3050;
+  const now = new Date().toISOString();
+  for (let i = 0; i < total; i++) {
+    githubMock.comments.push({
+      id: githubMock.nextCommentId++,
+      fullName: "acme/widgets",
+      number,
+      body: `k1-${i}`,
+      user: { login: "ghost" },
+      created_at: now,
+      updated_at: now,
+    });
+  }
+  const queued: string[] = [];
+  const ctx = ctxFor(db, seeded.ws, []);
+  ctx.enqueueIssue = async (id) => {
+    queued.push(id);
+  };
+  const commentGets = () =>
+    githubMock.requests.filter((item) => item.method === "GET" && item.path === `/repos/acme/widgets/issues/${number}/comments`);
+  const pagesOf = (items: { search: string }[]) => items.map((item) => new URLSearchParams(item.search).get("page"));
+  await reconcileIssue(ctx, { repoId: repo.id, number });
+  const created = await q<{ id: string }>(db, "SELECT id FROM issues WHERE title = ?", "コメントが多い Issue");
+  if (!created) throw new Error("K1: 課題が作られていない");
+  const once = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments");
+  check(once?.n === 3000, `K1: 1 回目が 3,000 件ではない (${once?.n})`);
+  const distinctOnce = await q<{ n: number }>(db, "SELECT COUNT(DISTINCT body) AS n FROM comments");
+  check(distinctOnce?.n === 3000, `K1: 1 回目のコメントが 1 件ずつではない (${distinctOnce?.n})`);
+  const attempt = await q<{ progress: number | null }>(
+    db,
+    "SELECT progress FROM github_sync_attempts WHERE kind = 'import-comments' AND target_id = ?",
+    created.id,
+  );
+  check(attempt != null && attempt.progress === 31, `K1: 印の progress が次のページではない (${attempt?.progress})`);
+  check(queued.length === 1 && queued[0] === created.id, `K1: 順番待ちが違う (${queued.join(",")})`);
+  const firstPages = pagesOf(commentGets());
+  check(firstPages.join(",") === Array.from({ length: 30 }, (_, i) => String(i + 1)).join(","), `K1: 1 回目のページが違う (${firstPages.at(-1)})`);
+  check(commentGets().every((item) => new URLSearchParams(item.search).get("per_page") === "100"), "K1: 1 ページ 100 件で読んでいない");
+  await reconcileIssue(ctx, { issueId: created.id });
+  const done = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments");
+  const distinct = await q<{ n: number }>(db, "SELECT COUNT(DISTINCT body) AS n FROM comments");
+  check(done?.n === total, `K1: 全件が入っていない (${done?.n})`);
+  check(distinct?.n === total, `K1: コメントが 1 件ずつではない (${distinct?.n})`);
+  const links = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM github_comment_links");
+  check(links?.n === total, `K1: コメントの紐づけが全件ではない (${links?.n})`);
+  check(
+    !(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'import-comments' AND target_id = ?", created.id)),
+    "K1: 印が残っている",
+  );
+  const rest = pagesOf(commentGets().slice(30));
+  check(rest.join(",") === "30,31", `K1: 続きのページが違う (${rest.join(",")})`);
 }
 
 async function scenarioBodyConflictKept(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

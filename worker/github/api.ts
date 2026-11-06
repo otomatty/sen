@@ -148,6 +148,29 @@ export function listIssueComments(cfg: GitHubConfig, owner: string, repo: string
   );
 }
 
+/** 1 つの Issue のコメントを、startPage から最大 30 ページ読む。
+ *  その 30 ページ目も 100 件あったときは nextPage が次のページ。最後まで読めたら null。
+ */
+export async function listIssueCommentsFrom(
+  cfg: GitHubConfig,
+  owner: string,
+  repo: string,
+  number: number,
+  startPage: number,
+): Promise<{ items: GhComment[]; nextPage: number | null }> {
+  const since = new Date(0).toISOString();
+  const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments?since=${encodeURIComponent(since)}`;
+  const items: GhComment[] = [];
+  for (let offset = 0; offset < 30; offset++) {
+    const page = startPage + offset;
+    const batch = await request<GhComment[]>(cfg, "GET", `${path}&per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) return { items, nextPage: null };
+    items.push(...batch);
+    if (batch.length < 100) return { items, nextPage: null };
+  }
+  return { items, nextPage: startPage + 30 };
+}
+
 export function getPull(cfg: GitHubConfig, owner: string, repo: string, number: number): Promise<GhPull> {
   return request(cfg, "GET", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`);
 }

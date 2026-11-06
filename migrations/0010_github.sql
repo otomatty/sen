@@ -66,11 +66,13 @@ CREATE TABLE IF NOT EXISTS github_deliveries (
 
 -- 作成の POST は通ったのに、応答や紐づけが失われたときのやり直し。
 -- 記録があるときだけ GitHub を読み、同じものを二重に作らない。
+-- progress は、Issue のコメントを続きのページから読み直すときの位置。
 CREATE TABLE IF NOT EXISTS github_sync_attempts (
   kind TEXT NOT NULL,
   target_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
   attempted_at INTEGER NOT NULL,
+  progress INTEGER,
   PRIMARY KEY (kind, target_id)
 );
 

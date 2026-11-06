@@ -16,6 +16,7 @@ import {
   getUser,
   listComments,
   listIssueComments,
+  listIssueCommentsFrom,
   listIssues,
   listIssuesByCreator,
   listLabels,
@@ -670,7 +671,7 @@ async function importIfNew(
     });
   }
   if (await linkByIssue(ctx.env.DB, ctx.workspaceId, issueId)) return;
-  // 紐づけのあとコメントの読み直しが失敗しても、次の突き合わせで読み直す
+  // 読み切る前に失敗したりページが残ったりしても、次の突き合わせで続きを読む
   await writeAttempt(ctx.env.DB, "import-comments", issueId, ctx.workspaceId, Date.now());
   await insertLink(
     ctx.env.DB,
@@ -686,8 +687,7 @@ async function importIfNew(
   );
   await publishLink(ctx, ws, issueId);
   // 取り込みのやり直し中に先に処理されたコメントは、紐づけが無く成功扱いで消えている
-  await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number);
-  await clearAttempt(ctx.env.DB, "import-comments", issueId);
+  await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number, issueId);
 }
 
 async function reconcileLinked(
@@ -711,9 +711,9 @@ async function reconcileLinked(
     }
     throw e;
   }
+  // 読み切り前の印が残っていれば progress から続きを読む。読み切れたときだけ印が消える
   if ((await readAttempt(ctx.env.DB, "import-comments", issue.id)) != null) {
-    await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number);
-    await clearAttempt(ctx.env.DB, "import-comments", issue.id);
+    await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number, issue.id);
   }
   const catalog = await loadLabels(ctx.env.DB, ctx.workspaceId);
   const repoLabels = await cachedLabels(ctx, cfg, repo.full_name);
@@ -1311,7 +1311,10 @@ async function importSkipped(db: D1Database, repoId: number, number: number): Pr
   return !!row;
 }
 
-/** 紐づけができた直後に、まだ無いコメントを pullComment と同じ規則で入れる */
+/** 紐づけができた直後に、まだ無いコメントを pullComment と同じ規則で入れる。
+ *  印の progress から読む（無ければ 1 ページ目）。続きは 1 ページ重ねて、削除で番号がずれても取りこぼさない。
+ *  最後まで読めたら印を消し、30 ページで打ち切ったら progress を次のページにして突き合わせを順番待ちに戻す。
+ */
 async function importIssueComments(
   ctx: SyncCtx,
   cfg: NonNullable<ReturnType<typeof githubConfig>>,
@@ -1319,9 +1322,12 @@ async function importIssueComments(
   repoName: string,
   repo: RepoRow,
   number: number,
+  issueId: string,
 ): Promise<void> {
-  const comments = await listIssueComments(cfg, owner, repoName, number, new Date(0).toISOString());
-  for (const comment of comments) {
+  const progress = await readAttemptProgress(ctx.env.DB, "import-comments", issueId);
+  const startPage = progress != null && progress > 1 ? progress - 1 : 1;
+  const { items, nextPage } = await listIssueCommentsFrom(cfg, owner, repoName, number, startPage);
+  for (const comment of items) {
     if (!comment || !Number.isSafeInteger(comment.id)) continue;
     const login = comment.user?.login?.trim() ? comment.user.login : null;
     await pullComment(ctx, {
@@ -1338,6 +1344,12 @@ async function importIssueComments(
       sender: login ? { login } : null,
     });
   }
+  if (nextPage == null) {
+    await clearAttempt(ctx.env.DB, "import-comments", issueId);
+    return;
+  }
+  await updateAttemptProgress(ctx.env.DB, "import-comments", issueId, nextPage);
+  await ctx.enqueueIssue?.(issueId);
 }
 
 /** 送った項目だけ base を GitHub の今の値へ進める。送っていない項目は残す */
@@ -1500,6 +1512,27 @@ async function readAttempt(db: D1Database, kind: string, targetId: string): Prom
     targetId,
   );
   return row ? row.attempted_at : null;
+}
+
+async function readAttemptProgress(db: D1Database, kind: string, targetId: string): Promise<number | null> {
+  const row = await first<{ progress: number | null }>(
+    db,
+    "SELECT progress FROM github_sync_attempts WHERE kind = ? AND target_id = ?",
+    kind,
+    targetId,
+  );
+  const progress = row?.progress;
+  return typeof progress === "number" && Number.isFinite(progress) ? progress : null;
+}
+
+async function updateAttemptProgress(db: D1Database, kind: string, targetId: string, progress: number): Promise<void> {
+  await run(
+    db,
+    "UPDATE github_sync_attempts SET progress = ? WHERE kind = ? AND target_id = ?",
+    progress,
+    kind,
+    targetId,
+  );
 }
 
 async function writeAttempt(db: D1Database, kind: string, targetId: string, workspaceId: string, at: number): Promise<void> {
