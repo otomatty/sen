@@ -9,6 +9,7 @@ import type { Env, WorkspaceRow } from "../../worker/env";
 import { insertTeam } from "../../worker/mutations";
 import { scheduleGitHubSync } from "../../worker/github/config";
 import { GitHubSyncRunner } from "../../worker/github/runner";
+import { syncPull } from "../../worker/github/pull-sync";
 import { pullComment, pushComment, reconcileIssue, runManual, type SyncCtx } from "../../worker/github/sync";
 import { GITHUB_TOKEN, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
@@ -52,20 +53,36 @@ class Stmt {
   }
 
   async all<T>() {
-    return { results: this.runSync().results as T[] };
+    const results = this.runSync().results as T[];
+    await this.fireAfter();
+    return { results };
   }
 
   async first<T>() {
-    return (this.runSync().results[0] as T | undefined) ?? null;
+    const row = (this.runSync().results[0] as T | undefined) ?? null;
+    await this.fireAfter();
+    return row;
   }
 
   async run() {
     this.runSync();
-    return { success: true as const, meta: { changes: this.shim.sqlite.getRowsModified() } };
+    const changes = this.shim.sqlite.getRowsModified();
+    await this.fireAfter();
+    return { success: true as const, meta: { changes } };
+  }
+
+  private async fireAfter(): Promise<void> {
+    const hook = this.shim.afterSql;
+    if (!hook || !this.sql.includes(hook.includes)) return;
+    this.shim.afterSql = null;
+    await hook.run();
   }
 }
 
 class MiniD1 {
+  /** この文字列を含む SQL の実行直後に、一度だけ呼ぶ。指定が無ければ何もしない */
+  afterSql: { includes: string; run: () => Promise<void> } | null = null;
+
   constructor(readonly sqlite: SqlDb) {}
 
   prepare(sql: string) {
@@ -184,6 +201,7 @@ function ctxFor(db: D1Database, ws: string, queued: string[]): SyncCtx {
 }
 
 async function resetRows(db: D1Database): Promise<void> {
+  (db as unknown as MiniD1).afterSql = null;
   for (const table of [
     "github_comment_links",
     "github_issue_links",
@@ -292,6 +310,7 @@ async function main(): Promise<void> {
     check(seeded.state, "未着手がありません");
     await scenarioComment(db, seeded);
     await scenarioIssue(db, seeded);
+    await scenarioWebhookBeforeRetry(db, seeded);
     await scenarioImport(db, seeded);
     await scenarioWaitingComment(db, seeded);
     await scenarioManualUnlink(db, seeded);
@@ -299,9 +318,12 @@ async function main(): Promise<void> {
     await scenarioEdit(db, seeded);
     await scenarioLong(db, seeded);
     await scenarioMissedComments(db, seeded);
+    await scenarioImportCommentRetry(db, seeded);
     await scenarioDecoyIssue(db, seeded);
     await scenarioImportSkip(db, seeded);
     await scenarioSentBase(db, seeded);
+    await scenarioBodyConflictKept(db, seeded);
+    await scenarioPullAdvance(db, seeded);
     await scenarioScheduleError(db, seeded);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -794,6 +816,191 @@ async function scenarioSentBase(db: D1Database, seeded: Awaited<ReturnType<typeo
   check((await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments"))?.n === 0, "E4: 次の突き合わせで衝突のコメントができた");
   const sen = await q<{ description: string }>(db, "SELECT description FROM issues WHERE id = ?", issue);
   check(sen?.description === "C", "E4: Sen の説明が戻った");
+}
+
+async function scenarioWebhookBeforeRetry(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "15151515-1515-4515-8515-151515151515";
+  const title = "応答の前に届く Issue";
+  const description = "同じ本文のまま";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 15, title, description });
+  const ctx = ctxFor(db, seeded.ws, []);
+  const before = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues");
+  githubMock.loseOnce = { method: "POST", suffix: "/issues" };
+  let lost = false;
+  try {
+    await reconcileIssue(ctx, { issueId: issue });
+  } catch {
+    lost = true;
+  }
+  check(lost, "F3: 応答の喪失で失敗していない");
+  check(githubMock.issues.length === 1, "F3: Issue が 1 件ではない");
+  const number = githubMock.issues[0]?.number;
+  if (number == null) throw new Error("F3: 作った Issue の番号が無い");
+  await reconcileIssue(ctx, { repoId: seeded.repo, number });
+  const after = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM issues");
+  check(after?.n === before?.n, `F3: Webhook で課題が増えた (${after?.n})`);
+  const link = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", issue);
+  check(link?.number === number, `F3: 元の課題が紐づいていない (${link?.number})`);
+  check(!(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'issue' AND target_id = ?", issue)), "F3: 試行の記録が残っている");
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 1, "F3: やり直しで Issue が増えた");
+  check(posts("/issues") === 1, "F3: POST が 1 回ではない");
+}
+
+async function scenarioImportCommentRetry(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const number = pushRemote("コメントを読み直す Issue", "GitHub の本文");
+  const repo = githubMock.repos.get("acme/widgets")!;
+  const kept = pushMockComment(number, "読み直すコメント");
+  const ctx = ctxFor(db, seeded.ws, []);
+  githubMock.failOnce = { method: "GET", suffix: `/issues/${number}/comments` };
+  let failed = false;
+  try {
+    await reconcileIssue(ctx, { repoId: repo.id, number });
+  } catch {
+    failed = true;
+  }
+  check(failed, "F2: コメントの取得が失敗していない");
+  const created = await q<{ id: string }>(db, "SELECT id FROM issues WHERE title = ?", "コメントを読み直す Issue");
+  if (!created) throw new Error("F2: 課題が作られていない");
+  check(!!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", created.id)), "F2: 紐づいていない");
+  check(
+    !!(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'import-comments' AND target_id = ?", created.id)),
+    "F2: 印が無い",
+  );
+  check(!(await q(db, "SELECT id FROM comments WHERE body = ?", kept.body)), "F2: 失敗の時点でコメントが入った");
+  await reconcileIssue(ctx, { repoId: repo.id, number });
+  check(!!(await q(db, "SELECT id FROM comments WHERE body = ?", kept.body)), "F2: やり直しでコメントが入っていない");
+  const count = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments WHERE body = ?", kept.body);
+  check(count?.n === 1, `F2: コメントが 1 件ではない (${count?.n})`);
+  check(
+    !(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'import-comments' AND target_id = ?", created.id)),
+    "F2: 印が残っている",
+  );
+}
+
+async function scenarioBodyConflictKept(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "17171717-1717-4717-8717-171717171717";
+  const title = "衝突して残す説明";
+  const githubBody = "GitHub にしか無い説明";
+  const number = pushRemote(title, githubBody);
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 16, title, description: "Sen に残す説明" });
+  await insertLink(db, seeded.ws, issue, githubMock.repos.get("acme/widgets")!.id, number);
+  await exec(db, "UPDATE github_issue_links SET base_title = ?, base_body = ? WHERE issue_id = ?", title, "最初の説明", issue);
+  const ctx = ctxFor(db, seeded.ws, []);
+  const held = holdGet(`/repos/acme/widgets/issues/${number}`);
+  const running = reconcileIssue(ctx, { issueId: issue });
+  const entered = await Promise.race([
+    held.entered.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (!entered) {
+    held.release();
+    throw new Error("F5: Issue の取得が止まれなかった");
+  }
+  try {
+    await exec(db, "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?", "あとから変えた説明", Date.now() + 5, issue);
+    held.release();
+    await running;
+  } finally {
+    held.release();
+  }
+  const note = "GitHub 側の説明と同時に変わったため";
+  const conflictCount = async () =>
+    (await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments WHERE body LIKE ?", `%${githubBody}%`))?.n;
+  check((await conflictCount()) === 1, `F5: 衝突のコメントが 1 件ではない (${await conflictCount()})`);
+  const saved = await q<{ body: string }>(db, "SELECT body FROM comments WHERE issue_id = ?", issue);
+  check(saved?.body.includes(note) === true && saved.body.includes(githubBody), "F5: GitHub 側の説明がコメントに無い");
+  await reconcileIssue(ctx, { issueId: issue });
+  const remote = githubMock.issues.find((item) => item.number === number);
+  check(remote?.body === "あとから変えた説明", `F5: 次の突き合わせで新しい説明が届いていない (${remote?.body})`);
+  check((await conflictCount()) === 1, "F5: 次の突き合わせで衝突のコメントが増えた");
+
+  await resetRows(db);
+  const again = "18181818-1818-4818-8818-181818181818";
+  const lostBody = "PATCH で失われる説明";
+  const lostNumber = pushRemote(title, lostBody);
+  await insertIssue(db, { id: again, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 17, title, description: "Sen に残す説明" });
+  await insertLink(db, seeded.ws, again, githubMock.repos.get("acme/widgets")!.id, lostNumber);
+  await exec(db, "UPDATE github_issue_links SET base_title = ?, base_body = ? WHERE issue_id = ?", title, "最初の説明", again);
+  githubMock.failOnce = { method: "PATCH", suffix: `/issues/${lostNumber}` };
+  let failed = false;
+  try {
+    await reconcileIssue(ctx, { issueId: again });
+  } catch {
+    failed = true;
+  }
+  check(failed, "F5: PATCH が失敗していない");
+  const once = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments WHERE body LIKE ?", `%${lostBody}%`);
+  check(once?.n === 1, `F5: 失敗の直後の衝突コメントが 1 件ではない (${once?.n})`);
+  await reconcileIssue(ctx, { issueId: again });
+  const twice = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM comments WHERE body LIKE ?", `%${lostBody}%`);
+  check(twice?.n === 1, `F5: やり直しで衝突のコメントが増えた (${twice?.n})`);
+  check(githubMock.issues.find((item) => item.number === lostNumber)?.body === "Sen に残す説明", "F5: やり直しで Sen の説明が届いていない");
+}
+
+async function scenarioPullAdvance(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "19191919-1919-4919-8919-191919191919";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 12, title: "PR で動く", description: "" });
+  const doing = await q<{ id: string }>(db, "SELECT id FROM workflow_states WHERE team_id = ? AND name = ?", seeded.team, "進行中");
+  const done = await q<{ id: string }>(db, "SELECT id FROM workflow_states WHERE team_id = ? AND name = ?", seeded.team, "完了");
+  if (!doing || !done) throw new Error("F4: 状態が無い");
+  await exec(db, "UPDATE github_repos SET pr_open_state_id = ? WHERE team_id = ?", doing.id, seeded.team);
+  const pullNumber = 81;
+  const at = new Date().toISOString();
+  githubMock.pulls.push({
+    id: githubMock.nextPullId++,
+    number: pullNumber,
+    fullName: "acme/widgets",
+    title: "開いた PR",
+    body: "RET-12",
+    state: "open",
+    draft: false,
+    merged: false,
+    user: { login: "octocat" },
+    headRef: "ret-12",
+    updated_at: at,
+  });
+  let stamp = 0;
+  const mini = db as unknown as MiniD1;
+  mini.afterSql = {
+    includes: "SELECT id, team_id, state_id, updated_at FROM issues",
+    run: async () => {
+      stamp = Date.now() + 60_000;
+      await exec(db, "UPDATE issues SET state_id = ?, updated_at = ? WHERE id = ?", done.id, stamp, issue);
+    },
+  };
+  try {
+    await syncPull(
+      { env: envFor(db), workspaceId: seeded.ws, enqueueIssue: async () => {} },
+      {
+        action: "opened",
+        pull_request: {
+          number: pullNumber,
+          title: "開いた PR",
+          body: "RET-12",
+          html_url: `https://github.com/acme/widgets/pull/${pullNumber}`,
+          state: "open",
+          draft: false,
+          merged: false,
+          user: { login: "octocat" },
+          head: { ref: "ret-12" },
+        },
+        repository: { id: seeded.repo, full_name: "acme/widgets" },
+        sender: { login: "octocat" },
+      },
+    );
+  } finally {
+    mini.afterSql = null;
+    await exec(db, "UPDATE github_repos SET pr_open_state_id = NULL WHERE team_id = ?", seeded.team);
+  }
+  check(stamp !== 0, "F4: 課題の読み込みに差し込めていない");
+  const after = await q<{ state_id: string; updated_at: number }>(db, "SELECT state_id, updated_at FROM issues WHERE id = ?", issue);
+  check(after?.state_id === done.id, "F4: 完了が前の段階に戻った");
+  check(after?.updated_at === stamp, `F4: 完了の時刻が上書きされた (${after?.updated_at})`);
 }
 
 async function scenarioScheduleError(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

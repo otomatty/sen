@@ -479,6 +479,75 @@ test("二次レート制限は権限エラーにせず、retry-after まで待�
   }
 });
 
+async function waitUntilRateLimitReset(status: 403 | 429): Promise<void> {
+  resetGitHubMock();
+  const server: Server = await startGitHubMock();
+  const clock = { now: 1_700_000_000_000 };
+  const realNow = Date.now;
+  Date.now = () => clock.now;
+  try {
+    await withProcessors(async () => {
+      processors.githubIssue = async () => {
+        await getIssue(
+          {
+            workspaceKey: "runner",
+            token: GITHUB_TOKEN,
+            webhookSecret: "runner-secret",
+            delayMs: 0,
+            apiOrigin: `http://127.0.0.1:${GITHUB_PORT}`,
+          },
+          "acme",
+          "widgets",
+          1,
+        );
+      };
+      const resetSec = Math.floor(clock.now / 1000) + 90;
+      const headers: Record<string, string> = { "x-ratelimit-reset": String(resetSec) };
+      if (status === 403) headers["x-ratelimit-remaining"] = "0";
+      githubMock.respondOnce = { method: "GET", suffix: "/issues/1", status, headers };
+      const storage = memoryStorage();
+      let alarm: number | null = null;
+      let sync!: GitHubSyncRunner;
+      const signal = async () => {
+        alarm = await sync.nextAt();
+      };
+      sync = new GitHubSyncRunner(storage, {} as Env, signal);
+      const key = "gh:dirty:gh:1000:1";
+      assertEqual(
+        (
+          await sync.handle(
+            post("/github/event", { workspaceId: "ws", incoming: { type: "issue", repoId: 1000, number: 1 } }),
+          )
+        )?.status,
+        200,
+      );
+      await sync.alarm();
+      const item = await storage.get<{ attempts: number; nextAt: number }>(key);
+      const meta = await storage.get<{ error: string | null; rateLimitReset: number | null; nextAt: number | null }>("gh:meta");
+      assertEqual(item?.attempts, 1);
+      assertEqual(meta?.error, "GitHub の利用制限に達しました");
+      assert(meta?.error !== "GitHub の権限がありません", "権限エラーになっている");
+      assertEqual(meta?.rateLimitReset, resetSec * 1000);
+      assertEqual(item?.nextAt, resetSec * 1000);
+      assertEqual(alarm, meta?.nextAt);
+      await sync.alarm();
+      assertEqual((await storage.get<{ attempts: number }>(key))?.attempts, 1);
+    });
+  } finally {
+    Date.now = realNow;
+    resetGitHubMock();
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+}
+
+test("retry-after が無い残り回数 0 の 403 は x-ratelimit-reset まで待つ", async () => {
+  await waitUntilRateLimitReset(403);
+});
+
+test("retry-after が無い 429 は x-ratelimit-reset まで待つ", async () => {
+  await waitUntilRateLimitReset(429);
+});
+
 test("突き合わせが途中で失敗しても、入れた順番待ちのアラームが鳴る", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--reconcile-alarm"], { cwd: root, encoding: "utf8" });

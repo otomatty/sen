@@ -428,7 +428,7 @@ async function createFromSen(
   ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>,
   repo: RepoRow,
   issue: IssueRow,
-  opts: { actor?: { user: Me; role: Role }; via?: string | null; force?: boolean },
+  opts: { actor?: { user: Me; role: Role }; via?: string | null; force?: boolean; found?: GhIssue },
 ): Promise<void> {
   const cfg = requireConfig(ctx.env);
   const parts = splitFullName(repo.full_name);
@@ -447,19 +447,25 @@ async function createFromSen(
     labels: githubLabelList([], repoLabels, final, common),
   };
   if (senLogin) write.assignees = [senLogin];
-  const attemptedAt = await readAttempt(ctx.env.DB, "issue", issue.id);
-  let remote: GhIssue | null = null;
+  let remote: GhIssue;
   let rejected: string | null = null;
-  if (attemptedAt != null) remote = await findCreatedIssue(ctx, cfg, parts.owner, parts.repo, repo, issue, attemptedAt);
-  if (!remote) {
-    if (attemptedAt == null) await writeAttempt(ctx.env.DB, "issue", issue.id, ctx.workspaceId, Date.now());
-    try {
-      remote = await createIssue(cfg, parts.owner, parts.repo, write);
-    } catch (e) {
-      if (!(e instanceof GitHubError) || e.status !== 422 || !write.assignees?.length) throw e;
-      const { assignees: _assignees, ...rest } = write;
-      remote = await createIssue(cfg, parts.owner, parts.repo, rest);
-      rejected = senLogin;
+  if (opts.found) {
+    remote = opts.found;
+  } else {
+    const attemptedAt = await readAttempt(ctx.env.DB, "issue", issue.id);
+    const recovered = attemptedAt != null ? await findCreatedIssue(ctx, cfg, parts.owner, parts.repo, repo, issue, attemptedAt) : null;
+    if (recovered) {
+      remote = recovered;
+    } else {
+      if (attemptedAt == null) await writeAttempt(ctx.env.DB, "issue", issue.id, ctx.workspaceId, Date.now());
+      try {
+        remote = await createIssue(cfg, parts.owner, parts.repo, write);
+      } catch (e) {
+        if (!(e instanceof GitHubError) || e.status !== 422 || !write.assignees?.length) throw e;
+        const { assignees: _assignees, ...rest } = write;
+        remote = await createIssue(cfg, parts.owner, parts.repo, rest);
+        rejected = senLogin;
+      }
     }
   }
   const senState = senSyncState(issue.state_type, issue.state_name);
@@ -509,6 +515,11 @@ async function importIfNew(
   if (remote.pull_request) return;
   const created = Date.parse(remote.created_at);
   if (!Number.isFinite(created) || created < repo.linked_at) return;
+  const pending = await findPendingCreate(ctx, cfg, repo, remote);
+  if (pending) {
+    await createFromSen(ctx, ws, repo, pending, { found: remote });
+    return;
+  }
   const states = await loadStates(ctx.env.DB, repo.team_id);
   const imported = syncStateParts(githubSyncState(remote.state, remote.state_reason));
   const stateId = initialStateId(states, imported.openClosed, imported.reason);
@@ -551,6 +562,8 @@ async function importIfNew(
     });
   }
   if (await linkByIssue(ctx.env.DB, ctx.workspaceId, issueId)) return;
+  // 紐づけのあとコメントの読み直しが失敗しても、次の突き合わせで読み直す
+  await writeAttempt(ctx.env.DB, "import-comments", issueId, ctx.workspaceId, Date.now());
   await insertLink(
     ctx.env.DB,
     ctx.workspaceId,
@@ -566,6 +579,7 @@ async function importIfNew(
   await publishLink(ctx, ws, issueId);
   // 取り込みのやり直し中に先に処理されたコメントは、紐づけが無く成功扱いで消えている
   await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number);
+  await clearAttempt(ctx.env.DB, "import-comments", issueId);
 }
 
 async function reconcileLinked(
@@ -588,6 +602,10 @@ async function reconcileLinked(
       return;
     }
     throw e;
+  }
+  if ((await readAttempt(ctx.env.DB, "import-comments", issue.id)) != null) {
+    await importIssueComments(ctx, cfg, parts.owner, parts.repo, repo, remote.number);
+    await clearAttempt(ctx.env.DB, "import-comments", issue.id);
   }
   const catalog = await loadLabels(ctx.env.DB, ctx.workspaceId);
   const repoLabels = await cachedLabels(ctx, cfg, repo.full_name);
@@ -651,6 +669,9 @@ async function reconcileLinked(
     if (!sameNameSet(wantAssignees, (remote.assignees ?? []).map((user) => user.login))) ghPatch.assignees = wantAssignees;
   }
 
+  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null));
+  if (bodyAction === "sen-wins" && ghPatch.body !== undefined) await keepBodyConflict(ctx, ws, issue, ghBody, actor, opts.via);
+
   let sent: GhIssueWrite = {};
   let rejected: string | null = null;
   if (Object.keys(ghPatch).length) {
@@ -668,18 +689,8 @@ async function reconcileLinked(
     }
   }
 
-  const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo.linked_by, opts.senderLogin ?? null));
   const mutations: Mutation[] = [];
-  let conflictId: string | null = null;
   if (Object.keys(patch).length) mutations.push({ type: "issue.update", args: { id: issue.id, patch } });
-  if (bodyAction === "sen-wins") {
-    conflictId = crypto.randomUUID();
-    const room = MARKDOWN_MAX_LENGTH - BODY_CONFLICT_NOTE.length;
-    mutations.push({
-      type: "comment.create",
-      args: { id: conflictId, issueId: issue.id, body: BODY_CONFLICT_NOTE + ghBody.slice(0, Math.max(0, room)) },
-    });
-  }
   const fresh = await loadIssue(ctx.env.DB, ctx.workspaceId, issue.id);
   if (!fresh || senDrifted(issue, fresh)) {
     await saveSentBase(ctx.env.DB, link, remote, sent, senState, final, senLogin);
@@ -715,7 +726,6 @@ async function reconcileLinked(
     lastError: rejected && senLogin ? assigneeError(senLogin) : skipAssignee ? link.last_error : null,
   });
   await publishLink(ctx, ws, issue.id);
-  if (conflictId) await ctx.enqueueComment(conflictId);
 }
 
 async function unlink(
@@ -1225,6 +1235,70 @@ async function findPostedComment(
     if ((item.body ?? "").includes(marker)) return { id: item.id };
   }
   return null;
+}
+
+/** 応答が失われた Sen からの作成。タイトル・本文・時刻が合い、トークンの持ち主が作った Issue */
+async function findPendingCreate(
+  ctx: SyncCtx,
+  cfg: NonNullable<ReturnType<typeof githubConfig>>,
+  repo: RepoRow,
+  remote: GhIssue,
+): Promise<IssueRow | null> {
+  const created = Date.parse(remote.created_at);
+  if (!Number.isFinite(created)) return null;
+  const rows = await all<{ id: string; title: string; description: string; attempted_at: number }>(
+    ctx.env.DB,
+    `SELECT i.id, i.title, i.description, a.attempted_at
+     FROM github_sync_attempts a
+     JOIN issues i ON i.id = a.target_id AND i.workspace_id = a.workspace_id
+     WHERE a.kind = 'issue'
+       AND a.workspace_id = ?
+       AND i.team_id = ?
+       AND i.archived_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM github_issue_links l WHERE l.issue_id = i.id)`,
+    ctx.workspaceId,
+    repo.team_id,
+  );
+  const matches = rows.filter(
+    (row) => remote.title === row.title && (remote.body ?? "") === row.description && created >= row.attempted_at - CREATE_MATCH_MARGIN_MS,
+  );
+  if (!matches.length) return null;
+  const user = await getUser(cfg);
+  const login = typeof user.login === "string" ? user.login.trim() : "";
+  if (!login) throw new GitHubError(0, "GitHub のユーザーを確認できませんでした");
+  const remoteLogin = remote.user?.login?.trim() ?? "";
+  if (!remoteLogin || remoteLogin.toLowerCase() !== login.toLowerCase()) return null;
+  matches.sort((a, b) => a.attempted_at - b.attempted_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return loadIssue(ctx.env.DB, ctx.workspaceId, matches[0].id);
+}
+
+/** GitHub の説明を上書きする前に、衝突のコメントを残す。同じ本文のやり直しでは二重にしない */
+async function keepBodyConflict(
+  ctx: SyncCtx,
+  ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>,
+  issue: IssueRow,
+  ghBody: string,
+  actor: { user: Me; role: Role },
+  via: string | null | undefined,
+): Promise<void> {
+  const conflictId = await uuidFromKey(`body-conflict:${issue.id}:${ghBody}:${issue.description}`);
+  const known = await first(ctx.env.DB, "SELECT id FROM comments WHERE id = ?", conflictId);
+  if (known) return;
+  const room = MARKDOWN_MAX_LENGTH - BODY_CONFLICT_NOTE.length;
+  const applied = await applyGitHubChanges({
+    env: ctx.env,
+    ws,
+    actor,
+    via,
+    mutations: [
+      {
+        type: "comment.create",
+        args: { id: conflictId, issueId: issue.id, body: BODY_CONFLICT_NOTE + ghBody.slice(0, Math.max(0, room)) },
+      },
+    ],
+  });
+  if (!applied) throw new Error("説明の衝突をコメントに残せませんでした");
+  await ctx.enqueueComment(conflictId);
 }
 
 async function findCreatedIssue(

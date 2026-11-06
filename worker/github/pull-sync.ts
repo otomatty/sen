@@ -1,6 +1,6 @@
 // プルリクエストの紐づけと、ステータスの前への移動。参照の取り出しは pulls.ts。
 
-import type { GitHubPullState, Mutation, StateType } from "../../shared/types";
+import type { GitHubPullState, StateType } from "../../shared/types";
 import { all, ensureMigrated, first, run } from "../db";
 import type { Env } from "../env";
 import type { Change } from "../sync";
@@ -210,7 +210,7 @@ async function rewritePullLinks(
   await commitGitHubChanges(ctx.env, ws, changes);
 }
 
-/** 動かしたとき、移動先の種類を返す。動かさなければ null */
+/** 動かしたとき、移動先の種類を返す。実際に書いたときだけ。動かさなければ null */
 async function advanceIssue(
   ctx: PullSyncCtx,
   ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>,
@@ -222,40 +222,44 @@ async function advanceIssue(
 ): Promise<StateType | null> {
   const targetId = targetFor(pullState);
   if (targetId === "skip") return null;
-  const issue = await first<{ id: string; team_id: string; state_id: string }>(
-    ctx.env.DB,
-    "SELECT id, team_id, state_id FROM issues WHERE id = ? AND workspace_id = ?",
-    issueId,
-    ctx.workspaceId,
-  );
-  if (!issue) return null;
-  const settings = await first<Pick<RepoSettings, "pr_draft_state_id" | "pr_open_state_id" | "pr_merged_state_id">>(
-    ctx.env.DB,
-    "SELECT pr_draft_state_id, pr_open_state_id, pr_merged_state_id FROM github_repos WHERE workspace_id = ? AND team_id = ?",
-    ctx.workspaceId,
-    issue.team_id,
-  );
-  if (!settings) return null;
-  const configured = targetId(settings);
-  const states = await all<WorkflowStateRef>(
-    ctx.env.DB,
-    "SELECT id, name, type, position FROM workflow_states WHERE team_id = ? ORDER BY position",
-    issue.team_id,
-  );
-  const next = advanceStateId(states, issue.state_id, configured);
-  if (!next) return null;
-  const target = states.find((state) => state.id === next);
-  if (!target) return null;
-  if (!actorHolder.current) actorHolder.current = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, linkedBy, author);
-  const mutation: Mutation = { type: "issue.update", args: { id: issue.id, patch: { stateId: next } } };
-  await applyGitHubChanges({
-    env: ctx.env,
-    ws,
-    actor: actorHolder.current,
-    via: "GitHub",
-    mutations: [mutation],
-  });
-  return target.type;
+  // reload 0 は最初の読み込み。1 から 3 が読み直し。それでも書けなければジョブのやり直しへ
+  for (let reload = 0; ; reload++) {
+    const issue = await first<{ id: string; team_id: string; state_id: string; updated_at: number }>(
+      ctx.env.DB,
+      "SELECT id, team_id, state_id, updated_at FROM issues WHERE id = ? AND workspace_id = ?",
+      issueId,
+      ctx.workspaceId,
+    );
+    if (!issue) return null;
+    const settings = await first<Pick<RepoSettings, "pr_draft_state_id" | "pr_open_state_id" | "pr_merged_state_id">>(
+      ctx.env.DB,
+      "SELECT pr_draft_state_id, pr_open_state_id, pr_merged_state_id FROM github_repos WHERE workspace_id = ? AND team_id = ?",
+      ctx.workspaceId,
+      issue.team_id,
+    );
+    if (!settings) return null;
+    const configured = targetId(settings);
+    const states = await all<WorkflowStateRef>(
+      ctx.env.DB,
+      "SELECT id, name, type, position FROM workflow_states WHERE team_id = ? ORDER BY position",
+      issue.team_id,
+    );
+    const next = advanceStateId(states, issue.state_id, configured);
+    if (!next) return null;
+    const target = states.find((state) => state.id === next);
+    if (!target) return null;
+    if (!actorHolder.current) actorHolder.current = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, linkedBy, author);
+    const applied = await applyGitHubChanges({
+      env: ctx.env,
+      ws,
+      actor: actorHolder.current,
+      via: "GitHub",
+      expectedUpdatedAt: issue.updated_at,
+      mutations: [{ type: "issue.update", args: { id: issue.id, patch: { stateId: next } } }],
+    });
+    if (applied) return target.type;
+    if (reload >= 3) throw new Error("課題のステータスが同時に変わったため、移動をやり直せませんでした");
+  }
 }
 
 function targetFor(state: GitHubPullState): ((settings: Pick<RepoSettings, "pr_draft_state_id" | "pr_open_state_id" | "pr_merged_state_id">) => string | null) | "skip" {

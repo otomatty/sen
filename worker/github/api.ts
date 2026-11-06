@@ -242,7 +242,9 @@ async function toError(res: Response): Promise<GitHubError> {
   const resetSec = Number(resetHeader);
   const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : null;
   const retryAfterHeader = res.headers.get("retry-after");
-  const retryAfterSec = Number(retryAfterHeader);
+  // ヘッダーが無いと Number(null) が 0 になり、待ちが「今」になって reset を使わない
+  const retryAfterText = retryAfterHeader?.trim() ?? "";
+  const retryAfterSec = retryAfterText === "" ? Number.NaN : Number(retryAfterText);
   const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec >= 0 ? Date.now() + retryAfterSec * 1000 : null;
   // 二次制限は 403 に retry-after が付く。残り回数 0 や 429 と同じ利用制限
   const limited = res.status === 429 || (res.status === 403 && (remaining === "0" || retryAfterHeader !== null));
