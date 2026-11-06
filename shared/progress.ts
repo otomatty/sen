@@ -6,15 +6,15 @@ import type { StateType } from "./types";
 
 const PROCESS_PREFIX = /^工程[:：](.*)$/;
 
-export interface ReportInput {
+export interface ProgressInput {
   /** 日本時間の今日 'YYYY-MM-DD' */
   today: string;
   /** 表示順に並んだ、アーカイブされていないプロジェクト */
   projects: { id: string; name: string }[];
-  issues: ReportIssueInput[];
+  issues: ProgressIssueInput[];
 }
 
-export interface ReportIssueInput {
+export interface ProgressIssueInput {
   id: string;
   /** 'ENG-12' */
   identifier: string;
@@ -34,7 +34,7 @@ export interface ReportIssueInput {
 
 export type ActivityStatus = "タスク未登録" | "完了" | "期限超過" | "保留あり" | "進行中" | "未着手";
 
-export interface ProgressTask extends ReportIssueInput {
+export interface ProgressTask extends ProgressIssueInput {
   /** `工程:` / `工程：` ラベルの工程名。名前順・重複なし */
   processes: string[];
   /** 工程名を名前順に `／` でつないだもの。無ければ空。表示用 */
@@ -70,7 +70,7 @@ export function completionPercent(done: number, total: number): number {
 }
 
 /** プロジェクトの表示順 → 完了予定（未設定は後ろ）→ チームキー → 番号。キャンセルは除く */
-export function summarizeProgress(input: ReportInput): { activities: ProgressActivity[]; tasks: ProgressTask[] } {
+export function summarizeProgress(input: ProgressInput): { activities: ProgressActivity[]; tasks: ProgressTask[] } {
   const projectOrder = new Map(input.projects.map((project, index) => [project.id, index]));
   const issues = input.issues.filter((issue) => projectOrder.has(issue.projectId) && issue.stateType !== "canceled");
   issues.sort((a, b) => compareIssues(a, b, projectOrder));
@@ -121,7 +121,7 @@ function formatNextDue(total: number, open: number, active: number, nextDueDate:
   return nextDueUnset > 0 ? `${text}（未設定${nextDueUnset}件）` : text;
 }
 
-function compareIssues(a: ReportIssueInput, b: ReportIssueInput, projectOrder: Map<string, number>): number {
+function compareIssues(a: ProgressIssueInput, b: ProgressIssueInput, projectOrder: Map<string, number>): number {
   const byProject = (projectOrder.get(a.projectId) ?? 0) - (projectOrder.get(b.projectId) ?? 0);
   if (byProject !== 0) return byProject;
   const byDue = compareDue(a.dueDate, b.dueDate);
@@ -174,14 +174,14 @@ function processLabel(labelNames: string[]): string {
 }
 
 /** 完了以外が未完了。保留は backlog。active は未完了のうち保留でないもの */
-function partition(tasks: ReportIssueInput[]) {
+function partition(tasks: ProgressIssueInput[]) {
   const open = tasks.filter((task) => task.stateType !== "completed");
   const active = open.filter((task) => task.stateType !== "backlog");
   const done = tasks.length - open.length;
   return { open, active, done };
 }
 
-function activityStatus(tasks: ReportIssueInput[], today: string): ActivityStatus {
+function activityStatus(tasks: ProgressIssueInput[], today: string): ActivityStatus {
   if (tasks.length === 0) return "タスク未登録";
   const { open, active } = partition(tasks);
   if (open.length === 0) return "完了";

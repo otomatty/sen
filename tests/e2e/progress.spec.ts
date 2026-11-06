@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { addDays, isValidYmd, todayYmd } from "../../shared/dates";
-import { summarizeProgress, type ProgressActivity, type ReportInput, type ReportIssueInput } from "../../shared/progress";
+import { summarizeProgress, type ProgressActivity, type ProgressInput, type ProgressIssueInput } from "../../shared/progress";
 import type { BootstrapPayload, Mutation, ProgressStartedResponse, StateType } from "../../shared/types";
 import { devSignIn, newUserPage, seedDemo, signupViaUi } from "./helpers";
 
@@ -150,7 +150,7 @@ test("ほかのワークスペースのメンバーでないユーザーは着�
   await context.close();
 });
 
-function reportInputFromBootstrap(data: BootstrapPayload): ReportInput {
+function progressInputFromBootstrap(data: BootstrapPayload): ProgressInput {
   const projects = data.projects.filter((project) => !project.archivedAt).sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
   const projectIds = new Set(projects.map((project) => project.id));
   const teamKey = new Map(data.teams.map((team) => [team.id, team.key]));
@@ -188,7 +188,7 @@ async function loadSummary(page: Page, ws: string) {
   const bootRes = await page.request.get(`/api/bootstrap?ws=${encodeURIComponent(ws)}`);
   if (!bootRes.ok()) throw new Error(`bootstrap が失敗しました (${bootRes.status()}): ${await bootRes.text()}`);
   const data = (await bootRes.json()) as BootstrapPayload;
-  return { data, summary: summarizeProgress(reportInputFromBootstrap(data)) };
+  return { data, summary: summarizeProgress(progressInputFromBootstrap(data)) };
 }
 
 async function expectActivityRow(page: Page, activity: ProgressActivity) {
@@ -1055,7 +1055,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 const RULE_TODAY = "2026-11-10";
 
-function sampleIssue(partial: Pick<ReportIssueInput, "id" | "projectId" | "stateType"> & Partial<ReportIssueInput>): ReportIssueInput {
+function sampleIssue(partial: Pick<ProgressIssueInput, "id" | "projectId" | "stateType"> & Partial<ProgressIssueInput>): ProgressIssueInput {
   return {
     identifier: "ENG-1",
     title: "課題",
@@ -1069,7 +1069,7 @@ function sampleIssue(partial: Pick<ReportIssueInput, "id" | "projectId" | "state
   };
 }
 
-function sampleInput(projects: ReportInput["projects"], issues: ReportIssueInput[]): ReportInput {
+function sampleInput(projects: ProgressInput["projects"], issues: ProgressIssueInput[]): ProgressInput {
   return {
     today: RULE_TODAY,
     projects,
@@ -1125,7 +1125,7 @@ test.describe("集計ルール", () => {
     expect(almost.activities[0]?.completionRate).toBe("99%（199/200）");
 
     for (const done of [29, 57, 58]) {
-      const report = summarizeProgress(
+      const summary = summarizeProgress(
         sampleInput(
           [{ id: "p", name: "P" }],
           Array.from({ length: 100 }, (_, index) =>
@@ -1138,7 +1138,7 @@ test.describe("集計ルール", () => {
           ),
         ),
       );
-      expect(report.activities[0]?.completionRate).toBe(`${done}%（${done}/100）`);
+      expect(summary.activities[0]?.completionRate).toBe(`${done}%（${done}/100）`);
     }
   });
 
@@ -1190,7 +1190,7 @@ test.describe("集計ルール", () => {
   });
 
   test("キャンセルした課題は WBS にも完了率にも入らない", () => {
-    const report = summarizeProgress(
+    const summary = summarizeProgress(
       sampleInput(
         [{ id: "p", name: "P" }],
         [
@@ -1200,12 +1200,12 @@ test.describe("集計ルール", () => {
         ],
       ),
     );
-    expect(report.activities[0]?.completionRate).toBe("50%（1/2）");
-    expect(report.tasks.map((task) => task.id).sort()).toEqual(["done", "open"]);
+    expect(summary.activities[0]?.completionRate).toBe("50%（1/2）");
+    expect(summary.tasks.map((task) => task.id).sort()).toEqual(["done", "open"]);
   });
 
   test("工程と優先度の表示名", () => {
-    const report = summarizeProgress(
+    const summary = summarizeProgress(
       sampleInput(
         [{ id: "p", name: "P" }],
         [
@@ -1220,7 +1220,7 @@ test.describe("集計ルール", () => {
         ],
       ),
     );
-    const done = report.tasks.find((task) => task.id === "done");
+    const done = summary.tasks.find((task) => task.id === "done");
     expect(done?.process).toBe("企画・設計／開発・検証");
     expect(done?.processes).toEqual(["企画・設計", "開発・検証"]);
     expect(done?.priorityLabel).toBe("なし");
@@ -1228,7 +1228,7 @@ test.describe("集計ルール", () => {
   });
 
   test("WBS はプロジェクトの順、期日（未設定は後ろ）、番号の順", () => {
-    const report = summarizeProgress(
+    const summary = summarizeProgress(
       sampleInput(
         [
           { id: "p1", name: "先" },
@@ -1245,7 +1245,7 @@ test.describe("集計ルール", () => {
         ],
       ),
     );
-    expect(report.tasks.map((task) => task.id)).toEqual([
+    expect(summary.tasks.map((task) => task.id)).toEqual([
       "due-earliest",
       "due-early-num",
       "due-later-num",

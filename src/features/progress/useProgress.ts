@@ -43,7 +43,7 @@ export function useProgress(): ProgressModel {
       .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
     const projectIds = new Set(projectList.map((project) => project.id));
     const assigneeIdByIssue = new Map<string, string | null>();
-    const reportIssues = Object.values(issues)
+    const progressIssues = Object.values(issues)
       .filter((issue) => !issue.archivedAt && issue.projectId && projectIds.has(issue.projectId))
       .map((issue) => {
         assigneeIdByIssue.set(issue.id, issue.assigneeId);
@@ -70,7 +70,7 @@ export function useProgress(): ProgressModel {
     const summary = summarizeProgress({
       today,
       projects: projectList.map((project) => ({ id: project.id, name: project.name })),
-      issues: reportIssues,
+      issues: progressIssues,
     });
     return {
       activities: summary.activities,
