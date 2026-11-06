@@ -310,6 +310,7 @@ async function main(): Promise<void> {
     check(seeded.state, "未着手がありません");
     await scenarioComment(db, seeded);
     await scenarioIssue(db, seeded);
+    await scenarioAssigneeRecoveredWithoutLogin(db, seeded);
     await scenarioWebhookBeforeRetry(db, seeded);
     await scenarioImport(db, seeded);
     await scenarioWaitingComment(db, seeded);
@@ -376,6 +377,63 @@ async function scenarioIssue(db: D1Database, seeded: Awaited<ReturnType<typeof s
   const link = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", issue);
   check(link?.number === githubMock.issues[0]?.number, "A2: 課題と紐づいていない");
   check(!(await q(db, "SELECT target_id FROM github_sync_attempts WHERE kind = 'issue' AND target_id = ?", issue)), "A2: 試行の記録が残っている");
+}
+
+async function scenarioAssigneeRecoveredWithoutLogin(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const login = "octocat";
+  const issue = "1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a";
+  await exec(db, "UPDATE users SET github_login = ? WHERE id = ?", login, seeded.user);
+  try {
+    await insertIssue(db, {
+      id: issue,
+      ws: seeded.ws,
+      team: seeded.team,
+      state: seeded.state,
+      user: seeded.user,
+      number: 21,
+      title: "担当者が戻る Issue",
+      description: "担当者つきで一度失敗する",
+    });
+    await exec(db, "UPDATE issues SET assignee_id = ? WHERE id = ?", seeded.user, issue);
+    const ctx = ctxFor(db, seeded.ws, []);
+    githubMock.rejectAssignees = true;
+    githubMock.loseOnce = { method: "POST", suffix: "/issues" };
+    let lost = false;
+    try {
+      await reconcileIssue(ctx, { issueId: issue });
+    } catch {
+      lost = true;
+    }
+    check(lost, "H1: 応答の喪失で失敗していない");
+    check(githubMock.issues.length === 1, "H1: Issue が 1 件ではない");
+    check((githubMock.issues[0]?.assignees.length ?? -1) === 0, "H1: 担当者なしの作成になっていない");
+    check(posts("/issues") === 2, "H1: 担当者つきと担当者なしの 2 回になっていない");
+    check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "H1: 失ったのに紐づいている");
+    githubMock.rejectAssignees = false;
+    await reconcileIssue(ctx, { issueId: issue });
+    check(githubMock.issues.length === 1, "H1: やり直しで Issue が増えた");
+    check(posts("/issues") === 2, "H1: やり直しで Issue を作り直した");
+    const link = await q<{ number: number; base_assignee: string | null }>(
+      db,
+      "SELECT number, base_assignee FROM github_issue_links WHERE issue_id = ?",
+      issue,
+    );
+    check(link?.number === githubMock.issues[0]?.number, "H1: 課題と紐づいていない");
+    check(link?.base_assignee == null, `H1: 担当者の base が null ではない (${link?.base_assignee})`);
+    const sen = await q<{ assignee_id: string | null }>(db, "SELECT assignee_id FROM issues WHERE id = ?", issue);
+    check(sen?.assignee_id === seeded.user, "H1: 紐づけで Sen の担当者が消えた");
+    await reconcileIssue(ctx, { issueId: issue });
+    const after = await q<{ assignee_id: string | null }>(db, "SELECT assignee_id FROM issues WHERE id = ?", issue);
+    check(after?.assignee_id === seeded.user, "H1: 次の突き合わせで Sen の担当者が消えた");
+    check(
+      githubMock.issues[0]?.assignees.some((user) => user.login.toLowerCase() === login) === true,
+      "H1: 次の突き合わせで担当者が送られていない",
+    );
+  } finally {
+    await exec(db, "UPDATE users SET github_login = NULL WHERE id = ?", seeded.user);
+    githubMock.rejectAssignees = false;
+  }
 }
 
 async function scenarioImport(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

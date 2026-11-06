@@ -470,13 +470,16 @@ async function createFromSen(
   if (senLogin) write.assignees = [senLogin];
   let remote: GhIssue;
   let rejected: string | null = null;
+  let foundExisting = false;
   if (opts.found) {
     remote = opts.found;
+    foundExisting = true;
   } else {
     const attemptedAt = await readAttempt(ctx.env.DB, "issue", issue.id);
     const recovered = attemptedAt != null ? await findCreatedIssue(ctx, cfg, parts.owner, parts.repo, repo, issue, attemptedAt) : null;
     if (recovered) {
       remote = recovered;
+      foundExisting = true;
     } else {
       if (attemptedAt == null) await writeAttempt(ctx.env.DB, "issue", issue.id, ctx.workspaceId, Date.now());
       try {
@@ -489,6 +492,8 @@ async function createFromSen(
       }
     }
   }
+  // 見つけた Issue に senLogin がいないのに base を senLogin にすると、次の突き合わせが Sen の担当者を消す。
+  const assigneeBase = foundExisting ? foundAssigneeBase(remote, senLogin) : senLogin;
   const senState = senSyncState(issue.state_type, issue.state_name);
   if (senState !== "open") {
     try {
@@ -498,14 +503,14 @@ async function createFromSen(
         state_reason: stateWrite.state_reason,
       });
     } catch (e) {
-      await insertLink(ctx.env.DB, ctx.workspaceId, draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected));
+      await insertLink(ctx.env.DB, ctx.workspaceId, draftFrom(issue, repo, remote, final, rejected ? null : assigneeBase, rejected));
       await clearAutoCreateSkip(ctx.env.DB, issue.id);
       await clearAttempt(ctx.env.DB, "issue", issue.id);
       await enqueueUnsentComments(ctx, issue.id);
       throw e;
     }
   }
-  const draft = draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected);
+  const draft = draftFrom(issue, repo, remote, final, rejected ? null : assigneeBase, rejected);
   await insertLink(ctx.env.DB, ctx.workspaceId, draft);
   await clearAutoCreateSkip(ctx.env.DB, issue.id);
   await clearAttempt(ctx.env.DB, "issue", issue.id);
@@ -856,6 +861,13 @@ function fail(message: string, status = 400): never {
 
 function assigneeError(login: string): string {
   return `担当者を GitHub に反映できませんでした（${login}）`;
+}
+
+/** 見つけた Issue の assignees に senLogin がいるときだけ、そのログインを返す */
+function foundAssigneeBase(remote: GhIssue, senLogin: string | null): string | null {
+  if (!senLogin) return null;
+  const want = senLogin.toLowerCase();
+  return (remote.assignees ?? []).some((user) => user.login.toLowerCase() === want) ? senLogin : null;
 }
 
 function failedAssignee(error: string | null): string | null {

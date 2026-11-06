@@ -411,14 +411,14 @@ test("順番待ちは印を消さず、受け付けは処理を待たない", as
 
 test("送信と取り込みのやり直しは重複も消失もしない", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts"], { cwd: root, encoding: "utf8" });
-  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts"], { cwd: root, encoding: "utf8", timeout: 120_000 });
+  if (run.status !== 0) throw new Error([run.error?.message, run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
 test("アラームは GitHub の nextAt だけに合い、以前の連携の状態は消える", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const run = spawnSync("bun", ["tests/e2e/github-runner.spec.ts", "--alarm-child"], { cwd: root, encoding: "utf8" });
-  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+  const run = spawnSync("bun", ["tests/e2e/github-runner.spec.ts", "--alarm-child"], { cwd: root, encoding: "utf8", timeout: 120_000 });
+  if (run.status !== 0) throw new Error([run.error?.message, run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
 test("二次レート制限は権限エラーにせず、retry-after まで待つ", async () => {
@@ -550,8 +550,8 @@ test("retry-after が無い 429 は x-ratelimit-reset まで待つ", async () =>
 
 test("突き合わせが途中で失敗しても、入れた順番待ちのアラームが鳴る", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--reconcile-alarm"], { cwd: root, encoding: "utf8" });
-  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--reconcile-alarm"], { cwd: root, encoding: "utf8", timeout: 120_000 });
+  if (run.status !== 0) throw new Error([run.error?.message, run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
 test("Issue とコメントの一覧は古い順に 3,000 件で打ち切る", async () => {
@@ -604,8 +604,8 @@ test("Issue とコメントの一覧は古い順に 3,000 件で打ち切る", a
 
 test("更新された PR が 3,000 件を超えても、古い PR を Issue の一覧から順番待ちに入れる", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--pull-truncate"], { cwd: root, encoding: "utf8" });
-  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--pull-truncate"], { cwd: root, encoding: "utf8", timeout: 120_000 });
+  if (run.status !== 0) throw new Error([run.error?.message, run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
 function mockIssue(number: number, fullName: string, updatedAt: string) {
