@@ -200,6 +200,25 @@ export function ActivityLine({ a }: { a: Activity }) {
       }
       break;
     }
+    case "github": {
+      const repo = typeof d.repo === "string" ? d.repo : "";
+      const number = typeof d.number === "number" || typeof d.number === "string" ? String(d.number) : "";
+      const label = `${repo}#${number}`;
+      const rawUrl = typeof d.url === "string" ? d.url : "";
+      const href = rawUrl.startsWith("https://") ? rawUrl : "";
+      const ref = href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="act-issue">
+          {label}
+        </a>
+      ) : (
+        <b>{label}</b>
+      );
+      if (d.action === "created") body = <>{actor}が GitHub に {ref} を作りました</>;
+      else if (d.action === "imported") body = <>{actor}が GitHub の {ref} から作りました</>;
+      else if (d.action === "linked") body = <>{actor}が GitHub の {ref} と紐づけました</>;
+      else if (d.action === "unlinked") body = <>{actor}が GitHub の {ref} との紐づけを外しました</>;
+      break;
+    }
   }
   return (
     <div className="activity-line" data-testid="activity-line">
@@ -241,8 +260,14 @@ export function CommentCard({ c }: { c: Comment }) {
   return (
     <div className="comment" data-testid="comment">
       <div className="comment-head">
-        <Avatar user={user} size={20} />
-        <b>{user?.name ?? "（退出したメンバー）"}</b>{c.via && <ViaBadge via={c.via} />}
+        {c.githubAuthor ? (
+          <span className="avatar avatar-github" data-testid="github-comment-avatar" title={`@${c.githubAuthor}（GitHub）`} style={{ width: 20, height: 20 }}>
+            GH
+          </span>
+        ) : (
+          <Avatar user={user} size={20} />
+        )}
+        <b>{c.githubAuthor ? `@${c.githubAuthor}（GitHub）` : (user?.name ?? "（退出したメンバー）")}</b>{c.via && <ViaBadge via={c.via} />}
         <span className="muted" title={formatDateTime(c.createdAt)}>
           {timeAgo(c.createdAt)}
           {c.editedAt ? "（編集済み）" : ""}

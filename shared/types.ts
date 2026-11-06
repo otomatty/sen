@@ -22,6 +22,8 @@ export interface User {
   email: string;
   avatarColor: string;
   role: Role;
+  /** プロフィールに登録した GitHub のユーザー名（小文字）。未登録は null */
+  githubLogin: string | null;
   createdAt: number;
 }
 
@@ -77,6 +79,46 @@ export interface Label {
   id: string;
   name: string;
   color: string;
+}
+
+/** チームと GitHub リポジトリの対応。id は teamId（同期エンジンが id で引く） */
+export interface GitHubRepo {
+  id: string;
+  teamId: string;
+  /** owner/name */
+  repo: string;
+  linkedAt: number;
+  hook: "auto" | "manual";
+  prDraftStateId: string | null;
+  prOpenStateId: string | null;
+  prMergedStateId: string | null;
+}
+
+/** 課題と GitHub Issue の紐づけ。id は issueId */
+export interface GitHubLink {
+  id: string;
+  issueId: string;
+  /** owner/name */
+  repo: string;
+  number: number;
+  url: string;
+  syncedAt: number | null;
+  lastError: string | null;
+}
+
+export type GitHubPullState = "draft" | "open" | "merged" | "closed";
+
+/** 課題とプルリクエストの紐づけ */
+export interface GitHubPull {
+  id: string;
+  issueId: string;
+  /** owner/name */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  state: GitHubPullState;
+  author: string | null;
 }
 
 export interface Project {
@@ -156,6 +198,8 @@ export interface Comment {
   editedAt: number | null;
   /** AI ツールから行った操作のとき、そのツールの名前（例: "Claude Code"） */
   via?: string | null;
+  /** GitHub から来たコメントで、書いた人がメンバーに結び付かないときの GitHub ユーザー名 */
+  githubAuthor?: string | null;
 }
 
 export type ActivityType =
@@ -173,7 +217,8 @@ export type ActivityType =
   | "team"
   | "archived"
   | "restored"
-  | "relation";
+  | "relation"
+  | "github";
 
 export interface Activity {
   id: string;
@@ -213,7 +258,10 @@ export type EntityName =
   | "issue"
   | "comment"
   | "activity"
-  | "notification";
+  | "notification"
+  | "githubRepo"
+  | "githubLink"
+  | "githubPull";
 
 export interface SyncChange {
   id: number;
@@ -236,6 +284,10 @@ export interface BootstrapPayload {
   cycles: Cycle[];
   issues: Issue[];
   notifications: AppNotification[];
+  /** 連携の対象でないワークスペースでは空 */
+  githubRepos: GitHubRepo[];
+  githubLinks: GitHubLink[];
+  githubPulls: GitHubPull[];
   lastSyncId: number;
 }
 
@@ -337,7 +389,7 @@ export type Mutation =
   | { type: "notification.markAllRead"; args: Record<string, never> }
   | { type: "workspace.update"; args: { name?: string } }
   | { type: "workspace.setAllowedDomains"; args: { domains: string[] } }
-  | { type: "user.update"; args: { name?: string; avatarColor?: string; settings?: UserSettings } }
+  | { type: "user.update"; args: { name?: string; avatarColor?: string; settings?: UserSettings; githubLogin?: string | null } }
   | {
       type: "user.updateSettings";
       args: {
@@ -449,6 +501,31 @@ export interface ApiTokenCreateResponse {
   /** 発行したトークン（この応答でしか返さない） */
   secret: string;
   mcpUrl: string;
+}
+
+/** GET /api/github/status の応答。トークンと Webhook の secret は含めない */
+export interface GitHubStatus {
+  /** このワークスペースが連携の対象か */
+  enabled: boolean;
+  /** トークンの GitHub ユーザー名。まだ取得していない、または無効なときは null */
+  login: string | null;
+  /** トークンが無効、または利用制限に達しているときの説明。無ければ null */
+  error: string | null;
+  /** Webhook の受け口。対象でないときは空文字 */
+  webhookUrl: string;
+}
+
+export interface GitHubRepoLinkRequest {
+  teamId: string;
+  /** owner/name */
+  repo: string;
+}
+
+/** null は「変えない」。省略した項目は今の値のまま */
+export interface GitHubRepoPatch {
+  prDraftStateId?: string | null;
+  prOpenStateId?: string | null;
+  prMergedStateId?: string | null;
 }
 
 /** GET /api/progress/started の応答。課題 ID → 日本時間の着手日 'YYYY-MM-DD'（無い課題は含めない） */

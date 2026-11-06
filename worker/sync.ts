@@ -5,6 +5,9 @@ import {
   toActivity,
   toComment,
   toCycle,
+  toGithubLink,
+  toGithubPull,
+  toGithubRepo,
   toIssue,
   toLabel,
   toNotification,
@@ -25,7 +28,7 @@ export interface Change {
   userId?: string | null;
 }
 
-const TABLE: Record<Exclude<EntityName, "user" | "workspace">, [string, (r: never) => unknown]> = {
+const TABLE: Record<Exclude<EntityName, "user" | "workspace" | "githubRepo" | "githubLink" | "githubPull">, [string, (r: never) => unknown]> = {
   team: ["teams", toTeam as never],
   state: ["workflow_states", toState as never],
   label: ["labels", toLabel as never],
@@ -50,6 +53,36 @@ export async function loadEntity(db: D1Database, workspaceId: string, entity: En
       id,
     );
     return r ? toUser(r) : null;
+  }
+  if (entity === "githubRepo") {
+    const r = await first<Record<string, unknown>>(
+      db,
+      "SELECT * FROM github_repos WHERE team_id = ? AND workspace_id = ?",
+      id,
+      workspaceId,
+    );
+    return r ? toGithubRepo(r) : null;
+  }
+  if (entity === "githubLink") {
+    const r = await first<Record<string, unknown>>(
+      db,
+      `SELECT l.*, COALESCE(r.full_name, '') AS repo
+       FROM github_issue_links l
+       LEFT JOIN github_repos r ON r.repo_id = l.repo_id
+       WHERE l.issue_id = ? AND l.workspace_id = ?`,
+      id,
+      workspaceId,
+    );
+    return r ? toGithubLink(r) : null;
+  }
+  if (entity === "githubPull") {
+    const r = await first<Record<string, unknown>>(
+      db,
+      "SELECT * FROM github_pull_links WHERE id = ? AND workspace_id = ?",
+      id,
+      workspaceId,
+    );
+    return r ? toGithubPull(r) : null;
   }
   const [table, fn] = TABLE[entity];
   const r = await first<never>(db, `SELECT * FROM ${table} WHERE id = ?`, id);

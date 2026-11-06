@@ -6,6 +6,7 @@ import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
 import defaultWorkspaceSql from "../migrations/0006_default_workspace.sql?raw";
 import invitationsSql from "../migrations/0007_invitations.sql?raw";
 import assistantUsageSql from "../migrations/0008_assistant_usage.sql?raw";
+import githubSql from "../migrations/0010_github.sql?raw";
 // sync.ts は db.ts を import する。writeChanges は移行の関数の中でしか呼ばないので、循環しても読み込み時には問題にならない。
 import { migrateBodiesToMarkdown } from "./markdown-migration";
 import { writeChanges } from "./sync";
@@ -60,6 +61,7 @@ const MIGRATIONS: Migration[] = [
         writeChanges(db, wsId, [{ entity: "workspace", entityId: wsId, op: "upsert" }]),
       ),
   },
+  { name: "0010_github.sql", sql: githubSql },
 ];
 
 export function splitSql(sql: string): string[] {
@@ -99,6 +101,12 @@ async function migrate(db: D1Database) {
     }
     const statements = splitSql(m.sql).map((s) => db.prepare(s));
     statements.push(db.prepare("INSERT OR IGNORE INTO d1_migrations (name) VALUES (?)").bind(m.name));
-    await db.batch(statements);
+    try {
+      await db.batch(statements);
+    } catch (e) {
+      // 別の Worker が同じ SQL を終えていれば、列の重複で落ちても続ける
+      const done = await first<{ name: string }>(db, "SELECT name FROM d1_migrations WHERE name = ?", m.name);
+      if (!done) throw e;
+    }
   }
 }

@@ -8,6 +8,7 @@ import type {
   ApiTokenListResponse,
   BootstrapPayload,
   DeviceAccount,
+  GitHubRepoPatch,
   MutateRequest,
   MutateResponse,
   Mutation,
@@ -24,6 +25,9 @@ import {
   toActivity,
   toComment,
   toCycle,
+  toGithubLink,
+  toGithubPull,
+  toGithubRepo,
   toIssue,
   toLabel,
   toNotification,
@@ -47,6 +51,10 @@ import {
   resendInvitation,
 } from "./invitations";
 import { loadStartedOn } from "./progress";
+import { scheduleGitHubSync, isGitHubTarget } from "./github/config";
+import { handleGitHubWebhook } from "./github/webhook";
+import { requestGitHubIssueOp, requestWorkspaceGitHubReconcile } from "./github/issues";
+import { linkGitHubRepo, readGitHubStatus, unlinkGitHubRepo, updateGitHubRepo } from "./github/repos";
 
 function err(c: Context, message: string, status = 400) {
   return c.json({ error: message }, status as 400);
@@ -82,7 +90,9 @@ export function createApp() {
   // /api/mcp は Cookie を使わず API トークンだけで認証するので対象外。MCP クライアントは x-sen-client を送らない。
   app.use("*", async (c, next) => {
     await ensureMigrated(c.env.DB);
-    if (c.req.path !== "/api/mcp" && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
+    // /api/github/webhook は GitHub からの POST。セッションも x-sen-client も無い。
+    const csrfExempt = c.req.path === "/api/mcp" || c.req.path === "/api/github/webhook";
+    if (!csrfExempt && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
       return err(c, "不正なリクエストです", 403);
     }
     c.header("Cache-Control", "no-store");
@@ -291,7 +301,8 @@ export function createApp() {
     const user = c.get("user");
     // 先に syncId を取ってから読む（読んでいる間の変更は次の差分取得で拾える）
     const lastSyncId = await getLastSyncId(db, ws.id);
-    const [users, teams, states, labels, projects, cycles, issues, notifications, workspaces] = await Promise.all([
+    const githubOn = isGitHubTarget(c.env, ws.url_key);
+    const [users, teams, states, labels, projects, cycles, issues, notifications, workspaces, githubRepos, githubLinks, githubPulls] = await Promise.all([
       all<never>(db, "SELECT u.*, m.role FROM users u JOIN members m ON m.user_id = u.id WHERE m.workspace_id = ? ORDER BY m.created_at", ws.id),
       all<never>(db, "SELECT * FROM teams WHERE workspace_id = ? ORDER BY created_at", ws.id),
       all<never>(db, "SELECT * FROM workflow_states WHERE workspace_id = ?", ws.id),
@@ -306,6 +317,18 @@ export function createApp() {
         user.id,
       ),
       listWorkspaces(c, user.id, user.email),
+      githubOn ? all<never>(db, "SELECT * FROM github_repos WHERE workspace_id = ?", ws.id) : Promise.resolve([]),
+      githubOn
+        ? all<never>(
+            db,
+            `SELECT l.*, COALESCE(r.full_name, '') AS repo
+             FROM github_issue_links l
+             LEFT JOIN github_repos r ON r.repo_id = l.repo_id
+             WHERE l.workspace_id = ?`,
+            ws.id,
+          )
+        : Promise.resolve([]),
+      githubOn ? all<never>(db, "SELECT * FROM github_pull_links WHERE workspace_id = ?", ws.id) : Promise.resolve([]),
     ]);
     const payload: BootstrapPayload = {
       me: { ...user, role: c.get("role") },
@@ -319,6 +342,9 @@ export function createApp() {
       cycles: cycles.map(toCycle),
       issues: issues.map(toIssue),
       notifications: notifications.map(toNotification),
+      githubRepos: githubRepos.map(toGithubRepo),
+      githubLinks: githubLinks.map(toGithubLink),
+      githubPulls: githubPulls.map(toGithubPull),
       lastSyncId,
     };
     return c.json(payload);
@@ -385,6 +411,7 @@ export function createApp() {
     const lastSyncId = await writeChanges(c.env.DB, ctx.ws.id, ctx.changes);
     if (ctx.changes.length) {
       c.executionCtx?.waitUntil?.(notifyRealtime(c.env, ctx.ws.id, lastSyncId));
+      c.executionCtx?.waitUntil?.(scheduleGitHubSync(c.env, ctx.ws, ctx.changes, null));
     }
     return c.json({ results, lastSyncId } satisfies MutateResponse);
   });
@@ -424,6 +451,48 @@ export function createApp() {
     return stub.fetch(new Request("https://realtime/connect", c.req.raw));
   });
 
+  // ---------------- GitHub 連携 ----------------
+  app.post("/github/webhook", (c) => handleGitHubWebhook(c.req.raw, c.env));
+
+  app.get("/github/status", requireUser, requireWorkspace, async (c) => {
+    return c.json(await readGitHubStatus(c.env, c.get("workspace"), publicOrigin(c)));
+  });
+
+  app.post("/github/repos", requireUser, requireWorkspace, async (c) => {
+    const body = await readJson<{ teamId?: unknown; repo?: unknown }>(c);
+    const repo = await linkGitHubRepo(c.env, c.get("workspace"), c.get("user").id, c.get("role"), publicOrigin(c), body);
+    return c.json({ repo });
+  });
+
+  app.patch("/github/repos/:teamId", requireUser, requireWorkspace, async (c) => {
+    const patch = await readJson<GitHubRepoPatch>(c);
+    const repo = await updateGitHubRepo(c.env, c.get("workspace"), c.get("role"), c.req.param("teamId"), patch);
+    return c.json({ repo });
+  });
+
+  app.delete("/github/repos/:teamId", requireUser, requireWorkspace, async (c) => {
+    await unlinkGitHubRepo(c.env, c.get("workspace"), c.get("role"), c.req.param("teamId"));
+    return c.json({ ok: true });
+  });
+
+  // 課題の紐づけ。管理者でなくても、メンバーなら使える。GitHub への書き込みは Durable Object の中で行う。
+  app.post("/github/issues/:issueId/link", requireUser, requireWorkspace, async (c) => {
+    const body = await readJson<{ mode?: unknown; ref?: unknown; prefer?: unknown }>(c);
+    const mode = body.mode === "create" || body.mode === "link" ? body.mode : null;
+    if (!mode) return err(c, "要求が不正です", 400);
+    await requestGitHubIssueOp(c.env, c.get("workspace"), c.get("user").id, c.req.param("issueId"), {
+      action: mode,
+      ref: typeof body.ref === "string" ? body.ref : undefined,
+      prefer: body.prefer === "sen" || body.prefer === "github" ? body.prefer : undefined,
+    });
+    return c.json({ ok: true });
+  });
+
+  app.delete("/github/issues/:issueId/link", requireUser, requireWorkspace, async (c) => {
+    await requestGitHubIssueOp(c.env, c.get("workspace"), c.get("user").id, c.req.param("issueId"), { action: "unlink" });
+    return c.json({ ok: true });
+  });
+
   // ---------------- 進捗（メンバーなら誰でも） ----------------
   app.get("/progress/started", requireUser, requireWorkspace, async (c) => {
     const startedOn = await loadStartedOn(c.env.DB, c.get("workspace").id);
@@ -439,6 +508,12 @@ export function createApp() {
   }
 
   // ---------------- 開発用 ----------------
+  app.post("/dev/github/reconcile", requireUser, requireWorkspace, async (c) => {
+    if (c.env.DEV_TOOLS !== "1") return err(c, "無効です", 404);
+    await requestWorkspaceGitHubReconcile(c.env, c.get("workspace"));
+    return c.json({ ok: true });
+  });
+
   app.post("/dev/seed-demo", requireUser, requireWorkspace, async (c) => {
     if (c.env.DEV_TOOLS !== "1") return err(c, "無効です", 404);
     if (c.get("role") !== "admin") return err(c, "管理者のみ実行できます", 403);
