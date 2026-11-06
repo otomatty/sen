@@ -1,0 +1,167 @@
+import { isMarkdownBlank } from "../../../shared/markdown";
+import { readLocal } from "../../lib/utils";
+
+// 課題作成の下書き。ワークスペースとユーザーごとに、読み込み直しても残す。
+// メモリの控えは localStorage に保存できなかった下書きだけを持つ。保存できた下書きを控えに残すと、別のタブで作成・削除したあとによみがえるため。
+
+export interface Draft {
+  teamId: string;
+  title: string;
+  description: string;
+  stateId: string;
+  priority: number;
+  assigneeId: string | null;
+  labelIds: string[];
+  projectId: string | null;
+  cycleId: string | null;
+  estimate: number | null;
+  dueDate: string | null;
+  parentId: string | null;
+}
+
+const DRAFT_PREFIX = "sen:issue-draft:";
+const DRAFT_VERSION = 1;
+
+const memory = new Map<string, Draft>();
+
+function storageKey(workspaceId: string, userId: string): string {
+  return `${DRAFT_PREFIX}${workspaceId}:${userId}`;
+}
+
+function isUserDraftKey(key: string, userId: string): boolean {
+  return key.startsWith(DRAFT_PREFIX) && key.endsWith(`:${userId}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function draftHasContent(d: Partial<Draft> | null | undefined): boolean {
+  if (!d) return false;
+  if (typeof d.title === "string" && d.title.trim() !== "") return true;
+  return typeof d.description === "string" && !isMarkdownBlank(d.description);
+}
+
+function pickFields(raw: Record<string, unknown>): Partial<Draft> {
+  const out: Partial<Draft> = {};
+  if (typeof raw.title === "string") out.title = raw.title;
+  if (typeof raw.description === "string") out.description = raw.description;
+  if (typeof raw.teamId === "string") out.teamId = raw.teamId;
+  if (typeof raw.stateId === "string") out.stateId = raw.stateId;
+  if (typeof raw.priority === "number") out.priority = raw.priority;
+  if (typeof raw.assigneeId === "string" || raw.assigneeId === null) out.assigneeId = raw.assigneeId;
+  if (typeof raw.projectId === "string" || raw.projectId === null) out.projectId = raw.projectId;
+  if (typeof raw.cycleId === "string" || raw.cycleId === null) out.cycleId = raw.cycleId;
+  if (typeof raw.parentId === "string" || raw.parentId === null) out.parentId = raw.parentId;
+  if (typeof raw.dueDate === "string" || raw.dueDate === null) out.dueDate = raw.dueDate;
+  if (typeof raw.estimate === "number" || raw.estimate === null) out.estimate = raw.estimate;
+  if (Array.isArray(raw.labelIds) && raw.labelIds.every((id) => typeof id === "string")) out.labelIds = raw.labelIds;
+  return out;
+}
+
+/** 読めれば下書き、無いか壊れていれば undefined（呼び出し側がメモリの控えを使う） */
+function readStored(key: string): Partial<Draft> | undefined {
+  const raw = readLocal<unknown>(key, undefined);
+  if (!isRecord(raw) || raw.v !== DRAFT_VERSION || !isRecord(raw.draft)) return undefined;
+  return pickFields(raw.draft);
+}
+
+function forget(key: string) {
+  memory.delete(key);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // 消せなくても動作は続ける
+  }
+}
+
+export function loadIssueDraft(workspaceId: string, userId: string): Partial<Draft> | null {
+  const key = storageKey(workspaceId, userId);
+  const stored = readStored(key);
+  if (stored === undefined) {
+    const cached = memory.get(key);
+    return cached && draftHasContent(cached) ? cached : null;
+  }
+  return draftHasContent(stored) ? stored : null;
+}
+
+export function saveIssueDraft(workspaceId: string, userId: string, draft: Draft): void {
+  const key = storageKey(workspaceId, userId);
+  if (!draftHasContent(draft)) {
+    forget(key);
+    return;
+  }
+  try {
+    localStorage.setItem(key, JSON.stringify({ v: DRAFT_VERSION, draft }));
+    // 保存できた下書きは控えに残さない。別タブで作成・削除したあとによみがえるため
+    memory.delete(key);
+  } catch {
+    // 保存できなかった下書きだけメモリに残す。古い値が残ると読み込みがメモリの最新を隠すので消す
+    memory.set(key, draft);
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // 消せなくても動作は続ける
+    }
+  }
+}
+
+export function clearIssueDraft(workspaceId: string, userId: string): void {
+  forget(storageKey(workspaceId, userId));
+}
+
+export function clearAllIssueDrafts(): void {
+  memory.clear();
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(DRAFT_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // 消せなくても動作は続ける
+  }
+}
+
+/** localStorage に保存できず、このタブのメモリにだけある下書き（読み込み直すと消える）があれば true */
+export function hasUnsavedIssueDraft(): boolean {
+  for (const draft of memory.values()) {
+    if (draftHasContent(draft)) return true;
+  }
+  return false;
+}
+
+/** そのユーザーの下書きが、どのワークスペースでも、内容のある状態で残っていれば true */
+export function hasIssueDraftForUser(userId: string): boolean {
+  for (const [key, draft] of memory) {
+    if (isUserDraftKey(key, userId) && draftHasContent(draft)) return true;
+  }
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !isUserDraftKey(key, userId)) continue;
+      if (draftHasContent(readStored(key))) return true;
+    }
+  } catch {
+    // 読めなくても、メモリで見た結果を使う
+  }
+  return false;
+}
+
+/** そのユーザーの下書きを、どのワークスペースのものも、localStorage とメモリから消す */
+export function clearIssueDraftsForUser(userId: string): void {
+  for (const key of [...memory.keys()]) {
+    if (isUserDraftKey(key, userId)) memory.delete(key);
+  }
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && isUserDraftKey(key, userId)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // 消せなくても動作は続ける
+  }
+}

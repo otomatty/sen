@@ -13,6 +13,16 @@ import type { GitHubConfig } from "../../worker/github/config";
 import { GitHubSyncRunner, processors } from "../../worker/github/runner";
 import { GITHUB_PORT, GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
+if (process.argv.includes("--alarm-child")) {
+  try {
+    await runAlarmChild();
+  } catch (err) {
+    console.error(err instanceof Error ? (err.stack ?? err.message) : err);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 const MARK_DELAY_MS = 3_000;
 const SLOW_MS = 2_000;
 
@@ -54,6 +64,108 @@ function post(path: string, body: unknown): Request {
 
 function runner(storage: DurableObjectStorage, signal: () => Promise<void> = async () => {}): GitHubSyncRunner {
   return new GitHubSyncRunner(storage, {} as Env, signal);
+}
+
+/** WorkspaceRealtime のアラーム。シートの時刻は使わず、キー "sheets" は処理のときに消す */
+async function runAlarmChild(): Promise<void> {
+  const bunTest = (await import("bun:" + "test")) as {
+    mock: { module(specifier: string, factory: () => unknown): void };
+  };
+  bunTest.mock.module("cloudflare:workers", () => ({
+    DurableObject: class {
+      ctx: unknown;
+      env: unknown;
+      constructor(ctx: unknown, env: unknown) {
+        this.ctx = ctx;
+        this.env = env;
+      }
+    },
+  }));
+  const globals = globalThis as typeof globalThis & {
+    WebSocketRequestResponsePair: new (request: string, response: string) => unknown;
+    __SEN_DEMO__: boolean;
+  };
+  globals.WebSocketRequestResponsePair = class {
+    constructor(_request: string, _response: string) {}
+  };
+  globals.__SEN_DEMO__ = false;
+
+  const loaded = (await import(new URL("../../worker/index.ts", import.meta.url).href)) as {
+    WorkspaceRealtime: new (
+      ctx: { storage: DurableObjectStorage; setWebSocketAutoResponse: (pair: unknown) => void },
+      env: Env,
+    ) => { fetch(request: Request): Promise<Response>; alarm(): Promise<void> };
+  };
+  const clock = { now: 8_000_000_000 };
+  const realNow = Date.now;
+  Date.now = () => clock.now;
+  const saved = processors.issue;
+  try {
+    const storage = alarmStorage();
+    const sheetAt = clock.now + 500;
+    await storage.put("sheets", { nextAt: sheetAt, lastAttemptAt: null, lastSuccessAt: null, lastError: null, retries: 0, origin: null });
+    await storage.setAlarm(sheetAt);
+    const realtime = new loaded.WorkspaceRealtime({ storage, setWebSocketAutoResponse() {} }, {} as Env);
+    const marked = await realtime.fetch(
+      new Request("https://realtime/github/mark", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: "ws", issues: ["issue-1"] }),
+      }),
+    );
+    assertEqual(marked.status, 200);
+    const meta = await storage.get<{ nextAt: number | null }>("gh:meta");
+    assert(meta?.nextAt != null, "GitHub の nextAt が無い");
+    assertEqual(await storage.getAlarm(), meta.nextAt);
+    assert(meta.nextAt !== sheetAt, "アラームが以前の連携の時刻に合っている");
+    assert((await storage.get("sheets")) != null, "処理の前に sheets が消えている");
+
+    let ran = 0;
+    processors.issue = async () => {
+      ran += 1;
+    };
+    await realtime.alarm();
+    assertEqual(ran, 0);
+    assertEqual(await storage.get("sheets"), undefined);
+    assert(await storage.get("gh:dirty:issue:issue-1"), "期限前の順番待ちが消えている");
+    const waiting = await storage.get<{ nextAt: number | null }>("gh:meta");
+    assertEqual(await storage.getAlarm(), waiting?.nextAt ?? null);
+
+    clock.now = meta.nextAt;
+    await realtime.alarm();
+    assertEqual(ran, 1);
+    assertEqual(await storage.get("sheets"), undefined);
+    assertEqual(await storage.get("gh:dirty:issue:issue-1"), undefined);
+    assertEqual(await storage.getAlarm(), null);
+  } finally {
+    processors.issue = saved;
+    Date.now = realNow;
+  }
+}
+
+function alarmStorage(): DurableObjectStorage {
+  const map = new Map<string, unknown>();
+  let alarm: number | null = null;
+  return {
+    get: async <T>(key: string): Promise<T | undefined> => map.get(key) as T | undefined,
+    put: async (key: string, value: unknown): Promise<void> => {
+      map.set(key, value);
+    },
+    delete: async (key: string): Promise<boolean> => map.delete(key),
+    list: async <T>(options?: { prefix?: string }): Promise<Map<string, T>> => {
+      const out = new Map<string, T>();
+      for (const [key, value] of map) {
+        if (!options?.prefix || key.startsWith(options.prefix)) out.set(key, value as T);
+      }
+      return out;
+    },
+    getAlarm: async () => alarm,
+    setAlarm: async (time: number) => {
+      alarm = time;
+    },
+    deleteAlarm: async () => {
+      alarm = null;
+    },
+  } as unknown as DurableObjectStorage;
 }
 
 async function withProcessors(fn: () => Promise<void>): Promise<void> {
@@ -303,9 +415,9 @@ test("送信と取り込みのやり直しは重複も消失もしない", () =>
   if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
-test("前の版のシート予約は GitHub の予約でも残り、設定を外すとアラームが止まる", () => {
+test("アラームは GitHub の nextAt だけに合い、以前の連携の状態は消える", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const run = spawnSync("bun", ["tests/e2e/sheets-alarm.ts"], { cwd: root, encoding: "utf8" });
+  const run = spawnSync("bun", ["tests/e2e/github-runner.spec.ts", "--alarm-child"], { cwd: root, encoding: "utf8" });
   if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 

@@ -6,7 +6,6 @@ import type { AppEnv } from "../env";
 import { MutationError, type MutationCtx } from "../mutations";
 import { notifyRealtime, writeChanges } from "../sync";
 import { scheduleGitHubSync } from "../github/config";
-import { scheduleSheetSync } from "../sheets/config";
 import { authenticateApiToken, publicOrigin, type ApiTokenAuth } from "../tokens";
 import { openResolver, ToolError } from "./context";
 import { findTool, READ_ONLY_MESSAGE, toolDefinitions, type McpTool } from "./tools";
@@ -164,7 +163,6 @@ async function invokeTool(c: Context<AppEnv>, auth: ApiTokenAuth, tool: McpTool,
     if (mutation.changes.length > 0) {
       const lastSyncId = await writeChanges(c.env.DB, auth.ws.id, mutation.changes);
       c.executionCtx?.waitUntil?.(notifyRealtime(c.env, auth.ws.id, lastSyncId));
-      c.executionCtx?.waitUntil?.(scheduleSheetSync(c.env, auth.ws, mutation.changes, publicOrigin(c)));
       c.executionCtx?.waitUntil?.(scheduleGitHubSync(c.env, auth.ws, mutation.changes, auth.via));
     }
   }

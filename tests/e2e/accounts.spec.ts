@@ -332,6 +332,64 @@ test("書きかけのコメントがあるときは、アカウントを切り�
   await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
 });
 
+test("作成中の課題の下書きはアカウントごとに残り、切り替えるときは確かめない", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("次郎の下書き");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("create-title")).toBeHidden();
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("山田 花子", { timeout: 15_000 });
+  await expect(page.getByTestId("confirm-dialog")).toHaveCount(0);
+  await page.getByTestId("sidebar-create").click();
+  await expect(page.getByTestId("create-title")).toHaveValue("");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("create-title")).toBeHidden();
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "佐藤 次郎" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎", { timeout: 15_000 });
+  await page.getByTestId("sidebar-create").click();
+  await expect(page.getByTestId("create-title")).toHaveValue("次郎の下書き");
+});
+
+test("保存できなかった課題の下書きがあるときは、アカウントを切り替える前に確かめる", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith("sen:issue-draft:")) {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      return original.call(this, key, value);
+    };
+  });
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("保存できない下書き");
+  await page.keyboard.press("Escape");
+  await page.getByTestId("user-menu").click();
+  await accountRows(page).filter({ hasText: "山田 花子" }).click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("保存できなかった作成中の課題の下書き");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+});
+
+test("このアカウントからログアウトするときは、作成中の課題の下書きが消えるので確かめる", async ({ page }) => {
+  await signInTwoAccounts(page);
+  await waitForSynced(page);
+  await page.getByTestId("sidebar-create").click();
+  await page.getByTestId("create-title").fill("次郎の下書き");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("create-title")).toBeHidden();
+  await page.getByTestId("user-menu").click();
+  await page.getByTestId("user-menu-logout-current").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText("書きかけの内容があります");
+  await page.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("user-menu")).toContainText("佐藤 次郎");
+});
+
 test("ほかのタブに書きかけのコメントがあるときは、切り替える前に確かめる", async ({ page }) => {
   const { jiro } = await signInTwoAccounts(page);
   await waitForSynced(page);
@@ -373,7 +431,7 @@ test("知らせを受けたタブに書きかけのコメントがあるとき�
   await page.goto("/").catch((err: unknown) => {
     if (!String(err).includes("ERR_ABORTED")) throw err;
   });
-  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題があります", { timeout: 15_000 });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントがあります", { timeout: 15_000 });
   await expect(other.getByTestId("confirm-ok")).toHaveText("元のアカウントに戻す");
   await other.getByTestId("confirm-ok").click();
   await expect(other.getByTestId("user-menu")).toContainText("山田 花子");
@@ -579,13 +637,13 @@ test("書きかけだけのタブで元に戻すのに失敗したときは、�
   await page.goto("/").catch((err: unknown) => {
     if (!String(err).includes("ERR_ABORTED")) throw err;
   });
-  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題があります", { timeout: 15_000 });
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントがあります", { timeout: 15_000 });
   await other.route("**/api/accounts/switch", (route) =>
     route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "サーバーでエラーが発生しました" }) }),
   );
   await other.getByTestId("confirm-ok").click();
   await expect(other.getByTestId("confirm-dialog")).toContainText("元のアカウントに戻せませんでした");
-  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントや作成中の課題を捨てて");
+  await expect(other.getByTestId("confirm-dialog")).toContainText("書きかけのコメントを捨てて");
   await expect(other.getByTestId("confirm-dialog")).not.toContainText("0件");
   await other.unroute("**/api/accounts/switch");
   await other.getByTestId("confirm-ok").click();

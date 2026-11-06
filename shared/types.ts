@@ -503,18 +503,6 @@ export interface ApiTokenCreateResponse {
   mcpUrl: string;
 }
 
-/** スプレッドシート連携の状態（Durable Object が保持し、API が返す） */
-export interface SheetSyncStatus {
-  /** このワークスペースで連携が有効か */
-  enabled: boolean;
-  spreadsheetUrl?: string;
-  lastAttemptAt?: number | null;
-  lastSuccessAt?: number | null;
-  lastError?: string | null;
-  /** 反映の予約（アラーム）があるか */
-  pending?: boolean;
-}
-
 /** GET /api/github/status の応答。トークンと Webhook の secret は含めない */
 export interface GitHubStatus {
   /** このワークスペースが連携の対象か */

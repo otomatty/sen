@@ -11,19 +11,14 @@
  * 流れ: アプリをビルド → まっさらな DB でローカル起動 → デモデータを投入 →
  *       ヘッドレス Chromium で各シナリオを AI（スクリプト）が操作 → CDP で録画 → ffmpeg で MP4 化 →
  *       public/tutorials/ に動画・サムネイル・manifest.json を書き出す
- *
- * スプレッドシート連携のシナリオ（export const sheets = true）は、データの初期化のあとで
- * 模擬の Google に向けてサーバーを起動し直してから撮る。--url では撮れない。
  */
 import { spawn, spawnSync, execSync, type ChildProcess } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, request, type APIRequestContext, type Browser } from "playwright";
-import { googleMock, TUTORIAL_SHEETS_DELAY_MS, TUTORIAL_SPREADSHEET_ID } from "./lib/google-mock";
 import { overlayScript } from "./lib/overlay";
 import { ScreenRecorder } from "./lib/recorder";
 import { Director, PARK } from "./lib/director";
@@ -34,11 +29,7 @@ import { sourceHash } from "./lib/source-hash";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = path.join(ROOT, "public", "tutorials");
 const WORK_DIR = path.join(os.tmpdir(), "sen-tutorials");
-const DEV_VARS = path.join(ROOT, "dist", "sen", ".dev.vars");
 const PORT = Number(process.env.TUTORIAL_PORT ?? 4319);
-const GOOGLE_PORT = Number(process.env.TUTORIAL_GOOGLE_PORT ?? 4339);
-const TUTORIALS_BEGIN = "# >>> tutorials（収録が自動で書き足す。収録のたびに書き直す）";
-const TUTORIALS_END = "# <<< tutorials";
 const VIEWPORT = { width: 1280, height: 800 };
 const SCALE = 1.5;
 const VIDEO_WIDTH = 1600;
@@ -129,12 +120,10 @@ function spawnPreview(): ChildProcess {
   return proc;
 }
 
-/** fresh のときだけ保存先を消す。起動し直すときはアカウントとデータを残す */
-async function launchServer(fresh: boolean): Promise<void> {
-  if (fresh) {
-    await rm(path.join(WORK_DIR, "state"), { recursive: true, force: true });
-    log(`ローカルサーバーを起動しています（ポート ${PORT}、まっさらな DB）…`);
-  }
+/** 保存先を消してから起動する */
+async function launchServer(): Promise<void> {
+  await rm(path.join(WORK_DIR, "state"), { recursive: true, force: true });
+  log(`ローカルサーバーを起動しています（ポート ${PORT}、まっさらな DB）…`);
   serverProc = spawnPreview();
   await waitForServer(`http://localhost:${PORT}`);
 }
@@ -177,118 +166,15 @@ async function stopServer(): Promise<void> {
   await waitUntilDown(`http://localhost:${PORT}`, 20_000);
 }
 
-/** ビルドは最初の 1 回だけ。起動そのものは launchServer に分けて、あとから起動し直せる */
+/** ビルドは最初の 1 回だけ。起動そのものは launchServer に分ける */
 async function bootServer(): Promise<string> {
   if (urlArg) return urlArg.replace(/\/$/, "");
   if (!skipBuild) {
     log("アプリをビルドしています…");
     execSync("bunx vite build", { cwd: ROOT, stdio: "inherit" });
   }
-  // 最初は連携なしで起動する。前回の収録が書き足した設定が残っていても外す
-  await removeTutorialsBlock();
-  await launchServer(true);
+  await launchServer();
   return `http://localhost:${PORT}`;
-}
-
-function withoutTutorialsBlock(text: string): string {
-  const kept: string[] = [];
-  let skipping = false;
-  for (const raw of text.split("\n")) {
-    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-    if (!skipping && line === TUTORIALS_BEGIN) {
-      skipping = true;
-      continue;
-    }
-    if (skipping) {
-      if (line === TUTORIALS_END) skipping = false;
-      continue;
-    }
-    kept.push(line);
-  }
-  return kept.join("\n").replace(/\s*$/, "");
-}
-
-async function readDevVars(): Promise<string | null> {
-  try {
-    return await readFile(DEV_VARS, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/** マーカーで囲んだ連携の設定を取り除く。ファイルが無ければ何もしない */
-async function removeTutorialsBlock(): Promise<void> {
-  const current = await readDevVars();
-  if (current === null || !current.includes(TUTORIALS_BEGIN)) return;
-  const next = withoutTutorialsBlock(current);
-  await writeFile(DEV_VARS, next ? `${next}\n` : "");
-}
-
-let serviceAccountKey: string | null = null;
-
-/** 収録のたびに作り捨てる。鍵そのものはログに出さない */
-function tutorialServiceAccountKey(): string {
-  if (serviceAccountKey) return serviceAccountKey;
-  const { privateKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-    publicKeyEncoding: { type: "spki", format: "pem" },
-  });
-  // JSON は 1 行になる（改行は \n として入る）
-  serviceAccountKey = JSON.stringify({
-    type: "service_account",
-    client_email: "sen-tutorial@sen-tutorial.iam.gserviceaccount.com",
-    private_key: privateKey,
-  });
-  return serviceAccountKey;
-}
-
-/**
- * dist/sen/.dev.vars の末尾に連携の設定を書く。vite preview はここを読む。
- * 同じマーカーのブロックが残っていても、先に消してから 1 つだけ書き足す。
- */
-async function writeTutorialsBlock(ws: string): Promise<void> {
-  const origin = googleMock.origin;
-  if (!origin) throw new Error("模擬の Google が起動していません");
-  const body = withoutTutorialsBlock((await readDevVars()) ?? "");
-  const block = [
-    TUTORIALS_BEGIN,
-    // GOOGLE_API_ORIGIN_FOR_TESTS は DEV_TOOLS=1 のときだけ効く。.env に頼らず、このブロックだけで模擬の Google に向ける
-    "DEV_TOOLS=1",
-    `SHEETS_WORKSPACE=${ws}`,
-    `SHEETS_SPREADSHEET_ID=${TUTORIAL_SPREADSHEET_ID}`,
-    `SHEETS_SYNC_DELAY_MS=${TUTORIAL_SHEETS_DELAY_MS}`,
-    `GOOGLE_API_ORIGIN_FOR_TESTS=${origin}`,
-    `GOOGLE_SERVICE_ACCOUNT_KEY='${tutorialServiceAccountKey()}'`,
-    TUTORIALS_END,
-  ].join("\n");
-  await mkdir(path.dirname(DEV_VARS), { recursive: true });
-  await writeFile(DEV_VARS, body ? `${body}\n${block}\n` : `${block}\n`);
-}
-
-async function switchSheets(enable: boolean, ws: string): Promise<void> {
-  if (enable) {
-    // 初期化の操作で反映が予約されないよう、初期化のあとで連携を有効にする。
-    // 動画を「まだ反映していません」から始めるため。
-    googleMock.reset();
-    await writeTutorialsBlock(ws);
-    log("スプレッドシート連携を有効にしてサーバーを起動し直しています…");
-  } else {
-    await removeTutorialsBlock();
-    log("スプレッドシート連携を無効にしてサーバーを起動し直しています…");
-  }
-  await stopServer();
-  await launchServer(false);
-}
-
-async function reopenApi(current: APIRequestContext, base: string): Promise<APIRequestContext> {
-  const state = await current.storageState();
-  await current.dispose();
-  return request.newContext({
-    baseURL: base,
-    extraHTTPHeaders: { "x-sen-client": "1" },
-    storageState: state,
-  });
 }
 
 async function prepareAccount(api: APIRequestContext): Promise<string> {
@@ -312,16 +198,15 @@ async function resetData(api: APIRequestContext, ws: string, freshUser: boolean)
   });
 }
 
-type LoadedScenario = Scenario & { file: string; needsSheets: boolean };
+type LoadedScenario = Scenario & { file: string };
 
 async function loadScenarios(): Promise<LoadedScenario[]> {
   const dir = path.join(ROOT, "tutorials", "scenarios");
   const files = (await readdir(dir)).filter((f) => /\.tsx?$/.test(f)).sort();
   const list: LoadedScenario[] = [];
   for (const f of files) {
-    // export const sheets = true のシナリオは、スプレッドシート連携を有効にして撮る
-    const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default: Scenario; sheets?: boolean };
-    list.push({ ...mod.default, file: path.join(dir, f), needsSheets: mod.sheets === true });
+    const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default: Scenario };
+    list.push({ ...mod.default, file: path.join(dir, f) });
   }
   return list.sort((a, b) => a.order - b.order);
 }
@@ -373,27 +258,9 @@ async function main() {
     process.exit(1);
   }
 
-  let scenarios = (await loadScenarios()).filter((s) => !filters.length || filters.some((f) => s.id.includes(f)));
+  const scenarios = (await loadScenarios()).filter((s) => !filters.length || filters.some((f) => s.id.includes(f)));
   if (!scenarios.length) throw new Error("該当するシナリオがありません");
   const failures: string[] = [];
-  // --url では模擬の Google を使えない。初期化より前に外し、既存の課題などを消さない。
-  if (urlArg) {
-    const kept: LoadedScenario[] = [];
-    for (const s of scenarios) {
-      if (!s.needsSheets) {
-        kept.push(s);
-        continue;
-      }
-      const message = `${s.id}: スプレッドシート連携の動画は、ローカルで収録してください（--url では模擬の Google を使えません）`;
-      failures.push(message);
-      console.error(message);
-    }
-    scenarios = kept;
-    if (!scenarios.length) {
-      console.error(`\n収録に失敗したシナリオ:\n- ${failures.join("\n- ")}`);
-      process.exit(1);
-    }
-  }
   await mkdir(OUT_DIR, { recursive: true });
   await mkdir(WORK_DIR, { recursive: true });
   // 読み上げはビルドと起動のあいだに進める。最初の収録の前に待つ。
@@ -402,10 +269,6 @@ async function main() {
   let api: APIRequestContext | undefined;
   let browser: Browser | undefined;
   try {
-    if (!urlArg && scenarios.some((s) => s.needsSheets)) {
-      const origin = await googleMock.start(GOOGLE_PORT);
-      log(`模擬の Google を起動しました（${origin}）`);
-    }
     const base = await bootServer();
     api = await request.newContext({ baseURL: base, extraHTTPHeaders: { "x-sen-client": "1" } });
     const ws = await prepareAccount(api);
@@ -419,17 +282,10 @@ async function main() {
 
     browser = await chromium.launch({ args: ["--font-render-hinting=none", "--disable-lcd-text"] });
     await narrationReady;
-    // 最初のサーバーは連携なし。シナリオごとに、必要な状態と違えば起動し直す
-    let sheetsOn = false;
     for (const s of scenarios) {
       log(`収録中: ${s.order}. ${s.title}`);
       if (!api) throw new Error("API の準備ができていません");
       await resetData(api, ws, !!s.freshUser);
-      if (!urlArg && s.needsSheets !== sheetsOn) {
-        await switchSheets(s.needsSheets, ws);
-        sheetsOn = s.needsSheets;
-        api = await reopenApi(api, base);
-      }
       const context = await browser.newContext({
         baseURL: base,
         viewport: VIEWPORT,
@@ -523,16 +379,7 @@ async function main() {
   } finally {
     await browser?.close().catch(() => {});
     await api?.dispose().catch(() => {});
-    try {
-      await stopServer();
-    } finally {
-      try {
-        await googleMock.stop();
-      } finally {
-        // サーバーを止めたあと、模擬サーバー向けの設定を dist/ に残さない
-        await removeTutorialsBlock();
-      }
-    }
+    await stopServer();
   }
   if (failures.length) {
     console.error(`\n収録に失敗したシナリオ:\n- ${failures.join("\n- ")}`);

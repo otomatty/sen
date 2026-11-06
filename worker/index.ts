@@ -1,12 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { addDays, todayYmd } from "../shared/dates";
 import { createApp } from "./app";
-import { all, ensureMigrated, first, run } from "./db";
-import type { Env, WorkspaceRow } from "./env";
+import { all, ensureMigrated, run } from "./db";
+import type { Env } from "./env";
 import { requestGitHubReconcile } from "./github/issues";
 import { GitHubSyncRunner } from "./github/runner";
-import { requestSheetSyncNow, sheetsConfig } from "./sheets/config";
-import { SheetSyncRunner } from "./sheets/runner";
 
 const app = createApp();
 
@@ -53,13 +51,6 @@ export default {
     );
     // 7日より前の利用回数（日本時間の日付。YYYY-MM-DD なので文字列の比較で足りる）
     await run(env.DB, "DELETE FROM assistant_usage WHERE day < ?", addDays(todayYmd(), -7));
-    // スプレッドシートへ反映する（期限の超過など日付で変わる値の更新と、失敗した分のやり直し）。
-    // ここで失敗しても、上の掃除はすでに終わっている。
-    try {
-      await syncSheets(env);
-    } catch (e) {
-      console.error("sheets cron failed", e);
-    }
     // Webhook の重複除け。7 日より古い行を消す。失敗しても、下の突き合わせは頼む。
     try {
       await run(env.DB, "DELETE FROM github_deliveries WHERE received_at < ?", Date.now() - 7 * 86_400_000);
@@ -74,20 +65,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-/** 連携が有効なときだけ、対象ワークスペースの Durable Object に今すぐ反映を頼む */
-async function syncSheets(env: Env): Promise<void> {
-  const cfg = sheetsConfig(env);
-  if (!cfg) return;
-  const ws = await first<WorkspaceRow>(env.DB, "SELECT * FROM workspaces WHERE url_key = ?", cfg.workspaceKey);
-  if (!ws) {
-    console.error("SHEETS_WORKSPACE のワークスペースが見つかりません");
-    return;
-  }
-  // 公開 URL が設定されていればそれを渡す。無ければ Durable Object が保存している origin を使う。
-  const origin = env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ?? "";
-  await requestSheetSyncNow(env, ws.id, origin);
-}
-
 /**
  * ワークスペースごとのリアルタイム通知。
  * 変更内容そのものは送らず「新しい syncId がある」ことだけを知らせ、
@@ -95,29 +72,17 @@ async function syncSheets(env: Env): Promise<void> {
  * Hibernation API を使うので、接続が待機中の間は課金されない。
  */
 export class WorkspaceRealtime extends DurableObject<Env> {
-  private sheets: SheetSyncRunner;
   private github: GitHubSyncRunner;
   private alarmChain: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     const signal = () => this.syncAlarm();
-    this.sheets = new SheetSyncRunner(ctx.storage, env, signal);
-    this.github = new GitHubSyncRunner(ctx.storage, env, signal, async (origin) => {
-      await this.sheets.handle(
-        new Request("https://realtime/sheets/schedule", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ origin }),
-        }),
-      );
-    });
+    this.github = new GitHubSyncRunner(ctx.storage, env, signal);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
   async fetch(request: Request): Promise<Response> {
-    const sheets = await this.sheets.handle(request);
-    if (sheets) return sheets;
     const github = await this.github.handle(request);
     if (github) return github;
     const url = new URL(request.url);
@@ -142,13 +107,18 @@ export class WorkspaceRealtime extends DurableObject<Env> {
     return new Response("Not found", { status: 404 });
   }
 
+  /**
+   * GitHub の順番待ちの時刻になると呼ばれる。
+   * 以前のスプレッドシート連携が残した状態（キー "sheets"）があれば消す。シートの次の予約はしない。
+   * そのあと、GitHub の順番待ちを処理し、次のアラームを GitHub の nextAt に合わせる。
+   */
   async alarm() {
-    await this.sheets.alarm();
+    await this.ctx.storage.delete("sheets");
     await this.github.alarm();
     await this.syncAlarm();
   }
 
-  /** スプレッドシートと連携の、次の時刻の早い方にアラームを合わせる */
+  /** GitHub の次の時刻にアラームを合わせる */
   private syncAlarm(): Promise<void> {
     const run = this.alarmChain.then(() => this.writeAlarm(), () => this.writeAlarm());
     this.alarmChain = run.then(
@@ -159,12 +129,12 @@ export class WorkspaceRealtime extends DurableObject<Env> {
   }
 
   private async writeAlarm(): Promise<void> {
-    const times = [await this.sheets.nextAt(), await this.github.nextAt()].filter((t): t is number => t != null);
-    if (times.length === 0) {
+    const next = await this.github.nextAt();
+    if (next == null) {
       await this.ctx.storage.deleteAlarm();
       return;
     }
-    await this.ctx.storage.setAlarm(Math.min(...times));
+    await this.ctx.storage.setAlarm(next);
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {

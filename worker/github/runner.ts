@@ -20,7 +20,6 @@ export interface GitHubProcessorContext {
   enqueueComment: (commentId: string) => Promise<void>;
   /** 完了・キャンセルにした課題を、Sen 側の変更として突き合わせに戻す */
   enqueueIssue: (issueId: string) => Promise<void>;
-  scheduleSheets?: () => Promise<void>;
 }
 
 export interface GitHubProcessorJob {
@@ -105,8 +104,6 @@ export class GitHubSyncRunner {
     private storage: DurableObjectStorage,
     private env: Env,
     private signal: () => Promise<void>,
-    /** 同じ Durable Object のシート予約。自分へ fetch しない */
-    private localSheets?: (origin: string) => Promise<void>,
   ) {}
 
   async handle(request: Request): Promise<Response | null> {
@@ -398,14 +395,12 @@ export class GitHubSyncRunner {
   }
 
   private processorCtx(workspaceId: string): GitHubProcessorContext {
-    const origin = this.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ?? "";
     return {
       env: this.env,
       workspaceId,
       labelCache: this.labels,
       enqueueComment: (commentId) => this.enqueueComment(commentId),
       enqueueIssue: (issueId) => this.enqueueIssue(issueId),
-      scheduleSheets: this.localSheets ? () => this.localSheets!(origin) : undefined,
     };
   }
 

@@ -32,7 +32,6 @@ import { applyUpdate, installApp, isIOS, usePWA } from "../../app/pwa";
 import type { Me } from "../../../shared/types";
 import { AiSettings } from "./AiSettings";
 import { GitHubSection } from "./GitHubSettings";
-import { SheetsSection } from "./SheetsSettings";
 import { Field, Section } from "./parts";
 import { MembersSettings } from "./MembersSettings";
 
@@ -307,7 +306,6 @@ function WorkspaceSettings() {
           </Link>
         </div>
       </Section>
-      <SheetsSection />
       <GitHubSection />
       <DevTools />
     </>

@@ -16,7 +16,6 @@ export interface PullSyncCtx {
   env: Env;
   workspaceId: string;
   enqueueIssue: (issueId: string) => Promise<void>;
-  scheduleSheets?: () => Promise<void>;
 }
 
 interface RepoSettings {
@@ -208,7 +207,7 @@ async function rewritePullLinks(
     await run(ctx.env.DB, "DELETE FROM github_pull_links WHERE id = ? AND workspace_id = ?", row.id, ctx.workspaceId);
     changes.push({ entity: "githubPull", entityId: row.id, op: "delete" });
   }
-  await commitGitHubChanges(ctx.env, ws, changes, ctx.scheduleSheets);
+  await commitGitHubChanges(ctx.env, ws, changes);
 }
 
 /** 動かしたとき、移動先の種類を返す。動かさなければ null */
@@ -254,7 +253,6 @@ async function advanceIssue(
     ws,
     actor: actorHolder.current,
     via: "GitHub",
-    scheduleSheets: ctx.scheduleSheets,
     mutations: [mutation],
   });
   return target.type;

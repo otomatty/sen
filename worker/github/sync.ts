@@ -61,7 +61,6 @@ export interface SyncCtx {
   enqueueComment: (commentId: string) => Promise<void>;
   /** 突き合わせの途中で Sen が変わったとき、この課題を順番待ちに戻す */
   enqueueIssue?: (issueId: string) => Promise<void>;
-  scheduleSheets?: () => Promise<void>;
 }
 
 export interface IssueOp {
@@ -237,7 +236,6 @@ export async function pullComment(ctx: SyncCtx, payload: GitHubCommentEvent | nu
       via: "GitHub",
       now: Number.isFinite(createdAt) ? createdAt : Date.now(),
       githubComment: { author: member ? null : login },
-      scheduleSheets: ctx.scheduleSheets,
       mutations: [{ type: "comment.create", args: { id: commentId, issueId: link.issue_id, body } }],
     });
   }
@@ -531,7 +529,6 @@ async function importIfNew(
       env: ctx.env,
       ws,
       actor,
-      scheduleSheets: ctx.scheduleSheets,
       mutations: [
         {
           type: "issue.create",
@@ -683,7 +680,6 @@ async function reconcileLinked(
       ws,
       actor,
       via: opts.via,
-      scheduleSheets: ctx.scheduleSheets,
       expectedUpdatedAt: fresh.updated_at,
       mutations,
     });
@@ -779,7 +775,6 @@ async function writeGitHubActivity(
     ws,
     actor: opts.actor,
     via: opts.via,
-    scheduleSheets: ctx.scheduleSheets,
     activities: [{ issueId, data: { action, repo: repo.full_name, number, url } }],
   };
   await applyGitHubChanges(write);
@@ -940,12 +935,12 @@ async function updateLinkBase(
 }
 
 async function publishLink(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>, issueId: string): Promise<void> {
-  await commitGitHubChanges(ctx.env, ws, [{ entity: "githubLink", entityId: issueId, op: "upsert" }], ctx.scheduleSheets);
+  await commitGitHubChanges(ctx.env, ws, [{ entity: "githubLink", entityId: issueId, op: "upsert" }]);
 }
 
 async function deleteLink(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>, issueId: string): Promise<void> {
   await run(ctx.env.DB, "DELETE FROM github_issue_links WHERE issue_id = ? AND workspace_id = ?", issueId, ctx.workspaceId);
-  await commitGitHubChanges(ctx.env, ws, [{ entity: "githubLink", entityId: issueId, op: "delete" }], ctx.scheduleSheets);
+  await commitGitHubChanges(ctx.env, ws, [{ entity: "githubLink", entityId: issueId, op: "delete" }]);
 }
 
 async function loadIssue(db: D1Database, workspaceId: string, issueId: string): Promise<IssueRow | null> {

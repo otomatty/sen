@@ -1,10 +1,9 @@
-// GitHub からの書き込み。applyMutation のあと、同期ログ・通知・シートまで行う。
+// GitHub からの書き込み。applyMutation のあと、同期ログと通知まで行う。
 // scheduleGitHubSync は呼ばない（同期そのものが、もう一度 GitHub へ戻らないように）。
 
 import type { Me, Mutation, Role } from "../../shared/types";
 import type { Env, WorkspaceRow } from "../env";
 import { applyMutation, recordGitHubActivity, StaleIssueWrite, type MutationCtx } from "../mutations";
-import { REPORT_ENTITIES, scheduleSheetSync, sheetsConfig } from "../sheets/config";
 import { notifyRealtime, writeChanges, type Change } from "../sync";
 
 export interface GitHubActivityData {
@@ -25,8 +24,6 @@ export interface GitHubWrite {
   githubComment?: { author: string | null } | null;
   mutations?: Mutation[];
   activities?: { issueId: string; data: GitHubActivityData }[];
-  /** 同じ Durable Object のシート予約。自分自身へ fetch しないため */
-  scheduleSheets?: () => Promise<void>;
   /** 課題の updated_at がこの値のときだけ issue.update を書く */
   expectedUpdatedAt?: number;
 }
@@ -51,24 +48,12 @@ export async function applyGitHubChanges(write: GitHubWrite): Promise<boolean> {
     throw e;
   }
   for (const activity of write.activities ?? []) await recordGitHubActivity(ctx, activity.issueId, activity.data);
-  await commitGitHubChanges(write.env, write.ws, ctx.changes, write.scheduleSheets);
+  await commitGitHubChanges(write.env, write.ws, ctx.changes);
   return true;
 }
 
-export async function commitGitHubChanges(
-  env: Env,
-  ws: WorkspaceRow,
-  changes: Change[],
-  scheduleSheets?: () => Promise<void>,
-): Promise<void> {
+export async function commitGitHubChanges(env: Env, ws: WorkspaceRow, changes: Change[]): Promise<void> {
   if (!changes.length) return;
   const last = await writeChanges(env.DB, ws.id, changes);
   await notifyRealtime(env, ws.id, last);
-  const sheets = sheetsConfig(env);
-  if (sheets && sheets.workspaceKey === ws.url_key && scheduleSheets) {
-    if (!changes.some((change) => REPORT_ENTITIES.has(change.entity))) return;
-    await scheduleSheets();
-    return;
-  }
-  await scheduleSheetSync(env, ws, changes, "");
 }
