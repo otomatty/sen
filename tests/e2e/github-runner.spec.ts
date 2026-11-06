@@ -2,12 +2,16 @@
 // drain() の処理中に同じキーへ新しい印が入っても消えないことと、
 // 処理が遅くても /github/event がすぐ返ることを確かめる。
 
+import type { Server } from "node:http";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "@playwright/test";
 import type { Env } from "../../worker/env";
+import { listComments, listIssues } from "../../worker/github/api";
+import type { GitHubConfig } from "../../worker/github/config";
 import { GitHubSyncRunner, processors } from "../../worker/github/runner";
+import { GITHUB_PORT, GITHUB_TOKEN, addGitHubRepo, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
 const MARK_DELAY_MS = 3_000;
 const SLOW_MS = 2_000;
@@ -298,3 +302,79 @@ test("送信と取り込みのやり直しは重複も消失もしない", () =>
   const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts"], { cwd: root, encoding: "utf8" });
   if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
+
+test("Issue とコメントの一覧は古い順に 3,000 件で打ち切る", async () => {
+  resetGitHubMock();
+  const server: Server = await startGitHubMock();
+  try {
+    const cfg: GitHubConfig = {
+      workspaceKey: "runner",
+      token: GITHUB_TOKEN,
+      webhookSecret: "runner-secret",
+      delayMs: 0,
+      apiOrigin: `http://127.0.0.1:${GITHUB_PORT}`,
+    };
+    addGitHubRepo("acme/tiny");
+    const tinyAt = "2024-01-01T00:00:00.000Z";
+    githubMock.issues.push(mockIssue(1, "acme/tiny", tinyAt));
+    githubMock.comments.push(mockComment(1, 1, "acme/tiny", tinyAt, "ひとつ"));
+    const tinyIssues = await listIssues(cfg, "acme", "tiny", "2020-01-01T00:00:00.000Z");
+    assert(!tinyIssues.truncated, "1 件で打ち切っている");
+    assertEqual(tinyIssues.items.length, 1);
+    const tinyComments = await listComments(cfg, "acme", "tiny", "2020-01-01T00:00:00.000Z");
+    assert(!tinyComments.truncated, "コメント 1 件で打ち切っている");
+    assertEqual(tinyComments.items.length, 1);
+
+    const base = Date.parse("2024-06-01T00:00:00.000Z");
+    for (let i = 1; i <= 3001; i++) {
+      const at = new Date(base + i * 1000).toISOString();
+      githubMock.issues.push(mockIssue(i, "acme/widgets", at));
+      githubMock.comments.push(mockComment(i, i, "acme/widgets", at, `c${i}`));
+    }
+    const issues = await listIssues(cfg, "acme", "widgets", "2020-01-01T00:00:00.000Z");
+    assert(issues.truncated, "Issue を打ち切っていない");
+    assertEqual(issues.items.length, 3000);
+    assertEqual(issues.items[0]?.number, 1);
+    assertEqual(issues.items[2999]?.number, 3000);
+    assert(!issues.items.some((issue) => issue.number === 3001), "3001 件目まで読んでいる");
+    const comments = await listComments(cfg, "acme", "widgets", "2020-01-01T00:00:00.000Z");
+    assert(comments.truncated, "コメントを打ち切っていない");
+    assertEqual(comments.items.length, 3000);
+    assertEqual(comments.items[0]?.id, 1);
+    assertEqual(comments.items[2999]?.id, 3000);
+    assert(!comments.items.some((comment) => comment.id === 3001), "3001 件目のコメントまで読んでいる");
+    const listed = githubMock.requests.filter((item) => item.method === "GET" && item.path === "/repos/acme/widgets/issues");
+    assert(listed.some((item) => item.search.includes("sort=updated") && item.search.includes("direction=asc")), "古い順で読んでいない");
+  } finally {
+    resetGitHubMock();
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+});
+
+function mockIssue(number: number, fullName: string, updatedAt: string) {
+  return {
+    id: number,
+    number,
+    fullName,
+    title: `issue ${number}`,
+    body: "",
+    state: "open" as const,
+    state_reason: null,
+    labels: [],
+    assignees: [],
+    created_at: updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+function mockComment(id: number, number: number, fullName: string, updatedAt: string, body: string) {
+  return {
+    id,
+    fullName,
+    number,
+    body,
+    user: { login: "ghost" },
+    created_at: updatedAt,
+    updated_at: updatedAt,
+  };
+}

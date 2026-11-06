@@ -1040,6 +1040,187 @@ test.describe.serial("GitHub 連携の設定", () => {
     const saved = (await threadOf(page, ws, created.id)).comments.find((comment) => comment.id === commentId);
     expect(saved?.body).toHaveLength(MARKDOWN_MAX_LENGTH);
   });
+
+  test("突き合わせの途中の編集は、GitHub の値で上書きされない", async () => {
+    const created = await createSenIssue(page, ws, { title: "上書きされない課題", description: "本文" });
+    const remote = await waitMockIssue("上書きされない課題");
+    await waitLink(page, ws, created.id);
+    await page.waitForTimeout(400);
+    remote.title = "GitHub の古い値";
+    remote.updated_at = new Date().toISOString();
+    const held = holdGitHubGet(`/repos/acme/widgets/issues/${remote.number}`);
+    try {
+      expect((await postIssueWebhook(page, remote.number, "edited")).status()).toBe(202);
+      await held.entered;
+      expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { title: "Sen で残す" } } })).ok).toBe(true);
+    } finally {
+      held.release();
+    }
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).title, { timeout: 15_000 }).toBe("Sen で残す");
+    await expect.poll(() => mockIssue(remote.number)?.title ?? "", { timeout: 15_000 }).toBe("Sen で残す");
+    const titles = (await threadOf(page, ws, created.id)).activities.filter((item) => item.type === "title").map((item) => item.data.to);
+    expect(titles).toContain("Sen で残す");
+    expect(titles).not.toContain("GitHub の古い値");
+  });
+
+  test("遅れて届いた PR の Webhook は、今の PR で紐づける", async () => {
+    const kept = await createSenIssue(page, ws, { title: "PR に残る課題", description: "" });
+    const dropped = await createSenIssue(page, ws, { title: "PR から消した課題", description: "" });
+    await waitLink(page, ws, kept.id);
+    await waitLink(page, ws, dropped.id);
+    const pull = pushMockPull({
+      title: "今のタイトル",
+      body: `Fixes DEF-${kept.number}`,
+      headRef: "current-branch",
+      state: "closed",
+      merged: true,
+      user: { login: "octocat" },
+    });
+    expect((await postPullWebhook(page, pull, "closed")).status()).toBe(202);
+    await expect.poll(async () => (await pullOn(page, ws, kept.id, pull.number))?.state ?? "", { timeout: 15_000 }).toBe("merged");
+    expect(await pullOn(page, ws, dropped.id, pull.number)).toBeUndefined();
+
+    const repo = widgets();
+    const pullPath = `/repos/acme/widgets/pulls/${pull.number}`;
+    const beforeGets = githubMock.requests.filter((item) => item.method === "GET" && item.path === pullPath).length;
+    expect((await postWebhook(page.request, {
+      event: "pull_request",
+      body: JSON.stringify({
+        action: "opened",
+        pull_request: {
+          number: pull.number,
+          title: "古いタイトル",
+          body: `Fixes DEF-${kept.number}\nFixes DEF-${dropped.number}`,
+          html_url: `https://github.com/acme/widgets/pull/${pull.number}`,
+          state: "open",
+          draft: false,
+          merged: false,
+          user: { login: "old-author" },
+          head: { ref: "old-branch" },
+        },
+        repository: { id: repo.id, full_name: repo.full_name },
+        sender: { login: "old-author" },
+      }),
+    })).status()).toBe(202);
+    await expect.poll(() => githubMock.requests.filter((item) => item.method === "GET" && item.path === pullPath).length).toBeGreaterThan(beforeGets);
+    await expect.poll(async () => {
+      const row = await pullOn(page, ws, kept.id, pull.number);
+      return row ? `${row.state}:${row.title}:${row.author ?? ""}` : "";
+    }, { timeout: 15_000 }).toBe("merged:今のタイトル:octocat");
+    expect(await pullOn(page, ws, dropped.id, pull.number)).toBeUndefined();
+    await page.goto(`/${ws}/search?q=${encodeURIComponent("PR に残る課題")}`);
+    await expect(page.locator(`[data-testid="issue-row"][data-identifier="DEF-${kept.number}"]`).getByTestId("issue-pr-mark")).toHaveCount(0);
+
+    const missing = 880001;
+    expect((await postWebhook(page.request, {
+      event: "pull_request",
+      body: JSON.stringify({
+        action: "opened",
+        pull_request: {
+          number: missing,
+          title: "無い PR",
+          body: `Fixes DEF-${kept.number}`,
+          html_url: `https://github.com/acme/widgets/pull/${missing}`,
+          state: "open",
+          draft: false,
+          merged: false,
+          user: { login: "octocat" },
+          head: { ref: `def-${kept.number}-missing` },
+        },
+        repository: { id: repo.id, full_name: repo.full_name },
+        sender: { login: "octocat" },
+      }),
+    })).status()).toBe(202);
+    await expect.poll(() => githubMock.requests.some((item) => item.method === "GET" && item.path === `/repos/acme/widgets/pulls/${missing}`)).toBe(true);
+    await page.waitForTimeout(800);
+    expect((await bootstrap(page, ws)).githubPulls.some((item) => item.number === missing)).toBe(false);
+    expect((await pullOn(page, ws, kept.id, pull.number))?.state).toBe("merged");
+  });
+
+  test("ボットのコメントはボットの名前で表示される", async () => {
+    const rejected = await postMutation(page, ws, { type: "user.update", args: { githubLogin: "github-actions[bot]" } });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error ?? "").toContain("形式");
+    const created = await createSenIssue(page, ws, { title: "ボットのコメント", description: "" });
+    const remote = await waitMockIssue("ボットのコメント");
+    await waitLink(page, ws, created.id);
+    const comment = mockComment(remote.number, "ボットが書きました", "github-actions[bot]");
+    githubMock.comments.push(comment);
+    expect((await postCommentWebhook(page, remote.number, comment)).status()).toBe(202);
+    await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((item) => item.githubAuthor === "github-actions[bot]"), { timeout: 15_000 }).toBe(true);
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    const bot = page.getByTestId("comment").filter({ hasText: "ボットが書きました" });
+    await expect(bot).toContainText("@github-actions[bot]（GitHub）");
+    await expect(bot).not.toContainText("テスト 太郎");
+  });
+
+  test("登録の無い GitHub ユーザーのコメントは購読中の管理者に届く", async ({ browser }) => {
+    const created = await createSenIssue(page, ws, { title: "通知の課題", description: "" });
+    const remote = await waitMockIssue("通知の課題");
+    await waitLink(page, ws, created.id);
+    const email = uniqueEmail("gh-note");
+    const link = await inviteByEmail(page, ws, email);
+    const joined = await joinByInvite(browser, link, { email, name: "通知 メンバー" });
+    const member = joined.page;
+    try {
+      await member.goto(`/${ws}/settings/profile`);
+      const input = member.getByTestId("profile-github-login");
+      await input.fill("note-member");
+      await input.blur();
+      await expect.poll(async () => (await bootstrap(member, ws)).me.githubLogin).toBe("note-member");
+      const memberId = (await bootstrap(member, ws)).me.id;
+      expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { subscriberIds: [meId, memberId] } } })).ok).toBe(true);
+
+      const outsider = mockComment(remote.number, "外部からのコメント", "ghost");
+      githubMock.comments.push(outsider);
+      expect((await postCommentWebhook(page, remote.number, outsider)).status()).toBe(202);
+      await expect.poll(async () => {
+        const comment = (await threadOf(page, ws, created.id)).comments.find((item) => item.body === "外部からのコメント");
+        if (!comment) return false;
+        return (await bootstrap(page, ws)).notifications.some((item) => item.type === "comment" && item.data.commentId === comment.id);
+      }, { timeout: 15_000 }).toBe(true);
+
+      const own = mockComment(remote.number, "メンバー本人のコメント", "note-member");
+      githubMock.comments.push(own);
+      expect((await postCommentWebhook(page, remote.number, own)).status()).toBe(202);
+      await expect.poll(async () => {
+        const comment = (await threadOf(page, ws, created.id)).comments.find((item) => item.body === "メンバー本人のコメント");
+        if (!comment) return "";
+        const memberHas = (await bootstrap(member, ws)).notifications.some((item) => item.type === "comment" && item.data.commentId === comment.id);
+        const adminHas = (await bootstrap(page, ws)).notifications.some((item) => item.type === "comment" && item.data.commentId === comment.id);
+        return `${memberHas}:${adminHas}`;
+      }, { timeout: 15_000 }).toBe("false:true");
+    } finally {
+      await joined.context.close();
+    }
+  });
+
+  test("毎日の突き合わせは 3,000 件で打ち切っても続きを読む", async () => {
+    test.setTimeout(180_000);
+    const created = await createSenIssue(page, ws, { title: "続きの受け皿", description: "" });
+    const remote = await waitMockIssue("続きの受け皿");
+    await waitLink(page, ws, created.id);
+    const start = Date.now() + 120_000;
+    // 既存の Issue が先頭に入っても、3001 件目が次の突き合わせに残るように、時刻をずらして 3,000 件置く
+    pushAgedSeries(3000, start);
+    const targetAt = new Date(start + 3000 * 3000).toISOString();
+    const target = pushMockIssue({ title: "打ち切りの先の課題", created_at: targetAt, updated_at: targetAt });
+    const late = mockComment(remote.number, "打ち切りの先のコメント", "ghost");
+    late.created_at = targetAt;
+    late.updated_at = targetAt;
+    githubMock.comments.push(late);
+
+    const reconcile = () =>
+      page.request.post(`/api/dev/github/reconcile?ws=${encodeURIComponent(ws)}`, { headers: { "x-sen-client": "1" }, timeout: 120_000 });
+    expect((await reconcile()).ok()).toBeTruthy();
+    await page.waitForTimeout(2500);
+    expect((await bootstrap(page, ws)).issues.some((issue) => issue.title === "打ち切りの先の課題")).toBe(false);
+    expect((await threadOf(page, ws, created.id)).comments.some((comment) => comment.body === "打ち切りの先のコメント")).toBe(false);
+    expect((await reconcile()).ok()).toBeTruthy();
+    await expect.poll(async () => (await bootstrap(page, ws)).issues.some((issue) => issue.title === "打ち切りの先の課題"), { timeout: 30_000 }).toBe(true);
+    await expect.poll(async () => (await threadOf(page, ws, created.id)).comments.some((comment) => comment.body === "打ち切りの先のコメント"), { timeout: 30_000 }).toBe(true);
+    expect(target.number).toBeGreaterThan(0);
+  });
 });
 
 test("長いコメントは印を残して 65,536 文字以内に収まる", () => {
@@ -1143,6 +1324,12 @@ test("課題の 3-way 比較はブラウザを使わない", () => {
       { repo: "owner/repo", number: 7 },
     ],
   });
+  expect(extractPullReferences({ branch: "", title: "", body: "other/repo-#34" }, ["ENG"]).github).toEqual([{ repo: "other/repo-", number: 34 }]);
+  expect(extractPullReferences({ branch: "", title: "", body: "see #34" }, ["ENG"]).github).toEqual([{ repo: null, number: 34 }]);
+  expect(extractPullReferences({ branch: "", title: "", body: "other/repo-#34 と see #34" }, ["ENG"]).github).toEqual([
+    { repo: "other/repo-", number: 34 },
+    { repo: null, number: 34 },
+  ]);
 
   const flow: WorkflowStateRef[] = [
     { id: "backlog", name: "バックログ", type: "backlog", position: 0 },
@@ -1283,6 +1470,52 @@ function pushMockIssue(input: { title: string; body?: string | null; created_at:
   };
   githubMock.issues.push(issue);
   return issue;
+}
+
+function holdGitHubGet(path: string): { entered: Promise<void>; release: () => void } {
+  let release!: () => void;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  githubMock.hold = { method: "GET", path, entered, gate };
+  return { entered: enteredPromise, release };
+}
+
+function pushAgedSeries(count: number, startMs: number) {
+  const fullName = "acme/widgets";
+  let number = 0;
+  for (const issue of githubMock.issues) if (issue.fullName === fullName && issue.number > number) number = issue.number;
+  const body = "<!-- sen:comment:bulk -->";
+  for (let i = 0; i < count; i++) {
+    number += 1;
+    const updatedAt = new Date(startMs + i * 3000).toISOString();
+    githubMock.issues.push({
+      id: githubMock.nextIssueId++,
+      number,
+      fullName,
+      title: `古い ${number}`,
+      body: "",
+      state: "open",
+      state_reason: null,
+      labels: [],
+      assignees: [],
+      created_at: "2000-01-01T00:00:00.000Z",
+      updated_at: updatedAt,
+    });
+    githubMock.comments.push({
+      id: githubMock.nextCommentId++,
+      fullName,
+      number: 1,
+      body,
+      user: { login: "ghost" },
+      created_at: updatedAt,
+      updated_at: updatedAt,
+    });
+  }
 }
 
 function mockComment(number: number, body: string, login: string) {

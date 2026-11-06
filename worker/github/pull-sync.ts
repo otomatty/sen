@@ -5,10 +5,12 @@ import { all, ensureMigrated, first, run } from "../db";
 import type { Env } from "../env";
 import type { Change } from "../sync";
 import { loadWorkspace, resolveGitHubActor } from "./actor";
+import { GitHubError, getPull, type GhPull } from "./api";
 import { applyGitHubChanges, commitGitHubChanges } from "./apply";
+import { githubConfig } from "./config";
 import type { GitHubPullEvent } from "./events";
-import { advanceStateId, type WorkflowStateRef } from "./merge";
-import { extractPullReferences, pullLinkState } from "./pulls";
+import { advanceStateId, splitFullName, type WorkflowStateRef } from "./merge";
+import { extractPullReferences, pullLinkState, toPullEvent } from "./pulls";
 
 export interface PullSyncCtx {
   env: Env;
@@ -68,16 +70,28 @@ export async function syncPull(ctx: PullSyncCtx, payload: GitHubPullEvent | null
     event.repository.id,
   );
   if (!repo) return;
+  const parts = splitFullName(repo.full_name);
+  const cfg = githubConfig(ctx.env);
+  if (!parts || !cfg) return;
+  let remote: GhPull;
+  try {
+    remote = await getPull(cfg, parts.owner, parts.repo, event.pull_request.number);
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 404) return;
+    throw e;
+  }
+  const current = toPullEvent({ id: repo.repo_id, full_name: repo.full_name }, remote);
+  if (!current) return;
 
-  const state = pullLinkState(event.pull_request);
-  const author = event.pull_request.user?.login?.trim() || null;
-  const url = event.pull_request.html_url || `https://github.com/${repo.full_name}/pull/${event.pull_request.number}`;
-  const title = event.pull_request.title ?? "";
-  const issueIds = await resolveIssueIds(ctx.env.DB, ctx.workspaceId, event);
+  const state = pullLinkState(current.pull_request);
+  const author = current.pull_request.user?.login?.trim() || null;
+  const url = current.pull_request.html_url || `https://github.com/${repo.full_name}/pull/${current.pull_request.number}`;
+  const title = current.pull_request.title ?? "";
+  const issueIds = await resolveIssueIds(ctx.env.DB, ctx.workspaceId, current);
   await rewritePullLinks(ctx, ws, {
     repoId: repo.repo_id,
     repo: repo.full_name,
-    number: event.pull_request.number,
+    number: current.pull_request.number,
     title,
     url,
     state,

@@ -22,6 +22,14 @@ export class MutationError extends Error {
   }
 }
 
+/** GitHub からの課題の書き込みが、読んだときの updated_at と合わなかった */
+export class StaleIssueWrite extends Error {
+  constructor() {
+    super("課題が更新されたため、GitHub からの反映をやり直します");
+    this.name = "StaleIssueWrite";
+  }
+}
+
 export interface MutationCtx {
   db: D1Database;
   ws: WorkspaceRow;
@@ -36,6 +44,8 @@ export interface MutationCtx {
    * 設定されているとき、comment.create は github_author に author を保存し、@名前 のメンションは検出しない。
    */
   githubComment?: { author: string | null } | null;
+  /** 設定したとき、issue.update は課題の updated_at がこの値のままのときだけ書く */
+  expectedUpdatedAt?: number;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -45,6 +55,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COLOR = /^#[0-9a-f]{6}$/i;
 /** GitHub のユーザー名。空は登録を消す。保存前に小文字にする */
 const GITHUB_LOGIN = /^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/;
+/** コメントの投稿者。ユーザー名の規則に、末尾の [bot] だけ足す */
+const GITHUB_AUTHOR = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/;
 const STATE_TYPES: StateType[] = ["backlog", "unstarted", "started", "completed", "canceled"];
 
 function fail(msg: string, status = 400): never {
@@ -55,7 +67,7 @@ function fail(msg: string, status = 400): never {
 function storedGitHubAuthor(value: string | null | undefined): string | null {
   if (!value) return null;
   const login = value.trim().toLowerCase();
-  return GITHUB_LOGIN.test(login) ? login : null;
+  return GITHUB_AUTHOR.test(login) ? login : null;
 }
 
 /** 空は登録を消す。それ以外は GitHub の規則に合い、小文字で返す */
@@ -244,8 +256,9 @@ async function addNotifications(
   issueId: string,
   type: NotificationType,
   data: Record<string, unknown> = {},
+  includeActor = false,
 ) {
-  const targets = [...new Set(userIds)].filter((u) => u && u !== ctx.user.id);
+  const targets = [...new Set(userIds)].filter((u) => u && (includeActor || u !== ctx.user.id));
   for (const userId of targets) {
     const id = crypto.randomUUID();
     await run(
@@ -264,6 +277,13 @@ async function addNotifications(
     );
     ctx.changes.push({ entity: "notification", entityId: id, op: "upsert", userId });
   }
+}
+
+/** changes が 1 なら書けた。無い・0 のときは、updated_at が今の時刻になっているときだけ書けたとみなす */
+async function issueWriteLanded(db: D1Database, changes: number | undefined, issueId: string, now: number): Promise<boolean> {
+  if (changes === 1) return true;
+  const still = await first<{ updated_at: number }>(db, "SELECT updated_at FROM issues WHERE id = ?", issueId);
+  return still?.updated_at === now;
 }
 
 function touch(ctx: MutationCtx, entity: Change["entity"], entityId: string) {
@@ -604,12 +624,17 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       if (!cols.length) return;
       set.updated_at = now;
       const keys = Object.keys(set);
-      await run(
-        db,
-        `UPDATE issues SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`,
-        ...keys.map((k) => set[k]),
-        row.id,
-      );
+      const params = keys.map((k) => set[k]);
+      let sql = `UPDATE issues SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`;
+      params.push(row.id);
+      if (ctx.expectedUpdatedAt != null) {
+        sql += " AND updated_at = ?";
+        params.push(ctx.expectedUpdatedAt);
+      }
+      const result = await db.prepare(sql).bind(...params).run();
+      if (ctx.expectedUpdatedAt != null && !(await issueWriteLanded(db, result.meta?.changes, row.id, now))) {
+        throw new StaleIssueWrite();
+      }
       touch(ctx, "issue", row.id);
       for (const [type, data] of acts) await addActivity(ctx, row.id, type, data);
       for (const [targets, type, data] of notify) await addNotifications(ctx, targets, row.id, type, data);
@@ -701,12 +726,14 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       }
       const snippet = text.slice(0, 140);
       if (!fromGitHub) await addNotifications(ctx, mentioned, issue.id, "mention", { commentId: a.id, snippet });
+      // 投稿者がメンバーでない（github_author がある）ときは、代わりに記録した人を通知から外さない
       await addNotifications(
         ctx,
         subscribers.filter((s) => !mentioned.includes(s)),
         issue.id,
         "comment",
         { commentId: a.id, snippet },
+        githubAuthor != null,
       );
       return;
     }

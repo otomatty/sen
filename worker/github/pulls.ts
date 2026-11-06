@@ -66,8 +66,19 @@ export function extractPullReferences(
   };
   for (const part of prose) {
     const found: { index: number; ref: PullGitHubRef }[] = [];
-    for (const match of part.matchAll(GH_CROSS)) found.push({ index: match.index ?? 0, ref: { repo: `${match[1]}/${match[2]}`, number: Number(match[3]) } });
-    for (const match of part.matchAll(GH_SAME)) found.push({ index: match.index ?? 0, ref: { repo: null, number: Number(match[1]) } });
+    const covered: { start: number; end: number }[] = [];
+    for (const match of part.matchAll(GH_CROSS)) {
+      const start = match.index ?? 0;
+      covered.push({ start, end: start + match[0].length });
+      found.push({ index: start, ref: { repo: `${match[1]}/${match[2]}`, number: Number(match[3]) } });
+    }
+    for (const match of part.matchAll(GH_SAME)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      // other/repo-#34 のように、別リポジトリの参照に含まれる #番号 は同じリポジトリの参照にしない
+      if (covered.some((range) => start < range.end && end > range.start)) continue;
+      found.push({ index: start, ref: { repo: null, number: Number(match[1]) } });
+    }
     found.sort((a, b) => a.index - b.index);
     for (const item of found) addGitHub(item.ref);
   }

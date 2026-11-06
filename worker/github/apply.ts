@@ -3,7 +3,7 @@
 
 import type { Me, Mutation, Role } from "../../shared/types";
 import type { Env, WorkspaceRow } from "../env";
-import { applyMutation, recordGitHubActivity, type MutationCtx } from "../mutations";
+import { applyMutation, recordGitHubActivity, StaleIssueWrite, type MutationCtx } from "../mutations";
 import { REPORT_ENTITIES, scheduleSheetSync, sheetsConfig } from "../sheets/config";
 import { notifyRealtime, writeChanges, type Change } from "../sync";
 
@@ -27,9 +27,12 @@ export interface GitHubWrite {
   activities?: { issueId: string; data: GitHubActivityData }[];
   /** 同じ Durable Object のシート予約。自分自身へ fetch しないため */
   scheduleSheets?: () => Promise<void>;
+  /** 課題の updated_at がこの値のときだけ issue.update を書く */
+  expectedUpdatedAt?: number;
 }
 
-export async function applyGitHubChanges(write: GitHubWrite): Promise<void> {
+/** 課題が途中で変わっていたときは false。そのときは同期ログも残さない */
+export async function applyGitHubChanges(write: GitHubWrite): Promise<boolean> {
   const ctx: MutationCtx = {
     db: write.env.DB,
     ws: write.ws,
@@ -39,10 +42,17 @@ export async function applyGitHubChanges(write: GitHubWrite): Promise<void> {
     changes: [],
     via: write.via === undefined ? "GitHub" : write.via,
     githubComment: write.githubComment ?? null,
+    expectedUpdatedAt: write.expectedUpdatedAt,
   };
-  for (const mutation of write.mutations ?? []) await applyMutation(ctx, mutation);
+  try {
+    for (const mutation of write.mutations ?? []) await applyMutation(ctx, mutation);
+  } catch (e) {
+    if (e instanceof StaleIssueWrite) return false;
+    throw e;
+  }
   for (const activity of write.activities ?? []) await recordGitHubActivity(ctx, activity.issueId, activity.data);
   await commitGitHubChanges(write.env, write.ws, ctx.changes, write.scheduleSheets);
+  return true;
 }
 
 export async function commitGitHubChanges(

@@ -75,6 +75,14 @@ export interface OnceRule {
   suffix: string;
 }
 
+/** 一致するリクエストの応答を、gate が解決するまで止める */
+export interface GitHubHold {
+  method: string;
+  path: string;
+  entered: () => void;
+  gate: Promise<void>;
+}
+
 export const githubMock = {
   login: "sen-bot",
   repos: new Map<string, MockRepo>(),
@@ -92,6 +100,8 @@ export const githubMock = {
   failOnce: null as OnceRule | null,
   /** 次の一致する成功応答の本文を一度だけ空にする。資源は作る */
   loseOnce: null as OnceRule | null,
+  /** 次の一致するリクエストを、gate まで止める。一致したら外れる */
+  hold: null as GitHubHold | null,
   nextRepoId: 1000,
   nextHookId: 1,
   nextIssueId: 1,
@@ -112,6 +122,7 @@ export function resetGitHubMock() {
   githubMock.rejectAssignees = false;
   githubMock.failOnce = null;
   githubMock.loseOnce = null;
+  githubMock.hold = null;
   githubMock.nextRepoId = 1000;
   githubMock.nextHookId = 1;
   githubMock.nextIssueId = 1;
@@ -241,19 +252,16 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   }
 
   if (rest === "issues" && req.method === "GET") {
-    const page = Number(url.searchParams.get("page") ?? "1");
     const since = url.searchParams.get("since");
     const creator = url.searchParams.get("creator");
-    const list =
-      page > 1
-        ? []
-        : githubMock.issues.filter(
-            (issue) =>
-              issue.fullName.toLowerCase() === fullName.toLowerCase() &&
-              updatedSince(issue.updated_at, since) &&
-              (!creator || issue.user?.login.toLowerCase() === creator.toLowerCase()),
-          );
-    send(200, list.map(issueJson));
+    let list = githubMock.issues.filter(
+      (issue) =>
+        issue.fullName.toLowerCase() === fullName.toLowerCase() &&
+        updatedSince(issue.updated_at, since) &&
+        (!creator || issue.user?.login.toLowerCase() === creator.toLowerCase()),
+    );
+    list = sortByUpdated(list, url);
+    send(200, pageSlice(list, url).map(issueJson));
     return;
   }
   if (rest === "issues" && req.method === "POST") {
@@ -285,6 +293,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const issueMatch = /^issues\/(\d+)$/.exec(rest);
   if (issueMatch && req.method === "GET") {
+    await pauseIfHeld(method, url.pathname);
     const issue = findIssue(fullName, Number(issueMatch[1]));
     if (!issue) {
       send(404, { message: "Not Found" });
@@ -317,19 +326,18 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   const commentPost = /^issues\/(\d+)\/comments$/.exec(rest);
   if (commentPost && req.method === "GET") {
-    const page = Number(url.searchParams.get("page") ?? "1");
     const since = url.searchParams.get("since");
     const number = Number(commentPost[1]);
-    const list =
-      page > 1
-        ? []
-        : githubMock.comments.filter(
-            (comment) =>
-              comment.fullName.toLowerCase() === fullName.toLowerCase() &&
-              comment.number === number &&
-              updatedSince(comment.updated_at, since),
-          );
-    send(200, list.map(commentJson));
+    const list = sortByUpdated(
+      githubMock.comments.filter(
+        (comment) =>
+          comment.fullName.toLowerCase() === fullName.toLowerCase() &&
+          comment.number === number &&
+          updatedSince(comment.updated_at, since),
+      ),
+      url,
+    );
+    send(200, pageSlice(list, url).map(commentJson));
     return;
   }
   if (commentPost && req.method === "POST") {
@@ -349,26 +357,34 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
+  const pullMatch = /^pulls\/(\d+)$/.exec(rest);
+  if (pullMatch && req.method === "GET") {
+    const pull = githubMock.pulls.find((item) => item.fullName.toLowerCase() === fullName.toLowerCase() && item.number === Number(pullMatch[1]));
+    if (!pull) {
+      send(404, { message: "Not Found" });
+      return;
+    }
+    send(200, pullJson(pull));
+    return;
+  }
+
   if (rest === "pulls" && req.method === "GET") {
-    const page = Number(url.searchParams.get("page") ?? "1");
-    const list =
-      page > 1
-        ? []
-        : githubMock.pulls
-            .filter((pull) => pull.fullName.toLowerCase() === fullName.toLowerCase())
-            .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.number - a.number));
-    send(200, list.map(pullJson));
+    const list = sortByUpdated(
+      githubMock.pulls.filter((pull) => pull.fullName.toLowerCase() === fullName.toLowerCase()),
+      url,
+      "desc",
+    );
+    send(200, pageSlice(list, url).map(pullJson));
     return;
   }
 
   if (rest === "issues/comments" && req.method === "GET") {
-    const page = Number(url.searchParams.get("page") ?? "1");
     const since = url.searchParams.get("since");
-    const list =
-      page > 1
-        ? []
-        : githubMock.comments.filter((comment) => comment.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(comment.updated_at, since));
-    send(200, list.map(commentJson));
+    const list = sortByUpdated(
+      githubMock.comments.filter((comment) => comment.fullName.toLowerCase() === fullName.toLowerCase() && updatedSince(comment.updated_at, since)),
+      url,
+    );
+    send(200, pageSlice(list, url).map(commentJson));
     return;
   }
 
@@ -395,6 +411,32 @@ function labelList(value: unknown): { name: string }[] {
 function assigneeList(value: unknown): { login: string }[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string").map((login) => ({ login }));
+}
+
+function pageSlice<T>(items: T[], url: URL): T[] {
+  const page = Number(url.searchParams.get("page") ?? "1");
+  const perPage = Number(url.searchParams.get("per_page") ?? "30");
+  const size = Number.isFinite(perPage) && perPage > 0 ? Math.min(perPage, 100) : 30;
+  const p = Number.isFinite(page) && page > 0 ? page : 1;
+  return items.slice((p - 1) * size, (p - 1) * size + size);
+}
+
+function sortByUpdated<T extends { updated_at: string; number?: number; id?: number }>(items: T[], url: URL, fallback: "asc" | "desc" = "asc"): T[] {
+  if (url.searchParams.get("sort") !== "updated" && url.searchParams.get("direction") == null && fallback === "asc") return items;
+  const direction = url.searchParams.get("direction") === "desc" || (url.searchParams.get("direction") == null && fallback === "desc") ? -1 : 1;
+  return [...items].sort((a, b) => {
+    if (a.updated_at < b.updated_at) return -1 * direction;
+    if (a.updated_at > b.updated_at) return 1 * direction;
+    return ((a.number ?? a.id ?? 0) - (b.number ?? b.id ?? 0)) * direction;
+  });
+}
+
+async function pauseIfHeld(method: string, path: string): Promise<void> {
+  const hold = githubMock.hold;
+  if (!hold || hold.method !== method || hold.path !== path) return;
+  githubMock.hold = null;
+  hold.entered();
+  await hold.gate;
 }
 
 function updatedSince(updated: string, since: string | null): boolean {

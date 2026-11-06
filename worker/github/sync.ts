@@ -59,6 +59,8 @@ export interface SyncCtx {
   workspaceId: string;
   labelCache: Map<string, GhLabel[]>;
   enqueueComment: (commentId: string) => Promise<void>;
+  /** 突き合わせの途中で Sen が変わったとき、この課題を順番待ちに戻す */
+  enqueueIssue?: (issueId: string) => Promise<void>;
   scheduleSheets?: () => Promise<void>;
 }
 
@@ -101,6 +103,7 @@ interface IssueRow {
   assignee_id: string | null;
   label_ids: string;
   created_at: number;
+  updated_at: number;
   archived_at: number | null;
   state_type: StateType;
   state_name: string;
@@ -317,17 +320,21 @@ export async function scanUpdates(
   for (const repo of repos) {
     const parts = splitFullName(repo.full_name);
     if (!parts) continue;
-    const stored = await storage.get(sinceKey(repo.repo_id));
-    const since = stored ? new Date(Date.parse(stored) - 2000).toISOString() : new Date(repo.linked_at).toISOString();
-    const issues = await listIssues(cfg, parts.owner, parts.repo, since);
-    for (const issue of issues) {
+    const issueStored = await storage.get(issueSinceKey(repo.repo_id));
+    const commentStored = await storage.get(commentSinceKey(repo.repo_id));
+    const pullStored = await storage.get(sinceKey(repo.repo_id));
+    const issueSince = rewindSince(issueStored, repo.linked_at);
+    const commentSince = rewindSince(commentStored, repo.linked_at);
+    const pullSince = rewindSince(pullStored, repo.linked_at);
+    const issuePage = await listIssues(cfg, parts.owner, parts.repo, issueSince);
+    for (const issue of issuePage.items) {
       if (!issue || issue.pull_request || !Number.isSafeInteger(issue.number)) continue;
       const link = await linkByNumber(env.DB, workspaceId, repo.repo_id, issue.number);
       const created = Date.parse(issue.created_at);
       if (link || (Number.isFinite(created) && created >= repo.linked_at)) await enqueue.issue(repo.repo_id, issue.number);
     }
-    const comments = await listComments(cfg, parts.owner, parts.repo, since);
-    for (const comment of comments) {
+    const commentPage = await listComments(cfg, parts.owner, parts.repo, commentSince);
+    for (const comment of commentPage.items) {
       if (!comment || !Number.isSafeInteger(comment.id) || isOwnGitHubComment(comment.body)) continue;
       const known = await first(env.DB, "SELECT comment_id FROM github_comment_links WHERE github_comment_id = ?", comment.id);
       if (known) continue;
@@ -347,11 +354,13 @@ export async function scanUpdates(
         sender: comment.user?.login ? { login: comment.user.login } : null,
       });
     }
-    const pulls = await listPullsSince(cfg, parts.owner, parts.repo, since);
+    const pulls = await listPullsSince(cfg, parts.owner, parts.repo, pullSince);
     for (const pull of pulls) {
       const payload = toPullEvent({ id: repo.repo_id, full_name: repo.full_name }, pull);
       if (payload) await enqueue.pull(payload);
     }
+    await storage.put(issueSinceKey(repo.repo_id), nextSince(issuePage, nowIso, issueStored));
+    await storage.put(commentSinceKey(repo.repo_id), nextSince(commentPage, nowIso, commentStored));
     await storage.put(sinceKey(repo.repo_id), nowIso);
   }
 }
@@ -659,15 +668,25 @@ async function reconcileLinked(
       args: { id: conflictId, issueId: issue.id, body: BODY_CONFLICT_NOTE + ghBody.slice(0, Math.max(0, room)) },
     });
   }
+  const fresh = await loadIssue(ctx.env.DB, ctx.workspaceId, issue.id);
+  if (!fresh || senDrifted(issue, fresh)) {
+    await ctx.enqueueIssue?.(issue.id);
+    return;
+  }
   if (mutations.length) {
-    await applyGitHubChanges({
+    const applied = await applyGitHubChanges({
       env: ctx.env,
       ws,
       actor,
       via: opts.via,
       scheduleSheets: ctx.scheduleSheets,
+      expectedUpdatedAt: fresh.updated_at,
       mutations,
     });
+    if (!applied) {
+      await ctx.enqueueIssue?.(issue.id);
+      return;
+    }
   }
 
   const nextAssignee = rejected || skipAssignee ? baseAssignee : assigneeAction === "pull" ? ghAssignee : senLogin;
@@ -801,6 +820,39 @@ function sinceKey(repoId: number): string {
   return `gh:since:${repoId}`;
 }
 
+function issueSinceKey(repoId: number): string {
+  return `gh:since:issue:${repoId}`;
+}
+
+function commentSinceKey(repoId: number): string {
+  return `gh:since:comment:${repoId}`;
+}
+
+function rewindSince(stored: string | undefined, linkedAt: number): string {
+  return stored ? new Date(Date.parse(stored) - 2000).toISOString() : new Date(linkedAt).toISOString();
+}
+
+/** 打ち切ったときは、読んだ最後の updated_at。最後まで読めたときだけ今の時刻 */
+function nextSince(page: { items: { updated_at?: string }[]; truncated: boolean }, nowIso: string, previous: string | undefined): string {
+  if (!page.truncated) return nowIso;
+  const last = page.items[page.items.length - 1];
+  const at = typeof last?.updated_at === "string" ? last.updated_at : "";
+  return Number.isFinite(Date.parse(at)) ? at : (previous ?? nowIso);
+}
+
+function senDrifted(before: IssueRow, after: IssueRow): boolean {
+  return (
+    before.updated_at !== after.updated_at ||
+    before.title !== after.title ||
+    before.description !== after.description ||
+    before.state_id !== after.state_id ||
+    before.state_type !== after.state_type ||
+    before.state_name !== after.state_name ||
+    before.assignee_id !== after.assignee_id ||
+    before.label_ids !== after.label_ids
+  );
+}
+
 interface LinkDraft {
   issueId: string;
   repoId: number;
@@ -893,7 +945,7 @@ async function deleteLink(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeo
 async function loadIssue(db: D1Database, workspaceId: string, issueId: string): Promise<IssueRow | null> {
   return first<IssueRow>(
     db,
-    `SELECT i.id, i.team_id, i.title, i.description, i.state_id, i.assignee_id, i.label_ids, i.created_at, i.archived_at, s.type AS state_type, s.name AS state_name
+    `SELECT i.id, i.team_id, i.title, i.description, i.state_id, i.assignee_id, i.label_ids, i.created_at, i.updated_at, i.archived_at, s.type AS state_type, s.name AS state_name
      FROM issues i JOIN workflow_states s ON s.id = i.state_id
      WHERE i.id = ? AND i.workspace_id = ?`,
     issueId,

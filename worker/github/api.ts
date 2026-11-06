@@ -79,7 +79,7 @@ export function getRepo(cfg: GitHubConfig, owner: string, repo: string): Promise
 }
 
 export function listLabels(cfg: GitHubConfig, owner: string, repo: string): Promise<GhLabel[]> {
-  return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/labels`);
+  return paginateAll(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/labels`);
 }
 
 export function createHook(
@@ -117,34 +117,38 @@ export function updateIssue(cfg: GitHubConfig, owner: string, repo: string, numb
   return request(cfg, "PATCH", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`, patch);
 }
 
-export function listIssues(cfg: GitHubConfig, owner: string, repo: string, since: string): Promise<GhIssue[]> {
-  const q = `state=all&since=${encodeURIComponent(since)}`;
+/** 更新が古い順。30 ページ（3,000 件）で打ち切ったときは truncated */
+export function listIssues(cfg: GitHubConfig, owner: string, repo: string, since: string): Promise<Page<GhIssue>> {
+  const q = `state=all&sort=updated&direction=asc&since=${encodeURIComponent(since)}`;
   return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${q}`);
 }
 
 /** トークンの持ち主が作った Issue。since 以降をページごと */
 export function listIssuesByCreator(cfg: GitHubConfig, owner: string, repo: string, since: string, creator: string): Promise<GhIssue[]> {
   const q = `state=all&since=${encodeURIComponent(since)}&creator=${encodeURIComponent(creator)}`;
-  return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${q}`);
+  return paginateAll(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${q}`);
 }
 
 export function createComment(cfg: GitHubConfig, owner: string, repo: string, number: number, body: string): Promise<GhComment> {
   return request(cfg, "POST", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments`, { body });
 }
 
-export function listComments(cfg: GitHubConfig, owner: string, repo: string, since: string): Promise<GhComment[]> {
-  return paginate(
-    cfg,
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments?since=${encodeURIComponent(since)}`,
-  );
+/** 更新が古い順。30 ページ（3,000 件）で打ち切ったときは truncated */
+export function listComments(cfg: GitHubConfig, owner: string, repo: string, since: string): Promise<Page<GhComment>> {
+  const q = `sort=updated&direction=asc&since=${encodeURIComponent(since)}`;
+  return paginate(cfg, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/comments?${q}`);
 }
 
 /** 1 つの Issue のコメント。since 以降をページごと */
 export function listIssueComments(cfg: GitHubConfig, owner: string, repo: string, number: number, since: string): Promise<GhComment[]> {
-  return paginate(
+  return paginateAll(
     cfg,
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments?since=${encodeURIComponent(since)}`,
   );
+}
+
+export function getPull(cfg: GitHubConfig, owner: string, repo: string, number: number): Promise<GhPull> {
+  return request(cfg, "GET", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`);
 }
 
 export interface GhPull {
@@ -184,16 +188,26 @@ export async function listPullsSince(cfg: GitHubConfig, owner: string, repo: str
   return out;
 }
 
-async function paginate<T>(cfg: GitHubConfig, path: string): Promise<T[]> {
-  const out: T[] = [];
+export interface Page<T> {
+  items: T[];
+  /** 30 ページ目も 100 件あった。続きがあるかもしれない */
+  truncated: boolean;
+}
+
+async function paginateAll<T>(cfg: GitHubConfig, path: string): Promise<T[]> {
+  return (await paginate<T>(cfg, path)).items;
+}
+
+async function paginate<T>(cfg: GitHubConfig, path: string): Promise<Page<T>> {
+  const items: T[] = [];
   for (let page = 1; page <= 30; page++) {
     const sep = path.includes("?") ? "&" : "?";
     const batch = await request<T[]>(cfg, "GET", `${path}${sep}per_page=100&page=${page}`);
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    out.push(...batch);
-    if (batch.length < 100) break;
+    if (!Array.isArray(batch) || batch.length === 0) return { items, truncated: false };
+    items.push(...batch);
+    if (batch.length < 100) return { items, truncated: false };
   }
-  return out;
+  return { items, truncated: true };
 }
 
 async function request<T>(cfg: GitHubConfig, method: string, path: string, body?: unknown): Promise<T> {
