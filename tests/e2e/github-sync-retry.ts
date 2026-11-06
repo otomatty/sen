@@ -325,6 +325,8 @@ async function main(): Promise<void> {
     await scenarioSentBase(db, seeded);
     await scenarioBodyConflictKept(db, seeded);
     await scenarioPullAdvance(db, seeded);
+    await scenarioPullAdvanceInterrupted(db, seeded);
+    await scenarioSenUnsynced(db, seeded);
     await scenarioScheduleError(db, seeded);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -1059,6 +1061,208 @@ async function scenarioPullAdvance(db: D1Database, seeded: Awaited<ReturnType<ty
   const after = await q<{ state_id: string; updated_at: number }>(db, "SELECT state_id, updated_at FROM issues WHERE id = ?", issue);
   check(after?.state_id === done.id, "F4: 完了が前の段階に戻った");
   check(after?.updated_at === stamp, `F4: 完了の時刻が上書きされた (${after?.updated_at})`);
+}
+
+async function scenarioPullAdvanceInterrupted(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "31212121-3121-4121-8121-312121212121";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 31, title: "PR で完了", description: "" });
+  const done = await q<{ id: string }>(db, "SELECT id FROM workflow_states WHERE team_id = ? AND name = ?", seeded.team, "完了");
+  if (!done) throw new Error("I2: 完了が無い");
+  await exec(db, "UPDATE github_repos SET pr_merged_state_id = ? WHERE team_id = ?", done.id, seeded.team);
+  const pullNumber = 82;
+  const at = new Date().toISOString();
+  githubMock.pulls.push({
+    id: githubMock.nextPullId++,
+    number: pullNumber,
+    fullName: "acme/widgets",
+    title: "マージした PR",
+    body: "RET-31",
+    state: "closed",
+    draft: false,
+    merged: true,
+    user: { login: "octocat" },
+    headRef: "ret-31",
+    updated_at: at,
+  });
+  const queued: string[] = [];
+  const event = {
+    action: "closed",
+    pull_request: {
+      number: pullNumber,
+      title: "マージした PR",
+      body: "RET-31",
+      html_url: `https://github.com/acme/widgets/pull/${pullNumber}`,
+      state: "closed",
+      draft: false,
+      merged: true,
+      user: { login: "octocat" },
+      head: { ref: "ret-31" },
+    },
+    repository: { id: seeded.repo, full_name: "acme/widgets" },
+    sender: { login: "octocat" },
+  };
+  const mini = db as unknown as MiniD1;
+  mini.afterSql = {
+    includes: "UPDATE issues SET",
+    run: async () => {
+      throw new Error("履歴の書き込みに失敗しました");
+    },
+  };
+  let failed = false;
+  try {
+    await syncPull({ env: envFor(db), workspaceId: seeded.ws, enqueueIssue: async (id) => { queued.push(id); } }, event);
+  } catch {
+    failed = true;
+  } finally {
+    mini.afterSql = null;
+  }
+  check(failed, "I2: 課題の更新のあとが失敗していない");
+  check(queued.length === 1 && queued[0] === issue, `I2: 失敗しても順番待ちに入っていない (${queued.join(",")})`);
+  const moved = await q<{ state_id: string }>(db, "SELECT state_id FROM issues WHERE id = ?", issue);
+  check(moved?.state_id === done.id, "I2: 課題が完了に動いていない");
+  const history = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM activities WHERE issue_id = ? AND type = 'state'", issue);
+  check(history?.n === 0, "I2: 履歴の書き込みまで成功している");
+  try {
+    await syncPull({ env: envFor(db), workspaceId: seeded.ws, enqueueIssue: async (id) => { queued.push(id); } }, event);
+  } finally {
+    await exec(db, "UPDATE github_repos SET pr_merged_state_id = NULL WHERE team_id = ?", seeded.team);
+  }
+  const kept = await q<{ state_id: string }>(db, "SELECT state_id FROM issues WHERE id = ?", issue);
+  check(kept?.state_id === done.id, "I2: やり直しで完了が戻った");
+}
+
+async function scenarioSenUnsynced(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const linked = await q<{ linked_at: number }>(db, "SELECT linked_at FROM github_repos WHERE workspace_id = ? AND team_id = ?", seeded.ws, seeded.team);
+  if (linked?.linked_at == null) throw new Error("I1: 連携の時刻がない");
+  const linkedAt = linked.linked_at;
+  const fresh = "30101010-3010-4010-8010-301010101010";
+  const dirty = "30202020-3020-4020-8020-302020202020";
+  const synced = "30303030-3030-4030-8030-303030303030";
+  const skipped = "30404040-3040-4040-8040-304040404040";
+  const before = "30505050-3050-4050-8050-305050505050";
+  const fromGitHub = "30606060-3060-4060-8060-306060606060";
+  const archived = "30707070-3070-4070-8070-307070707070";
+  const unsent = "30808080-3080-4080-8080-308080808080";
+  const viaGitHub = "30909090-3090-4090-8090-309090909090";
+  const authored = "31010101-3101-4101-8101-310101010101";
+  const older = "31111111-3111-4111-8111-311111111111";
+  const base = { ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user };
+  await insertIssue(db, { ...base, id: fresh, number: 41, title: "まだ送っていない課題", description: "本文" });
+  await insertIssue(db, { ...base, id: dirty, number: 42, title: "変わった題", description: "b" });
+  await insertIssue(db, { ...base, id: synced, number: 43, title: "t", description: "b" });
+  await insertIssue(db, { ...base, id: skipped, number: 44, title: "自動では作らない", description: "" });
+  await insertIssue(db, { ...base, id: before, number: 45, title: "連携の前", description: "" });
+  await insertIssue(db, { ...base, id: fromGitHub, number: 46, title: "GitHub から作った", description: "" });
+  await insertIssue(db, { ...base, id: archived, number: 47, title: "アーカイブ済み", description: "" });
+  await exec(db, "UPDATE issues SET created_at = ?, updated_at = ? WHERE id = ?", linkedAt, linkedAt, fresh);
+  await exec(db, "UPDATE issues SET created_at = ?, updated_at = ? WHERE id = ?", linkedAt + 1, linkedAt + 1, skipped);
+  await exec(db, "UPDATE issues SET created_at = ?, updated_at = ? WHERE id = ?", linkedAt - 1, linkedAt - 1, before);
+  await exec(db, "UPDATE issues SET created_at = ?, updated_at = ? WHERE id = ?", linkedAt + 1, linkedAt + 1, fromGitHub);
+  await exec(db, "UPDATE issues SET created_at = ?, updated_at = ?, archived_at = ? WHERE id = ?", linkedAt + 1, linkedAt + 1, linkedAt + 1, archived);
+  await exec(
+    db,
+    "INSERT INTO github_issue_create_skips (issue_id, workspace_id, created_at) VALUES (?, ?, ?)",
+    skipped,
+    seeded.ws,
+    linkedAt,
+  );
+  await exec(
+    db,
+    "INSERT INTO activities (id, workspace_id, issue_id, actor_id, type, data, created_at, via) VALUES (?, ?, ?, ?, 'created', '{}', ?, 'GitHub')",
+    "31313131-3131-4131-8131-313131313131",
+    seeded.ws,
+    fromGitHub,
+    seeded.user,
+    linkedAt,
+  );
+  const dirtyNumber = pushStaleRemote("t", "b");
+  const syncedNumber = pushStaleRemote("t", "b");
+  await insertLink(db, seeded.ws, dirty, seeded.repo, dirtyNumber);
+  await insertLink(db, seeded.ws, synced, seeded.repo, syncedNumber);
+  const link = await q<{ created_at: number; synced_at: number }>(db, "SELECT created_at, synced_at FROM github_issue_links WHERE issue_id = ?", dirty);
+  const syncedLink = await q<{ synced_at: number }>(db, "SELECT synced_at FROM github_issue_links WHERE issue_id = ?", synced);
+  if (!link || syncedLink?.synced_at == null) throw new Error("I1: 紐づけがない");
+  await exec(db, "UPDATE issues SET updated_at = ? WHERE id = ?", link.synced_at + 5_000, dirty);
+  await exec(db, "UPDATE issues SET updated_at = ? WHERE id = ?", syncedLink.synced_at, synced);
+  await insertCommentAt(db, { id: unsent, ws: seeded.ws, issue: dirty, user: seeded.user, body: "未送信のコメント", createdAt: link.created_at });
+  await insertCommentAt(db, { id: older, ws: seeded.ws, issue: dirty, user: seeded.user, body: "紐づける前のコメント", createdAt: link.created_at - 1 });
+  await insertCommentAt(db, {
+    id: viaGitHub,
+    ws: seeded.ws,
+    issue: dirty,
+    user: seeded.user,
+    body: "GitHub から来たコメント",
+    createdAt: link.created_at,
+    via: "GitHub",
+  });
+  await insertCommentAt(db, {
+    id: authored,
+    ws: seeded.ws,
+    issue: dirty,
+    user: seeded.user,
+    body: "GitHub の著者",
+    createdAt: link.created_at,
+    githubAuthor: "octocat",
+  });
+
+  githubMock.failOnce = { method: "GET", suffix: "/issues" };
+  const storage = memoryStorage();
+  const sync = new GitHubSyncRunner(storage, envFor(db), async () => {});
+  const res = await sync.handle(
+    new Request("https://realtime/github/reconcile", { method: "POST", body: JSON.stringify({ workspaceId: seeded.ws }) }),
+  );
+  check(res?.status === 500, `I1: GitHub の失敗が突き合わせを止めていない (${res?.status})`);
+  const keys: string[] = [];
+  for (const prefix of ["gh:dirty:", "gh:event:"]) {
+    for (const key of (await storage.list({ prefix })).keys()) keys.push(key);
+  }
+  keys.sort();
+  const want = [`gh:dirty:comment:${unsent}`, `gh:dirty:issue:${dirty}`, `gh:dirty:issue:${fresh}`].sort();
+  check(keys.length === want.length && want.every((key, i) => keys[i] === key), `I1: 順番待ちが違う (${keys.join(", ")})`);
+
+  await sync.alarm();
+  check((await storage.get(`gh:dirty:issue:${fresh}`)) === undefined, "I1: 課題の順番待ちが残った");
+  check((await storage.get(`gh:dirty:issue:${dirty}`)) === undefined, "I1: 変更の順番待ちが残った");
+  check((await storage.get(`gh:dirty:comment:${unsent}`)) === undefined, "I1: コメントの順番待ちが残った");
+  check(githubMock.issues.some((item) => item.title === "まだ送っていない課題"), "I1: GitHub に Issue ができていない");
+  check(
+    !githubMock.issues.some((item) => item.title === "自動では作らない" || item.title === "連携の前" || item.title === "GitHub から作った" || item.title === "アーカイブ済み"),
+    "I1: 対象外の課題が GitHub に作られた",
+  );
+  check(githubMock.issues.find((item) => item.number === dirtyNumber)?.title === "変わった題", "I1: 課題の変更が届いていない");
+  check(githubMock.issues.find((item) => item.number === syncedNumber)?.title === "t", "I1: 同期済みの課題を送った");
+  check(githubMock.comments.length === 1 && githubMock.comments[0]?.body.includes("未送信のコメント") === true, "I1: コメントが届いていない");
+  check(!(githubMock.comments[0]?.body.includes("紐づける前のコメント") || githubMock.comments[0]?.body.includes("GitHub")), "I1: 対象外のコメントが届いた");
+}
+
+function pushStaleRemote(title: string, body: string): number {
+  const number = pushRemote(title, body);
+  const remote = githubMock.issues.find((issue) => issue.number === number);
+  if (!remote) throw new Error("I1: 模擬の Issue がない");
+  remote.created_at = "2020-01-01T00:00:00.000Z";
+  remote.updated_at = "2020-01-01T00:00:00.000Z";
+  return number;
+}
+
+async function insertCommentAt(
+  db: D1Database,
+  row: { id: string; ws: string; issue: string; user: string; body: string; createdAt: number; via?: string | null; githubAuthor?: string | null },
+): Promise<void> {
+  await exec(
+    db,
+    "INSERT INTO comments (id, workspace_id, issue_id, user_id, body, created_at, updated_at, via, github_author) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    row.id,
+    row.ws,
+    row.issue,
+    row.user,
+    row.body,
+    row.createdAt,
+    row.createdAt,
+    row.via ?? null,
+    row.githubAuthor ?? null,
+  );
 }
 
 async function scenarioScheduleError(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

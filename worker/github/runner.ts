@@ -489,7 +489,16 @@ export class GitHubSyncRunner {
     if (!workspaceId) return Response.json({ error: "ワークスペースがありません" }, { status: 400 });
     try {
       await this.rememberWorkspace(workspaceId);
-      const { scanUpdates } = await import("./sync");
+      const { scanSenUnsynced, scanUpdates } = await import("./sync");
+      // Sen 側を先に入れる。GitHub の取得が失敗しても、未送信は順番待ちに残る
+      await scanSenUnsynced(this.env, workspaceId, {
+        issue: async (issueId) => {
+          await this.putItem(`gh:dirty:issue:${issueId}`, Date.now());
+        },
+        comment: async (commentId) => {
+          await this.putItem(`gh:dirty:comment:${commentId}`, Date.now());
+        },
+      });
       await scanUpdates(
         this.env,
         workspaceId,

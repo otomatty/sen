@@ -306,6 +306,74 @@ export async function runManual(ctx: SyncCtx, op: IssueOp): Promise<void> {
   await clearAutoCreateSkip(ctx.env.DB, issue.id);
 }
 
+const SEN_UNSYNCED_LIMIT = 500;
+
+/**
+ * 毎日の突き合わせで、Sen 側のまだ GitHub に送っていない変更を古い順に入れる。
+ * GitHub は読まない。種類ごとに 500 件。残りは次の日に、今の状態からまた拾う。
+ */
+export async function scanSenUnsynced(
+  env: Env,
+  workspaceId: string,
+  enqueue: { issue(issueId: string): Promise<void>; comment(commentId: string): Promise<void> },
+): Promise<void> {
+  await ensureMigrated(env.DB);
+  const dirty = await all<{ id: string }>(
+    env.DB,
+    `SELECT l.issue_id AS id
+     FROM github_issue_links l
+     JOIN issues i ON i.id = l.issue_id AND i.workspace_id = l.workspace_id
+     JOIN github_repos r ON r.workspace_id = l.workspace_id AND r.repo_id = l.repo_id
+     WHERE l.workspace_id = ?
+       AND (l.synced_at IS NULL OR i.updated_at > l.synced_at)
+     ORDER BY i.updated_at ASC, l.issue_id ASC
+     LIMIT ?`,
+    workspaceId,
+    SEN_UNSYNCED_LIMIT,
+  );
+  for (const row of dirty) await enqueue.issue(row.id);
+
+  const unlinked = await all<{ id: string }>(
+    env.DB,
+    `SELECT i.id AS id
+     FROM issues i
+     JOIN github_repos r ON r.workspace_id = i.workspace_id AND r.team_id = i.team_id
+     WHERE i.workspace_id = ?
+       AND i.archived_at IS NULL
+       AND i.created_at >= r.linked_at
+       AND NOT EXISTS (SELECT 1 FROM github_issue_links l WHERE l.issue_id = i.id)
+       AND NOT EXISTS (SELECT 1 FROM github_issue_create_skips s WHERE s.issue_id = i.id)
+       AND COALESCE((
+         SELECT a.via FROM activities a
+         WHERE a.issue_id = i.id AND a.type = 'created'
+         ORDER BY a.created_at
+         LIMIT 1
+       ), '') != 'GitHub'
+     ORDER BY i.created_at ASC, i.id ASC
+     LIMIT ?`,
+    workspaceId,
+    SEN_UNSYNCED_LIMIT,
+  );
+  for (const row of unlinked) await enqueue.issue(row.id);
+
+  const comments = await all<{ id: string }>(
+    env.DB,
+    `SELECT c.id AS id
+     FROM comments c
+     JOIN github_issue_links l ON l.issue_id = c.issue_id AND l.workspace_id = c.workspace_id
+     WHERE c.workspace_id = ?
+       AND c.github_author IS NULL
+       AND (c.via IS NULL OR c.via != 'GitHub')
+       AND c.created_at >= l.created_at
+       AND NOT EXISTS (SELECT 1 FROM github_comment_links k WHERE k.comment_id = c.id)
+     ORDER BY c.created_at ASC, c.id ASC
+     LIMIT ?`,
+    workspaceId,
+    SEN_UNSYNCED_LIMIT,
+  );
+  for (const row of comments) await enqueue.comment(row.id);
+}
+
 export async function scanUpdates(
   env: Env,
   workspaceId: string,

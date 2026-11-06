@@ -249,6 +249,8 @@ async function advanceIssue(
     const target = states.find((state) => state.id === next);
     if (!target) return null;
     if (!actorHolder.current) actorHolder.current = await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, linkedBy, author);
+    // 書き込みが履歴の途中で失敗しても、完了・キャンセルは次の突き合わせで GitHub の Issue を閉じる
+    if (target.type === "completed" || target.type === "canceled") await ctx.enqueueIssue(issue.id);
     const applied = await applyGitHubChanges({
       env: ctx.env,
       ws,
