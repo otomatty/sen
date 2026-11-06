@@ -3,7 +3,7 @@ import type { DeviceAccount, Me, PendingInvitation, WorkspaceSummary } from "../
 import { api, ApiError, setAccountSwitchedHandler, setBearerToken, setCurrentUserId } from "../lib/api";
 import { confirmDialog } from "../components/ConfirmDialog";
 import { hasCommentDraft } from "../features/issues/CommentComposer";
-import { hasIssueDraft } from "../features/issues/CreateIssueModal";
+import { clearAllIssueDrafts, clearIssueDraftsForUser, hasIssueDraftForUser, hasUnsavedIssueDraft } from "../features/issues/issueDraft";
 import { engine } from "../store/engine";
 import { readLocal, writeLocal } from "../lib/utils";
 import { clearSnapshots, clearSnapshotsFor } from "../store/cache";
@@ -62,7 +62,7 @@ const sessionChannel: BroadcastChannel | null = (() => {
 type SessionMessage =
   | { type: "account-changed"; userId?: string }
   | { type: "pending-query"; id: string }
-  | { type: "pending-reply"; id: string; pending: number; drafts: boolean };
+  | { type: "pending-reply"; id: string; pending: number; drafts: boolean; unsavedIssueDrafts?: boolean };
 
 function postSession(message: SessionMessage) {
   sessionChannel?.postMessage(message);
@@ -77,7 +77,8 @@ let handlingAccountChange = false;
 
 /**
  * 別のタブでアカウントが替わった。
- * 未送信の変更も書きかけもなければ開き直す。あれば、捨てる前に元のアカウントへ戻すか聞く。
+ * 未送信の変更も、書きかけのコメントも、保存できなかった課題の下書きもなければ開き直す。あれば、捨てる前に元のアカウントへ戻すか聞く。
+ * 保存できた課題の下書きはアカウントごとに残るので、確かめない。
  * 戻せなかったときは残したまま、もう一度聞く。キャンセルしたときだけ捨てて開き直す。
  */
 async function handleAccountChangedElsewhere() {
@@ -91,7 +92,9 @@ async function handleAccountChangedElsewhere() {
   await new Promise((r) => setTimeout(r, 800));
   lockScreen(false);
   const pending = useData.getState().pendingCount;
-  const drafts = hasIssueDraft() || hasCommentDraft();
+  const unsavedIssue = hasUnsavedIssueDraft();
+  const drafts = hasCommentDraft() || unsavedIssue;
+  const draftLabel = unsavedIssue ? "書きかけのコメントや保存できなかった課題の下書き" : "書きかけのコメント";
   const me = useSession.getState().user;
   if ((pending === 0 && !drafts) || !me) {
     engine.stop();
@@ -104,7 +107,7 @@ async function handleAccountChangedElsewhere() {
       error
         ? {
             title: "元のアカウントに戻せませんでした",
-            message: `${error}。もう一度試しますか？ キャンセルすると、${pending > 0 ? `まだ送っていない変更（${pending}件）` : "書きかけのコメントや作成中の課題"}を捨てて開き直します。`,
+            message: `${error}。もう一度試しますか？ キャンセルすると、${pending > 0 ? `まだ送っていない変更（${pending}件）` : draftLabel}を捨てて開き直します。`,
             confirmLabel: "もう一度試す",
           }
         : {
@@ -112,7 +115,7 @@ async function handleAccountChangedElsewhere() {
             message:
               pending > 0
                 ? `このタブには、まだ送っていない変更が ${pending}件あります。元のアカウント（${me.name}）に戻して送りますか？ キャンセルすると、変更を捨てて開き直します。${drafts ? "書きかけの内容も残っています。" : ""}`
-                : `このタブには、書きかけのコメントや作成中の課題があります。元のアカウント（${me.name}）に戻しますか？ キャンセルすると、捨てて開き直します。`,
+                : `このタブには、${draftLabel}があります。元のアカウント（${me.name}）に戻しますか？ キャンセルすると、捨てて開き直します。`,
             confirmLabel: pending > 0 ? "元のアカウントに戻して送る" : "元のアカウントに戻す",
           },
     );
@@ -144,7 +147,13 @@ export function initSessionSync() {
     channel.onmessage = (ev) => {
       const data = ev.data as SessionMessage | undefined;
       if (data?.type === "pending-query") {
-        postSession({ type: "pending-reply", id: data.id, pending: useData.getState().pendingCount, drafts: hasIssueDraft() || hasCommentDraft() });
+        postSession({
+          type: "pending-reply",
+          id: data.id,
+          pending: useData.getState().pendingCount,
+          drafts: hasCommentDraft(),
+          unsavedIssueDrafts: hasUnsavedIssueDraft(),
+        });
         return;
       }
       if (data?.type !== "account-changed") return;
@@ -312,18 +321,20 @@ export function canChangeAccount(): string | null {
   return null;
 }
 
-// 切り替えると、ほかのタブは読み込み直すので、送っていない変更や書きかけが消える。切り替えたあとは別のアカウントになるので送り直せない。だから切り替える前に確かめる
-async function queryOtherTabs(): Promise<{ pending: number; drafts: boolean }> {
-  if (!sessionChannel) return { pending: 0, drafts: false };
+// 切り替えると、ほかのタブは読み込み直すので、送っていない変更や書きかけのコメント、保存できなかった課題の下書きが消える。保存できた課題の下書きはアカウントごとに残る。切り替えたあとは別のアカウントになるので送り直せない。だから切り替える前に確かめる
+async function queryOtherTabs(): Promise<{ pending: number; drafts: boolean; unsavedIssueDrafts: boolean }> {
+  if (!sessionChannel) return { pending: 0, drafts: false, unsavedIssueDrafts: false };
   const channel = sessionChannel;
   const id = crypto.randomUUID();
   let pending = 0;
   let drafts = false;
+  let unsavedIssueDrafts = false;
   const onMessage = (ev: MessageEvent) => {
     const data = ev.data as SessionMessage | undefined;
     if (data?.type === "pending-reply" && data.id === id) {
       pending += data.pending;
       if (data.drafts) drafts = true;
+      if (data.unsavedIssueDrafts) unsavedIssueDrafts = true;
     }
   };
   channel.addEventListener("message", onMessage);
@@ -333,20 +344,27 @@ async function queryOtherTabs(): Promise<{ pending: number; drafts: boolean }> {
   } finally {
     channel.removeEventListener("message", onMessage);
   }
-  return { pending, drafts };
+  return { pending, drafts, unsavedIssueDrafts };
 }
 
-/** 切り替える前に、書きかけを捨ててよいか確かめ、画面を止めて、保存と送信が終わるのを待つ。終わったら元に戻す関数を返す。やめたときは null */
-async function prepareAccountChange(label: string): Promise<(() => void) | null> {
+/** 切り替える前に、失われる書きかけを捨ててよいか確かめ、画面を止めて、保存と送信が終わるのを待つ。終わったら元に戻す関数を返す。やめたときは null。保存できた課題の下書きはアカウントごとに残るので、今のアカウントだけログアウトするときだけ確かめる。保存できなかった下書きは読み込み直すと消えるので、切り替えるときも確かめる */
+async function prepareAccountChange(label: string, opts: { logout?: boolean } = {}): Promise<(() => void) | null> {
   const reason = canChangeAccount();
   if (reason) throw new Error(reason);
   const other = await queryOtherTabs();
   if (other.pending > 0) throw new Error(`別のタブに未送信の変更（${other.pending}件）があります。送り終わってから切り替えてください`);
-  // 読み込み直すと消える書きかけの内容は、画面を止める前に確かめる。ほかのタブの書きかけも含む
-  if (hasIssueDraft() || hasCommentDraft() || other.drafts) {
+  const user = useSession.getState().user;
+  const issueDraft = Boolean(opts.logout && user && hasIssueDraftForUser(user.id));
+  const unsavedIssue = hasUnsavedIssueDraft() || other.unsavedIssueDrafts;
+  // 読み込み直すと消える書きかけのコメントと、保存できなかった課題の下書きは、画面を止める前に確かめる。ほかのタブのものも含む。保存できた課題の下書きは、今のアカウントからログアウトするときだけ消える
+  if (issueDraft || unsavedIssue || hasCommentDraft() || other.drafts) {
     const ok = await confirmDialog({
       title: "書きかけの内容があります",
-      message: "作成中の課題や書きかけのコメントは、アカウントを切り替えると失われます。ほかのタブのものも含みます。続けますか？",
+      message: opts.logout
+        ? "作成中の課題の下書きや書きかけのコメントは、ログアウトすると失われます。ほかのタブのものも含みます。続けますか？"
+        : unsavedIssue
+          ? "保存できなかった作成中の課題の下書きや、書きかけのコメントは、アカウントを切り替えると失われます。ほかのタブのものも含みます。続けますか？"
+          : "書きかけのコメントは、アカウントを切り替えると失われます。ほかのタブのものも含みます。続けますか？",
       confirmLabel: "続ける",
       danger: true,
     });
@@ -387,7 +405,7 @@ export async function switchAccount(userId: string) {
   window.location.assign("/");
 }
 
-/** 別のアカウントを追加する前の準備。上限・未送信の変更・書きかけを確かめ、画面を止め、今のアカウントを記録に加える。やめたら null。終わったら元に戻す関数を返す */
+/** 別のアカウントを追加する前の準備。上限・未送信の変更・書きかけのコメントを確かめ、画面を止め、今のアカウントを記録に加える。やめたら null。終わったら元に戻す関数を返す */
 export async function prepareAddAccount(): Promise<(() => void) | null> {
   const { accounts, maxAccounts } = useSession.getState();
   if (accounts.length >= maxAccounts) throw new Error(`同時にログインできるのは ${maxAccounts} つまでです`);
@@ -419,7 +437,7 @@ export async function addAccount() {
 
 /** 今のアカウントだけログアウトし、残ったアカウントで開き直す */
 export async function logoutCurrentAccount() {
-  const release = await prepareAccountChange("ログアウトしています…");
+  const release = await prepareAccountChange("ログアウトしています…", { logout: true });
   if (!release) return;
   const user = useSession.getState().user;
   try {
@@ -429,7 +447,10 @@ export async function logoutCurrentAccount() {
     throw e;
   }
   engine.stop();
-  if (user) await clearSnapshotsFor(user.id);
+  if (user) {
+    await clearSnapshotsFor(user.id);
+    clearIssueDraftsForUser(user.id);
+  }
   writeLocal(SESSION_CACHE, null);
   notifyOtherTabs();
   window.location.assign("/");
@@ -444,6 +465,8 @@ export async function signOut() {
   }
   engine.stop();
   await clearSnapshots();
+  // 共用のパソコンで、ログアウト後に書きかけの課題が残らないようにする
+  clearAllIssueDrafts();
   writeLocal(SESSION_CACHE, null);
   if (DEMO) {
     setBearerToken(null);

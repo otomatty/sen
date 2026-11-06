@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { dismissToast, toast } from "../store/ui";
 import { confirmDialog } from "../components/ConfirmDialog";
-import { hasIssueDraft } from "../features/issues/CreateIssueModal";
 import { hasCommentDraft } from "../features/issues/CommentComposer";
+import { hasUnsavedIssueDraft } from "../features/issues/issueDraft";
 import { lockScreen, waitForSync } from "./guard";
 
 // PWA（インストールできるアプリ）としての振る舞い
@@ -84,11 +84,14 @@ function hasCurrentCode(worker: ServiceWorker): Promise<boolean> {
 export async function applyUpdate() {
   const worker = waiting;
   if (!worker || updating) return;
-  // 読み込み直すと消える書きかけの内容は、確かめてから捨てる
-  if (hasIssueDraft() || hasCommentDraft()) {
+  // 読み込み直すと消える書きかけのコメントと、保存できなかった課題の下書きは、確かめてから捨てる
+  const unsavedIssue = hasUnsavedIssueDraft();
+  if (unsavedIssue || hasCommentDraft()) {
     const ok = await confirmDialog({
-      title: "書きかけの内容があります",
-      message: "作成中の課題や書きかけのコメントは、更新すると失われます。更新しますか？",
+      title: unsavedIssue ? "書きかけの内容があります" : "書きかけのコメントがあります",
+      message: unsavedIssue
+        ? "保存できなかった作成中の課題の下書きや、書きかけのコメントは、更新すると失われます。更新しますか？"
+        : "書きかけのコメントは、更新すると失われます。更新しますか？",
       confirmLabel: "更新する",
       danger: true,
     });
