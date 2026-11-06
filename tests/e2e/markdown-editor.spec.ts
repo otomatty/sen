@@ -158,6 +158,24 @@ test("変換中の Enter では、パイプの行が表にならない", async (
   await expect(description).toContainText("| 名前 | 年齢 |");
 });
 
+// Chromium の CDP で IME の入力を再現し、変換中に文字を消してもひらがなのまま確定しないことを確かめる。
+test("変換中に Backspace で文字を消しても、ひらがなのまま確定しない", async ({ page }) => {
+  const { ws } = await signupViaUi(page);
+  const issue = await createIssue(page, ws, "変換中の削除", "");
+  const description = await openIssue(page, ws, issue.ident);
+  await description.click();
+  const cdp = await page.context().newCDPSession(page);
+  for (const text of ["せ", "せつ", "せつめ", "せつめい", "せつめ", "せつ", "せって", "せってい"]) {
+    await cdp.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    await page.waitForTimeout(50);
+  }
+  await expect(description).toHaveText("せってい");
+  await cdp.send("Input.insertText", { text: "設定" });
+  await expect(description).toHaveText("設定");
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await storedDescription(page, ws, issue.id)) ?? "", { timeout: 15_000 }).toBe("設定");
+});
+
 test("リストの中の注記と脚注は、開いただけでは保存し直されない", async ({ page }) => {
   const { ws } = await signupViaUi(page);
   const note = "- 項目\n\n  > [!NOTE]\n  > リストの中の注記";
