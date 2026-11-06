@@ -91,7 +91,7 @@ async function convertPending(db: D1Database): Promise<void> {
         statements.push(db.prepare("DELETE FROM markdown_pending WHERE table_name = ? AND row_id = ?").bind(table, id));
         continue;
       }
-      // updated_at は変えない。人の編集ではないので、並び順やスプレッドシートの日付に影響させない。
+      // updated_at は変えない。人の編集ではないので、並び順に影響させない。
       // 平文への切り替えまで失敗しても、この行で止めない。本文は警告に出さない。
       const raw = byId.get(id) ?? "";
       let converted: { markdown: string; fallback: boolean };

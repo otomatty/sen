@@ -29,8 +29,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **アプリとしてインストール（PWA）**：デスクトップやスマートフォンのホーム画面から専用のウィンドウで開けます。新しいバージョンを公開すると「更新」を案内します（[詳しく](docs/guide/12-app.md)）
 - **AI 連携（MCP）**：Claude Code・Cursor・VS Code などの AI ツールから、課題の作成・更新・検索・コメント・関係づけ。AI の変更には「Claude Code 経由」の印（[詳しく](docs/guide/10-ai.md)）
 - **AI アシスタント**：画面の中で Sen の使い方を質問できる。説明・画面を開くボタン・使い方動画・聞き返しまでで、課題などのデータは AI に送らない（[詳しく](docs/guide/13-help.md)）
-- **進捗**：ワークスペースのメンバーが、プロジェクト（活動）ごとの完了率・直近期限・活動状況と、作業の WBS・タイムラインをアプリの中で見られます。数え方はスプレッドシート連携と同じです（[詳しく](docs/guide/07-progress.md)）
-- **スプレッドシート連携**：プロジェクトを「活動」、課題を「タスク」として、Google スプレッドシートの「活動一覧」「WBS」に書き出します（[詳しく](docs/guide/11-sheets.md)）
+- **進捗**：ワークスペースのメンバーが、プロジェクト（活動）ごとの完了率・直近期限・活動状況と、作業の WBS・タイムラインをアプリの中で見られます（[詳しく](docs/guide/07-progress.md)）
 - **ログイン**：Google アカウントのみ（[Better Auth](https://www.better-auth.com)）。初めての人はログイン後にワークスペースを作るか、招待されたメールアドレスの招待リンクから参加。複数の Google アカウントでログインして、サイドバー下部のメニューから切り替えられます
 - **設定**：プロフィール、テーマ（ライト / ダーク / システム）、最初に開くワークスペース（すべての端末で共通）、メール指定の招待・権限、利用できるドメイン、ラベル、チーム、ワークフロー、サイクル期間
 - **使い方動画**：各画面右上の「▶ 使い方」とヘルプ画面から再生。チャプター（ステップ）クリックで頭出し、再生速度切り替え。収録シナリオは操作の結果を確かめながら撮るので、画面が壊れていれば収録が失敗します（`bun run tutorials:check` で古い動画も検出）
@@ -49,7 +48,6 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - [検索・コマンドパレット・キーボード](docs/guide/08-search.md)
 - [設定](docs/guide/09-settings.md)
 - [AI ツールとの連携](docs/guide/10-ai.md)
-- [スプレッドシート連携](docs/guide/11-sheets.md)
 - [アプリ・オフライン・同期](docs/guide/12-app.md)
 - [使い方動画と AI アシスタント](docs/guide/13-help.md)
 
@@ -73,7 +71,6 @@ flowchart LR
   Worker --> D1
   Worker -- "新しい syncId を通知" --> DO
   DO -- "WebSocket" --> Engine
-  DO -- "反映" --> GSheets["Google Sheets"]
   Browser --> Assets
 ```
 
@@ -135,53 +132,6 @@ bunx wrangler secret put ANTHROPIC_API_KEY
 キーが無いときは AI アシスタントを使いません。ブラウザ内のデモ版でも使えません。
 
 使い方の知識は、`docs/guide/` や画面・コマンド・使い方動画の一覧から、ビルドのときに作られます。
-
-## スプレッドシート連携
-
-Sen のプロジェクトを「活動」、課題を「タスク」として、Google スプレッドシートの「活動一覧」「WBS」に書き出します。シートの中身、集計のルール、使い方のおすすめは [スプレッドシート連携](docs/guide/11-sheets.md) にあります。
-
-### 設定のしかた
-
-1. Google Cloud でプロジェクトを選び、Google Sheets API を有効にします。
-2. サービスアカウントを作り、JSON の鍵を発行します。
-3. 書き込み先のスプレッドシートを作り、サービスアカウントのメールアドレス（鍵の `client_email`）に「編集者」で共有します。報告を読む人には「閲覧者」で共有します。
-4. Worker に登録します。`SHEETS_WORKSPACE` はワークスペースの URL の名前です（例：`ses`）。`SHEETS_SPREADSHEET_ID` は、スプレッドシートの URL の `/d/` と `/edit` の間です。
-
-   ```bash
-   bunx wrangler secret put SHEETS_WORKSPACE
-   bunx wrangler secret put SHEETS_SPREADSHEET_ID
-   bunx wrangler secret put GOOGLE_SERVICE_ACCOUNT_KEY < key.json
-   ```
-
-5. 設定 → ワークスペース の「スプレッドシート連携」で「今すぐ反映」を押します。最初の反映で「活動一覧」と「WBS」のタブが作られます。ほかのタブには触れません。
-
-連携されるのは `SHEETS_WORKSPACE` のワークスペースだけです。それ以外では、設定画面にこの区画は出ません。
-
-手元で試すときは、`.env.local` に同じ名前で書きます。鍵は 1 行の JSON にして、`'` で囲みます。
-
-```bash
-SHEETS_WORKSPACE=ses
-SHEETS_SPREADSHEET_ID=xxxxxxxx
-GOOGLE_SERVICE_ACCOUNT_KEY='{"type":"service_account","client_email":"...","private_key":"..."}'
-```
-
-| 変数 | 内容 |
-| --- | --- |
-| `SHEETS_WORKSPACE` | 連携するワークスペースの URL の名前（例：`ses`） |
-| `SHEETS_SPREADSHEET_ID` | スプレッドシートの ID。URL の `/d/` と `/edit` の間 |
-| `GOOGLE_SERVICE_ACCOUNT_KEY` | サービスアカウントの JSON 鍵 |
-| `SHEETS_SYNC_DELAY_MS` | 保存から反映までの待ち時間（ミリ秒）。省略時は `30000` |
-| `GOOGLE_API_ORIGIN_FOR_TESTS` | E2E 用。`DEV_TOOLS=1` のときだけ有効で、Google の代わりにこのオリジンへ送ります。本番では無視します |
-
-### 仕組みと安全のために
-
-- 鍵は Worker の secret にだけ置きます。シートにも、アプリの画面にも出しません。
-- 書き込むのはサービスアカウントだけです。読む人の権限は、Google の共有設定のままです。
-- 文字列は文字列として書くので、`=` で始まるタイトルが数式として動きません。
-- 毎回、対象のタブ全体を置き換えるので、重複や消し残しが出ません。
-- 保存のあとの自動反映が失敗したときは、2 分後、その次は 10 分後にやり直します。それ以上は入れません。「今すぐ反映」と毎日の Cron では、このやり直しは入れません。失敗の理由は設定画面に出ます。
-- 403 のときは、共有していない場合と Google Sheets API が有効でない場合とで、設定画面の理由を出し分けます。
-- 反映の予約と状態は、ワークスペースごとの Durable Object が持ちます。DB のテーブルは増えません。
 
 ## はじめかた（ローカル）
 
@@ -326,7 +276,6 @@ Google ログインは、ダミーの認証情報で「Google の画面へ移る
 - [検索・コマンドパレット・キーボード](docs/guide/08-search.md)
 - [設定](docs/guide/09-settings.md)
 - [AI ツールとの連携](docs/guide/10-ai.md)
-- [スプレッドシート連携](docs/guide/11-sheets.md)
 - [アプリ・オフライン・同期](docs/guide/12-app.md)
 - [使い方動画と AI アシスタント](docs/guide/13-help.md)
 
@@ -338,8 +287,8 @@ bun run assistant:knowledge  # 確認に加えて、作った知識を .tmp/assi
 ## ディレクトリ構成
 
 ```
-worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object・スプレッドシート連携）
-shared/        クライアントとサーバーで共有する型・定数（`progress.ts` はシートとアプリで共通の集計、`markdown.ts` は本文の Markdown の処理）
+worker/        Cloudflare Worker（Hono API・Better Auth による Google ログイン・MCP サーバー・ミューテーション・同期・Durable Object）
+shared/        クライアントとサーバーで共有する型・定数（`progress.ts` は進捗の集計、`markdown.ts` は本文の Markdown の処理）
 migrations/    D1 のスキーマ
 src/           React アプリ
   store/       ローカルストア・同期エンジン・操作（楽観的更新と元に戻す）

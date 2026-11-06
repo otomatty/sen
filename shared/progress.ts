@@ -1,4 +1,4 @@
-// 活動一覧・WBS と同じ進捗集計。シートの書式（セル・列幅・リンク）には依存しない。
+// 進捗ページ（活動一覧・WBS・タイムライン）の集計。表示の書式には依存しない。
 // ブラウザ（src/）と Worker の両方から使う。DB・fetch・実行環境固有の API には依存しない。
 
 import { PRIORITIES } from "./constants";
@@ -6,32 +6,23 @@ import type { StateType } from "./types";
 
 const PROCESS_PREFIX = /^工程[:：](.*)$/;
 
-export interface ReportInput {
-  workspaceName: string;
-  urlKey: string;
-  /** アプリの公開 URL（リンク用）。null ならリンクなしの文字列にする */
-  origin: string | null;
+export interface ProgressInput {
   /** 日本時間の今日 'YYYY-MM-DD' */
   today: string;
-  /** 反映日時（UNIX ミリ秒） */
-  now: number;
   /** 表示順に並んだ、アーカイブされていないプロジェクト */
   projects: { id: string; name: string }[];
-  issues: ReportIssueInput[];
+  issues: ProgressIssueInput[];
 }
 
-export interface ReportIssueInput {
+export interface ProgressIssueInput {
   id: string;
   /** 'ENG-12' */
   identifier: string;
   title: string;
-  /** 説明を平文にしたもの */
-  descriptionText: string;
   projectId: string;
   stateName: string;
   stateType: StateType;
   priority: number;
-  assigneeName: string | null;
   labelNames: string[];
   /** 'YYYY-MM-DD' */
   dueDate: string | null;
@@ -43,31 +34,31 @@ export interface ReportIssueInput {
 
 export type ActivityStatus = "タスク未登録" | "完了" | "期限超過" | "保留あり" | "進行中" | "未着手";
 
-export interface ProgressTask extends ReportIssueInput {
+export interface ProgressTask extends ProgressIssueInput {
   /** `工程:` / `工程：` ラベルの工程名。名前順・重複なし */
   processes: string[];
-  /** 工程名を名前順に `／` でつないだもの。無ければ空。表示とシート用 */
+  /** 工程名を名前順に `／` でつないだもの。無ければ空。表示用 */
   process: string;
-  /** シートの優先度列と同じ短い表示名（なし / 緊急 / 高 / 中 / 低） */
+  /** 優先度の短い表示名（なし / 緊急 / 高 / 中 / 低） */
   priorityLabel: string;
 }
 
 export interface ProgressActivity {
   projectId: string;
   name: string;
-  /** 並び順はシートの WBS と同じ */
+  /** 並び順は WBS と同じ */
   tasks: ProgressTask[];
   total: number;
   done: number;
   /** 対象タスクが無いときは null。あるときは floor(done*100/total) */
   percent: number | null;
-  /** シートと同じ文字列。'28%（2/7）' / 'タスクなし' */
+  /** 表示する文字列。'28%（2/7）' / 'タスクなし' */
   completionRate: string;
   /** 保留でない未完了のうち一番早い完了予定 'YYYY-MM-DD'。無ければ null */
   nextDueDate: string | null;
   /** 保留でない未完了のうち期限が無い件数 */
   nextDueUnset: number;
-  /** シートと同じ文字列。'2026/11/07（未設定2件）' / '期限未設定' / '—' */
+  /** 表示する文字列。'2026/11/07（未設定2件）' / '期限未設定' / '—' */
   nextDue: string;
   status: ActivityStatus;
 }
@@ -79,7 +70,7 @@ export function completionPercent(done: number, total: number): number {
 }
 
 /** プロジェクトの表示順 → 完了予定（未設定は後ろ）→ チームキー → 番号。キャンセルは除く */
-export function summarizeProgress(input: ReportInput): { activities: ProgressActivity[]; tasks: ProgressTask[] } {
+export function summarizeProgress(input: ProgressInput): { activities: ProgressActivity[]; tasks: ProgressTask[] } {
   const projectOrder = new Map(input.projects.map((project, index) => [project.id, index]));
   const issues = input.issues.filter((issue) => projectOrder.has(issue.projectId) && issue.stateType !== "canceled");
   issues.sort((a, b) => compareIssues(a, b, projectOrder));
@@ -130,7 +121,7 @@ function formatNextDue(total: number, open: number, active: number, nextDueDate:
   return nextDueUnset > 0 ? `${text}（未設定${nextDueUnset}件）` : text;
 }
 
-function compareIssues(a: ReportIssueInput, b: ReportIssueInput, projectOrder: Map<string, number>): number {
+function compareIssues(a: ProgressIssueInput, b: ProgressIssueInput, projectOrder: Map<string, number>): number {
   const byProject = (projectOrder.get(a.projectId) ?? 0) - (projectOrder.get(b.projectId) ?? 0);
   if (byProject !== 0) return byProject;
   const byDue = compareDue(a.dueDate, b.dueDate);
@@ -177,20 +168,20 @@ function processNames(labelNames: string[]): string[] {
   return [...new Set(processBodies(labelNames))].sort(byProcessName);
 }
 
-/** 名前順に `／` でつなぐ。重複も残す（シートの工程列はこの文字列のまま） */
+/** 名前順に `／` でつなぐ。重複も残す */
 function processLabel(labelNames: string[]): string {
   return processBodies(labelNames).sort(byProcessName).join("／");
 }
 
 /** 完了以外が未完了。保留は backlog。active は未完了のうち保留でないもの */
-function partition(tasks: ReportIssueInput[]) {
+function partition(tasks: ProgressIssueInput[]) {
   const open = tasks.filter((task) => task.stateType !== "completed");
   const active = open.filter((task) => task.stateType !== "backlog");
   const done = tasks.length - open.length;
   return { open, active, done };
 }
 
-function activityStatus(tasks: ReportIssueInput[], today: string): ActivityStatus {
+function activityStatus(tasks: ProgressIssueInput[], today: string): ActivityStatus {
   if (tasks.length === 0) return "タスク未登録";
   const { open, active } = partition(tasks);
   if (open.length === 0) return "完了";
