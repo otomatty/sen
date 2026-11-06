@@ -34,6 +34,8 @@ export interface MockIssue {
   assignees: { login: string }[];
   created_at: string;
   updated_at: string;
+  /** PR を Issue の一覧に出すときだけ。無い Issue の応答には含めない */
+  draft?: boolean;
   pull_request?: unknown;
   /** POST で作ったときはトークンのユーザー。テストが足した Issue は省略できる */
   user?: { login: string };
@@ -61,6 +63,8 @@ export interface MockPull {
   user: { login: string } | null;
   headRef: string;
   updated_at: string;
+  /** true のときだけ、Issue の一覧にも pull_request 付きで出す */
+  asIssue?: boolean;
 }
 
 export interface RecordedRequest {
@@ -272,14 +276,25 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (rest === "issues" && req.method === "GET") {
     const since = url.searchParams.get("since");
     const creator = url.searchParams.get("creator");
-    let list = githubMock.issues.filter(
-      (issue) =>
-        issue.fullName.toLowerCase() === fullName.toLowerCase() &&
-        updatedSince(issue.updated_at, since) &&
-        (!creator || issue.user?.login.toLowerCase() === creator.toLowerCase()),
-    );
-    list = sortByUpdated(list, url);
-    send(200, pageSlice(list, url).map(issueJson));
+    const name = fullName.toLowerCase();
+    const list = [
+      ...githubMock.issues.filter(
+        (issue) =>
+          issue.fullName.toLowerCase() === name &&
+          updatedSince(issue.updated_at, since) &&
+          (!creator || issue.user?.login.toLowerCase() === creator.toLowerCase()),
+      ),
+      ...githubMock.pulls
+        .filter(
+          (pull) =>
+            pull.asIssue === true &&
+            pull.fullName.toLowerCase() === name &&
+            updatedSince(pull.updated_at, since) &&
+            (!creator || pull.user?.login.toLowerCase() === creator.toLowerCase()),
+        )
+        .map(issueFromPull),
+    ];
+    send(200, pageSlice(sortByUpdated(list, url), url).map(issueJson));
     return;
   }
   if (rest === "issues" && req.method === "POST") {
@@ -489,6 +504,25 @@ function pullJson(pull: MockPull) {
   };
 }
 
+function issueFromPull(pull: MockPull): MockIssue {
+  return {
+    id: pull.id,
+    number: pull.number,
+    fullName: pull.fullName,
+    title: pull.title,
+    body: pull.body,
+    state: pull.state,
+    state_reason: null,
+    labels: [],
+    assignees: [],
+    created_at: pull.updated_at,
+    updated_at: pull.updated_at,
+    ...(pull.user ? { user: pull.user } : {}),
+    draft: pull.draft,
+    pull_request: { merged_at: pull.merged ? pull.updated_at : null },
+  };
+}
+
 function issueJson(issue: MockIssue) {
   return {
     id: issue.id,
@@ -503,6 +537,7 @@ function issueJson(issue: MockIssue) {
     created_at: issue.created_at,
     updated_at: issue.updated_at,
     ...(issue.user ? { user: issue.user } : {}),
+    ...(typeof issue.draft === "boolean" ? { draft: issue.draft } : {}),
     ...(issue.pull_request ? { pull_request: issue.pull_request } : {}),
   };
 }

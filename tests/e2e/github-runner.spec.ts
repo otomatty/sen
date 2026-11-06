@@ -602,6 +602,12 @@ test("Issue とコメントの一覧は古い順に 3,000 件で打ち切る", a
   }
 });
 
+test("更新された PR が 3,000 件を超えても、古い PR を Issue の一覧から順番待ちに入れる", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const run = spawnSync("bun", ["tests/e2e/github-sync-retry.ts", "--pull-truncate"], { cwd: root, encoding: "utf8" });
+  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+});
+
 function mockIssue(number: number, fullName: string, updatedAt: string) {
   return {
     id: number,

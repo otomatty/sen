@@ -40,7 +40,8 @@ export interface GhIssue {
   html_url: string;
   labels: { name: string }[];
   assignees: { login: string }[];
-  pull_request?: unknown;
+  draft?: boolean;
+  pull_request?: { merged_at?: string | null } | null;
   created_at: string;
   updated_at: string;
   user?: { login: string } | null;
@@ -165,7 +166,9 @@ export interface GhPull {
   updated_at?: string;
 }
 
-/** 更新が新しい順。since より前の行に達したら、そこから先は取りに行かない */
+/** 更新が新しい順。since より前の行に達したら、そこから先は取りに行かない。
+ *  打ち切った古い側は、Issue の一覧の続きから読む仕組みで拾う。
+ */
 export async function listPullsSince(cfg: GitHubConfig, owner: string, repo: string, sinceIso: string): Promise<GhPull[]> {
   const since = Date.parse(sinceIso);
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&sort=updated&direction=desc`;

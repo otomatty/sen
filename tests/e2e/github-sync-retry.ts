@@ -10,7 +10,7 @@ import { insertTeam } from "../../worker/mutations";
 import { scheduleGitHubSync } from "../../worker/github/config";
 import { GitHubSyncRunner } from "../../worker/github/runner";
 import { syncPull } from "../../worker/github/pull-sync";
-import { pullComment, pushComment, reconcileIssue, runManual, type SyncCtx } from "../../worker/github/sync";
+import { pullComment, pushComment, reconcileIssue, runManual, scanUpdates, type SyncCtx } from "../../worker/github/sync";
 import { GITHUB_TOKEN, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
 const require = createRequire(import.meta.url);
@@ -1071,7 +1071,75 @@ async function runReconcileAlarm(): Promise<void> {
   }
 }
 
-const job = process.argv.includes("--reconcile-alarm") ? runReconcileAlarm : main;
+async function runPullTruncate(): Promise<void> {
+  resetGitHubMock();
+  const server: Server = await startGitHubMock();
+  try {
+    const db = await openDb();
+    const seeded = await seed(db);
+    await resetRows(db);
+    const linked = await q<{ linked_at: number }>(db, "SELECT linked_at FROM github_repos WHERE workspace_id = ? AND repo_id = ?", seeded.ws, seeded.repo);
+    const linkedAt = linked?.linked_at ?? null;
+    check(linkedAt != null, "G1: 連携の時刻が無い");
+    const origin = linkedAt ?? 0;
+    const previous = new Date(origin).toISOString();
+    const count = 3001;
+    for (let i = 1; i <= count; i++) {
+      const at = new Date(origin + i * 1000).toISOString();
+      githubMock.pulls.push({
+        id: i,
+        number: i,
+        fullName: "acme/widgets",
+        title: `pull ${i}`,
+        body: "",
+        state: "open",
+        draft: i === 1,
+        merged: i === 1,
+        user: { login: "octocat" },
+        headRef: `branch-${i}`,
+        updated_at: at,
+        asIssue: true,
+      });
+    }
+    const pulls: { number: number; title: string; draft: boolean; merged: boolean; head: string }[] = [];
+    let issueJobs = 0;
+    await scanUpdates(
+      envFor(db),
+      seeded.ws,
+      { get: async () => previous, put: async () => {} },
+      {
+        issue: async () => {
+          issueJobs += 1;
+        },
+        comment: async () => {},
+        pull: async (payload) => {
+          pulls.push({
+            number: payload.pull_request.number,
+            title: payload.pull_request.title,
+            draft: payload.pull_request.draft,
+            merged: payload.pull_request.merged,
+            head: payload.pull_request.head.ref,
+          });
+        },
+      },
+    );
+    const of = (number: number) => pulls.filter((pull) => pull.number === number);
+    const oldest = of(1);
+    const newest = of(count);
+    const both = of(1500);
+    check(issueJobs === 0, "G1: PR を課題として順番待ちに入れている");
+    check(pulls.length === 6000, `G1: 順番待ちが 6,000 件ではない (${pulls.length})`);
+    check(oldest.length === 1, "G1: いちばん古い PR が順番待ちに入っていない");
+    check(oldest[0]?.title === "pull 1" && oldest[0]?.draft === true && oldest[0]?.merged === true, "G1: 古い PR を Issue の値から作っていない");
+    check(oldest[0]?.head === "", "G1: いちばん古い PR が PR の一覧に入っている");
+    check(newest.length === 1 && newest[0]?.head === `branch-${count}`, "G1: 新しい PR が PR の一覧から入っていない");
+    check(both.length === 2 && both[0]?.head === "" && both[1]?.head === "branch-1500", "G1: PR の一覧のブランチ名で上書きされる順になっていない");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+}
+
+const job = process.argv.includes("--reconcile-alarm") ? runReconcileAlarm : process.argv.includes("--pull-truncate") ? runPullTruncate : main;
 job().catch((e) => {
   console.error(e instanceof Error ? e.stack ?? e.message : e);
   process.exit(1);

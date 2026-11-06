@@ -24,6 +24,7 @@ import {
   type GhIssue,
   type GhIssueWrite,
   type GhLabel,
+  type GhPull,
 } from "./api";
 import { githubConfig } from "./config";
 import type { GitHubCommentEvent, GitHubPullEvent } from "./events";
@@ -331,7 +332,12 @@ export async function scanUpdates(
     const pullSince = rewindSince(pullStored, repo.linked_at);
     const issuePage = await listIssues(cfg, parts.owner, parts.repo, issueSince);
     for (const issue of issuePage.items) {
-      if (!issue || issue.pull_request || !Number.isSafeInteger(issue.number)) continue;
+      if (!issue || !Number.isSafeInteger(issue.number)) continue;
+      if (issue.pull_request) {
+        const payload = toPullEvent({ id: repo.repo_id, full_name: repo.full_name }, pullFromIssue(issue));
+        if (payload) await enqueue.pull(payload);
+        continue;
+      }
       const link = await linkByNumber(env.DB, workspaceId, repo.repo_id, issue.number);
       const created = Date.parse(issue.created_at);
       if (link || (Number.isFinite(created) && created >= repo.linked_at)) await enqueue.issue(repo.repo_id, issue.number);
@@ -366,6 +372,21 @@ export async function scanUpdates(
     await storage.put(commentSinceKey(repo.repo_id), nextSince(commentPage, nowIso, commentStored));
     await storage.put(sinceKey(repo.repo_id), nowIso);
   }
+}
+
+/** Issue の一覧に混ざった PR。ブランチ名などは無くてよい。syncPull が getPull で取り直す */
+function pullFromIssue(issue: GhIssue): GhPull {
+  const pull: GhPull = {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body,
+    html_url: issue.html_url,
+    state: issue.state,
+    user: issue.user,
+  };
+  if (typeof issue.draft === "boolean") pull.draft = issue.draft;
+  if (issue.pull_request && issue.pull_request.merged_at !== undefined) pull.merged_at = issue.pull_request.merged_at;
+  return pull;
 }
 
 export async function lockKeysForJob(db: D1Database, workspaceId: string, key: string, payload: unknown): Promise<string[]> {
