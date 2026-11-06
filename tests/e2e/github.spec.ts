@@ -1195,6 +1195,66 @@ test.describe.serial("GitHub 連携の設定", () => {
     }
   });
 
+  test("手で紐づけを外すと編集しても Issue を作り直さず、コメントは送られず、作るボタンでは作れる", async () => {
+    const created = await createSenIssue(page, ws, { title: "外してから編集する課題", description: "本文" });
+    const remote = await waitMockIssue("外してから編集する課題");
+    await waitLink(page, ws, created.id);
+    const count = () => githubMock.issues.filter((issue) => issue.fullName === "acme/widgets").length;
+    const before = count();
+    await page.goto(`/${ws}/issue/DEF-${created.number}`);
+    await page.getByTestId("github-unlink").click();
+    await expect(page.getByTestId("github-create")).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => activityActions(page, ws, created.id)).toContain("unlinked");
+
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { title: "編集したあとの課題" } } })).ok).toBe(true);
+    await expect.poll(async () => (await senIssue(page, ws, created.id)).title).toBe("編集したあとの課題");
+    const commentId = randomUUID();
+    expect((await postMutation(page, ws, { type: "comment.create", args: { id: commentId, issueId: created.id, body: "外したあとのコメント" } })).ok).toBe(true);
+    const deadline = Date.now() + 2_500;
+    while (Date.now() < deadline) {
+      expect(count()).toBe(before);
+      expect(githubMock.issues.some((issue) => issue.title === "編集したあとの課題")).toBe(false);
+      expect(githubMock.comments.some((comment) => comment.body.includes("外したあとのコメント"))).toBe(false);
+      await page.waitForTimeout(200);
+    }
+    expect(mockIssue(remote.number)?.title).toBe("外してから編集する課題");
+
+    await expect(page.getByTestId("github-create")).toBeVisible();
+    await page.getByTestId("github-create").click();
+    const again = await waitMockIssue("編集したあとの課題");
+    expect(again.number).not.toBe(remote.number);
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${again.number}`, { timeout: 15_000 });
+  });
+
+  test("連携していないチームへ移しても紐づいた Issue が出て、紐づけを外せる", async () => {
+    const data = await bootstrap(page, ws);
+    const other = data.teams.find((team) => team.key === "OTH");
+    expect(other).toBeTruthy();
+    const created = await createSenIssue(page, ws, { title: "チームを移す課題", description: "移る" });
+    const remote = await waitMockIssue("チームを移す課題");
+    await waitLink(page, ws, created.id);
+    expect((await postMutation(page, ws, { type: "issue.update", args: { id: created.id, patch: { teamId: other!.id } } })).ok).toBe(true);
+    let number = 0;
+    await expect.poll(async () => {
+      const issue = (await bootstrap(page, ws)).issues.find((item) => item.id === created.id);
+      number = issue?.teamId === other!.id ? issue.number : 0;
+      return number;
+    }).toBeGreaterThan(0);
+    await page.goto(`/${ws}/issue/OTH-${number}`);
+    await expect(page.getByTestId("github-issue")).toBeVisible();
+    await expect(page.getByTestId("github-issue-link")).toHaveText(`acme/widgets#${remote.number}`);
+    await expect(page.getByTestId("github-unlink")).toBeVisible();
+    await expect(page.getByTestId("github-create")).toHaveCount(0);
+    await expect(page.getByTestId("github-link-existing")).toHaveCount(0);
+    const title = mockIssue(remote.number)?.title;
+    await page.getByTestId("github-unlink").click();
+    await expect.poll(async () => (await bootstrap(page, ws)).githubLinks.some((link) => link.issueId === created.id), { timeout: 15_000 }).toBe(false);
+    await expect(page.getByTestId("github-issue")).toHaveCount(0);
+    await expect(page.getByTestId("github-create")).toHaveCount(0);
+    await expect.poll(async () => activityActions(page, ws, created.id)).toContain("unlinked");
+    expect(mockIssue(remote.number)?.title).toBe(title);
+  });
+
   test("毎日の突き合わせは 3,000 件で打ち切っても続きを読む", async () => {
     test.setTimeout(180_000);
     const created = await createSenIssue(page, ws, { title: "続きの受け皿", description: "" });

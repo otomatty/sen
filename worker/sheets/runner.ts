@@ -142,12 +142,16 @@ export class SheetSyncRunner {
     return null;
   }
 
-  /** 自分の時刻が来ていれば反映する。失敗したら短い間隔で入れ直す（2 回まで） */
+  /** 自分の時刻が来ていれば反映する。失敗したら短い間隔で入れ直す（2 回まで）。設定が無いときは予約を消す */
   async alarm(): Promise<void> {
     await this.enqueue(async () => {
       const raw = await this.storage.get<Record<string, unknown>>(STORAGE_KEY);
       const legacy = !!raw && !Object.prototype.hasOwnProperty.call(raw, "nextAt");
       const state = await this.load();
+      if (!sheetsConfig(this.env)) {
+        if (state.nextAt != null) await this.save({ ...state, nextAt: null });
+        return;
+      }
       if (!legacy && (state.nextAt == null || state.nextAt > Date.now() + 1500)) return;
       await this.execute(true);
     });
@@ -267,7 +271,7 @@ export class SheetSyncRunner {
 
   private async load(): Promise<StoredSheets> {
     const raw = await this.storage.get<Partial<StoredSheets>>(STORAGE_KEY);
-    return {
+    const state: StoredSheets = {
       lastAttemptAt: raw?.lastAttemptAt ?? null,
       lastSuccessAt: raw?.lastSuccessAt ?? null,
       lastError: raw?.lastError ?? null,
@@ -275,6 +279,13 @@ export class SheetSyncRunner {
       origin: raw?.origin ?? null,
       nextAt: typeof raw?.nextAt === "number" ? raw.nextAt : null,
     };
+    // 前の版は予約をアラームだけに持っていた。次の予約を書く前に、その時刻を nextAt へ一度だけ移す。
+    if (raw && !Object.prototype.hasOwnProperty.call(raw, "nextAt")) {
+      const alarm = await this.storage.getAlarm();
+      state.nextAt = alarm ?? null;
+      await this.save(state);
+    }
+    return state;
   }
 
   private async save(state: StoredSheets): Promise<void> {

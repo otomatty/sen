@@ -303,6 +303,12 @@ test("送信と取り込みのやり直しは重複も消失もしない", () =>
   if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
 });
 
+test("前の版のシート予約は GitHub の予約でも残り、設定を外すとアラームが止まる", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const run = spawnSync("bun", ["tests/e2e/sheets-alarm.ts"], { cwd: root, encoding: "utf8" });
+  if (run.status !== 0) throw new Error([run.stdout, run.stderr].filter(Boolean).join("\n"));
+});
+
 test("Issue とコメントの一覧は古い順に 3,000 件で打ち切る", async () => {
   resetGitHubMock();
   const server: Server = await startGitHubMock();

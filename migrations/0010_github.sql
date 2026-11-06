@@ -73,3 +73,11 @@ CREATE TABLE IF NOT EXISTS github_sync_attempts (
   attempted_at INTEGER NOT NULL,
   PRIMARY KEY (kind, target_id)
 );
+
+-- 手で紐づけを外した課題と、GitHub 側で Issue が無くなって外れた課題。
+-- 自動では Issue を作り直さない。画面から作る・紐づけると消す。
+CREATE TABLE IF NOT EXISTS github_issue_create_skips (
+  issue_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);

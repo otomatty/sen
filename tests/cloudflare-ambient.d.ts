@@ -11,6 +11,9 @@ interface DurableObjectStorage {
   put<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<boolean>;
   list<T>(options?: { prefix?: string }): Promise<Map<string, T>>;
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 interface DurableObjectId {}

@@ -14,7 +14,7 @@ const PULL_LABEL: Record<GitHubPullState, string> = {
   closed: "閉じた",
 };
 
-/** 課題の詳細の GitHub 区画。チームが連携しているか、プルリクエストの紐づけがあるとき出す */
+/** 課題の詳細の GitHub 区画。今のチームの連携、紐づけ、プルリクエストのいずれかがあるとき出す */
 export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamId: string }) {
   const repo = useData((s) => s.githubRepos[teamId]);
   const link = useData((s) => s.githubLinks[issueId]);
@@ -25,7 +25,7 @@ export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamI
     .sort((a, b) => a.number - b.number || (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0));
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState(false);
-  if (!wsKey || (!repo && pulls.length === 0)) return null;
+  if (!wsKey || (!repo && !link && pulls.length === 0)) return null;
 
   const run = async (path: string, method: "POST" | "DELETE", body?: unknown) => {
     setBusy(true);
@@ -43,7 +43,7 @@ export function IssueGitHubSection({ issueId, teamId }: { issueId: string; teamI
   return (
     <section className="github-issue" data-testid="github-issue">
       <div className="section-title">GitHub</div>
-      {repo && link ? (
+      {link ? (
         <Linked link={link} busy={busy} onUnlink={() => void run(`/issues/${issueId}/link`, "DELETE")} />
       ) : repo ? (
         <div className="github-issue-actions">

@@ -141,6 +141,7 @@ export async function reconcileIssue(
     if (!repo) return;
     if (!opts.force && issue.created_at < repo.linked_at) return;
     if (!opts.force && (await createdViaGitHub(ctx.env.DB, issue.id))) return;
+    if (!opts.force && (await autoCreateSkipped(ctx.env.DB, issue.id))) return;
     await createFromSen(ctx, ws, repo, issue, opts);
     return;
   }
@@ -300,6 +301,7 @@ export async function runManual(ctx: SyncCtx, op: IssueOp): Promise<void> {
     await deleteLink(ctx, ws, issue.id);
     throw e;
   }
+  await clearAutoCreateSkip(ctx.env.DB, issue.id);
 }
 
 export async function scanUpdates(
@@ -469,6 +471,7 @@ async function createFromSen(
       });
     } catch (e) {
       await insertLink(ctx.env.DB, ctx.workspaceId, draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected));
+      await clearAutoCreateSkip(ctx.env.DB, issue.id);
       await clearAttempt(ctx.env.DB, "issue", issue.id);
       await enqueueUnsentComments(ctx, issue.id);
       throw e;
@@ -476,6 +479,7 @@ async function createFromSen(
   }
   const draft = draftFrom(issue, repo, remote, final, rejected ? null : senLogin, rejected);
   await insertLink(ctx.env.DB, ctx.workspaceId, draft);
+  await clearAutoCreateSkip(ctx.env.DB, issue.id);
   await clearAttempt(ctx.env.DB, "issue", issue.id);
   await enqueueUnsentComments(ctx, issue.id);
   await publishLink(ctx, ws, issue.id);
@@ -715,6 +719,8 @@ async function unlink(
   const fullName = repo?.full_name ?? "";
   const actor = opts.actor ?? (await resolveGitHubActor(ctx.env.DB, ctx.workspaceId, repo?.linked_by ?? null, opts.senderLogin ?? null));
   await writeGitHubActivity(ctx, ws, { actor, via: opts.via }, link.issue_id, "unlinked", { full_name: fullName }, link.number, link.url);
+  // 手で外したときも、GitHub で削除・移動されて外れたときも、次の編集では作り直さない。
+  await skipAutoCreate(ctx.env.DB, ctx.workspaceId, link.issue_id);
   await deleteLink(ctx, ws, link.issue_id);
 }
 
@@ -1096,11 +1102,31 @@ async function uuidFromKey(key: string): Promise<string> {
 async function waitsForGitHubIssue(ctx: SyncCtx, issueId: string): Promise<boolean> {
   const issue = await loadIssue(ctx.env.DB, ctx.workspaceId, issueId);
   if (!issue || issue.archived_at) return false;
+  if (await autoCreateSkipped(ctx.env.DB, issue.id)) return false;
   const repo = await repoByTeam(ctx.env.DB, ctx.workspaceId, issue.team_id);
   if (!repo) return false;
   if (issue.created_at < repo.linked_at) return false;
   if (await createdViaGitHub(ctx.env.DB, issue.id)) return false;
   return true;
+}
+
+async function skipAutoCreate(db: D1Database, workspaceId: string, issueId: string): Promise<void> {
+  await run(
+    db,
+    "INSERT OR REPLACE INTO github_issue_create_skips (issue_id, workspace_id, created_at) VALUES (?, ?, ?)",
+    issueId,
+    workspaceId,
+    Date.now(),
+  );
+}
+
+async function clearAutoCreateSkip(db: D1Database, issueId: string): Promise<void> {
+  await run(db, "DELETE FROM github_issue_create_skips WHERE issue_id = ?", issueId);
+}
+
+async function autoCreateSkipped(db: D1Database, issueId: string): Promise<boolean> {
+  const row = await first(db, "SELECT issue_id FROM github_issue_create_skips WHERE issue_id = ?", issueId);
+  return !!row;
 }
 
 async function findPostedComment(

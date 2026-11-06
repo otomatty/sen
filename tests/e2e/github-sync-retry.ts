@@ -7,7 +7,8 @@ import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import { ensureMigrated } from "../../worker/db";
 import type { Env } from "../../worker/env";
 import { insertTeam } from "../../worker/mutations";
-import { pushComment, reconcileIssue, type SyncCtx } from "../../worker/github/sync";
+import { GitHubSyncRunner } from "../../worker/github/runner";
+import { pushComment, reconcileIssue, runManual, type SyncCtx } from "../../worker/github/sync";
 import { GITHUB_TOKEN, githubMock, resetGitHubMock, startGitHubMock } from "./github-mock";
 
 const require = createRequire(import.meta.url);
@@ -182,7 +183,17 @@ function ctxFor(db: D1Database, ws: string, queued: string[]): SyncCtx {
 }
 
 async function resetRows(db: D1Database): Promise<void> {
-  for (const table of ["github_comment_links", "github_issue_links", "github_sync_attempts", "comments", "notifications", "activities", "sync_log", "issues"]) {
+  for (const table of [
+    "github_comment_links",
+    "github_issue_links",
+    "github_sync_attempts",
+    "github_issue_create_skips",
+    "comments",
+    "notifications",
+    "activities",
+    "sync_log",
+    "issues",
+  ]) {
     await exec(db, `DELETE FROM ${table}`);
   }
   resetGitHubMock();
@@ -281,6 +292,8 @@ async function main(): Promise<void> {
     await scenarioIssue(db, seeded);
     await scenarioImport(db, seeded);
     await scenarioWaitingComment(db, seeded);
+    await scenarioManualUnlink(db, seeded);
+    await scenarioDeletedUnlink(db, seeded);
     await scenarioEdit(db, seeded);
     await scenarioLong(db, seeded);
   } finally {
@@ -416,6 +429,84 @@ async function scenarioWaitingComment(db: D1Database, seeded: Awaited<ReturnType
   check(githubMock.comments.length === 1, "A4: コメントが届いていない");
   check(githubMock.comments[0]?.body.includes("待っていた") === true, "A4: 本文が違う");
   check(githubMock.comments[0]?.body.includes(`<!-- sen:comment:${comment} -->`) === true, "A4: 印がない");
+}
+
+function memoryStorage(): DurableObjectStorage {
+  const map = new Map<string, unknown>();
+  return {
+    get: async <T>(key: string): Promise<T | undefined> => map.get(key) as T | undefined,
+    put: async (key: string, value: unknown): Promise<void> => {
+      map.set(key, value);
+    },
+    delete: async (key: string): Promise<boolean> => map.delete(key),
+    list: async <T>(options?: { prefix?: string }): Promise<Map<string, T>> => {
+      const out = new Map<string, T>();
+      for (const [key, value] of map) {
+        if (!options?.prefix || key.startsWith(options.prefix)) out.set(key, value as T);
+      }
+      return out;
+    },
+  } as unknown as DurableObjectStorage;
+}
+
+async function scenarioManualUnlink(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const comment = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 6, title: "外す", description: "本文" });
+  const ctx = ctxFor(db, seeded.ws, []);
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 1, "C1: 最初の Issue ができていない");
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: issue, action: "unlink" });
+  check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "C1: 紐づけが残っている");
+  check(await q(db, "SELECT issue_id FROM github_issue_create_skips WHERE issue_id = ?", issue), "C1: 自動作成を止める記録がない");
+  await exec(db, "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?", "編集した", Date.now(), issue);
+  const created = posts("/issues");
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 1, "C1: 編集で Issue が増えた");
+  check(posts("/issues") === created, "C1: 編集で Issue を作った");
+  check(githubMock.issues[0]?.title === "外す", "C1: 残っている Issue のタイトルが変わった");
+
+  await insertComment(db, { id: comment, ws: seeded.ws, issue, user: seeded.user, body: "外したあとのコメント" });
+  const storage = memoryStorage();
+  const sync = new GitHubSyncRunner(storage, ctx.env, async () => {});
+  const marked = await sync.handle(
+    new Request("https://realtime/github/mark", {
+      method: "POST",
+      body: JSON.stringify({ workspaceId: seeded.ws, comments: [comment] }),
+    }),
+  );
+  check(marked?.status === 200, "C1: コメントを受け付けていない");
+  await sync.alarm();
+  check((await storage.get(`gh:dirty:comment:${comment}`)) === undefined, "C1: コメントがやり直しに残った");
+  check(githubMock.comments.length === 0, "C1: 外した課題のコメントが送られた");
+  await sync.alarm();
+  check(githubMock.comments.length === 0, "C1: もう一度鳴らしてもコメントが送られた");
+
+  await runManual(ctx, { workspaceId: seeded.ws, userId: seeded.user, issueId: issue, action: "create" });
+  check(githubMock.issues.length === 2, "C1: 作る操作で Issue ができていない");
+  const createdRemote = githubMock.issues.find((item) => item.title === "編集した");
+  if (!createdRemote) throw new Error("C1: 新しい Issue のタイトルが違う");
+  const link = await q<{ number: number }>(db, "SELECT number FROM github_issue_links WHERE issue_id = ?", issue);
+  check(link?.number === createdRemote.number, "C1: 作った Issue と紐づいていない");
+  check(!(await q(db, "SELECT issue_id FROM github_issue_create_skips WHERE issue_id = ?", issue)), "C1: 作ったあとも記録が残っている");
+}
+
+async function scenarioDeletedUnlink(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const issue = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  await insertIssue(db, { id: issue, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 7, title: "消える", description: "本文" });
+  const ctx = ctxFor(db, seeded.ws, []);
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 1, "C1: 削除前の Issue がない");
+  const number = githubMock.issues[0]?.number;
+  githubMock.issues = githubMock.issues.filter((item) => item.number !== number);
+  await reconcileIssue(ctx, { issueId: issue });
+  check(!(await q(db, "SELECT issue_id FROM github_issue_links WHERE issue_id = ?", issue)), "C1: 削除後も紐づいている");
+  check(await q(db, "SELECT issue_id FROM github_issue_create_skips WHERE issue_id = ?", issue), "C1: 削除で外れた記録がない");
+  await exec(db, "UPDATE issues SET title = ?, updated_at = ? WHERE id = ?", "削除のあと編集", Date.now(), issue);
+  await reconcileIssue(ctx, { issueId: issue });
+  check(githubMock.issues.length === 0, "C1: 削除で外れたあとに Issue を作り直した");
 }
 
 async function scenarioEdit(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
