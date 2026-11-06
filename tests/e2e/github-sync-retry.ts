@@ -208,6 +208,7 @@ async function resetRows(db: D1Database): Promise<void> {
     "github_sync_attempts",
     "github_issue_create_skips",
     "github_import_skips",
+    "github_pull_pending_refs",
     "comments",
     "notifications",
     "activities",
@@ -326,6 +327,7 @@ async function main(): Promise<void> {
     await scenarioBodyConflictKept(db, seeded);
     await scenarioPullAdvance(db, seeded);
     await scenarioPullAdvanceInterrupted(db, seeded);
+    await scenarioPendingPullRef(db, seeded);
     await scenarioSenUnsynced(db, seeded);
     await scenarioScheduleError(db, seeded);
   } finally {
@@ -1130,6 +1132,138 @@ async function scenarioPullAdvanceInterrupted(db: D1Database, seeded: Awaited<Re
   }
   const kept = await q<{ state_id: string }>(db, "SELECT state_id FROM issues WHERE id = ?", issue);
   check(kept?.state_id === done.id, "I2: やり直しで完了が戻った");
+}
+
+async function scenarioPendingPullRef(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+  await resetRows(db);
+  const known = "32323232-3232-4232-8232-323232323232";
+  const knownGithub = 9001;
+  const skippedNumber = 9002;
+  await insertIssue(db, { id: known, ws: seeded.ws, team: seeded.team, state: seeded.state, user: seeded.user, number: 80, title: "すでに紐づく", description: "" });
+  await insertLink(db, seeded.ws, known, seeded.repo, knownGithub);
+  await exec(
+    db,
+    "INSERT INTO github_import_skips (repo_id, number, workspace_id, created_at) VALUES (?, ?, ?, ?)",
+    seeded.repo,
+    skippedNumber,
+    seeded.ws,
+    Date.now(),
+  );
+
+  const pendingNumber = pushRemote("まだ取り込まれない", "GitHub の本文");
+  const queuedPulls: { repoId: number; number: number; fullName: string }[] = [];
+  const ctx = ctxFor(db, seeded.ws, []);
+  ctx.enqueuePull = async (repoId, number, fullName) => {
+    queuedPulls.push({ repoId, number, fullName });
+  };
+  githubMock.failOnce = { method: "GET", suffix: `/issues/${pendingNumber}` };
+  let failed = false;
+  try {
+    await reconcileIssue(ctx, { repoId: seeded.repo, number: pendingNumber });
+  } catch {
+    failed = true;
+  }
+  check(failed, "J1: Issue の取り込みが一度失敗していない");
+  check(!(await q(db, "SELECT id FROM issues WHERE title = ?", "まだ取り込まれない")), "J1: 失敗なのに課題がある");
+
+  const at = new Date().toISOString();
+  const pullCtx = { env: envFor(db), workspaceId: seeded.ws, enqueueIssue: async () => {} };
+  const pushPull = (number: number, title: string, body: string, merged: boolean) => {
+    githubMock.pulls.push({
+      id: githubMock.nextPullId++,
+      number,
+      fullName: "acme/widgets",
+      title,
+      body,
+      state: merged ? "closed" : "open",
+      draft: false,
+      merged,
+      user: { login: "octocat" },
+      headRef: `branch-${number}`,
+      updated_at: at,
+    });
+    return {
+      action: merged ? "closed" : "opened",
+      pull_request: {
+        number,
+        title,
+        body,
+        html_url: `https://github.com/acme/widgets/pull/${number}`,
+        state: merged ? "closed" : "open",
+        draft: false,
+        merged,
+        user: { login: "octocat" as const },
+        head: { ref: `branch-${number}` },
+      },
+      repository: { id: seeded.repo, full_name: "acme/widgets" },
+      sender: { login: "octocat" },
+    };
+  };
+
+  const pullNumber = 83;
+  const waiting = pushPull(pullNumber, "マージした PR", `#${pendingNumber}`, true);
+  await syncPull(pullCtx, waiting);
+  check(
+    !(await q(db, "SELECT id FROM github_pull_links WHERE workspace_id = ? AND repo_id = ? AND number = ?", seeded.ws, seeded.repo, pullNumber)),
+    "J1: 取り込み前なのに PR が紐づいた",
+  );
+  const pending = await q<{ repo_id: number; number: number; pull_repo_id: number; pull_number: number; workspace_id: string }>(
+    db,
+    "SELECT repo_id, number, pull_repo_id, pull_number, workspace_id FROM github_pull_pending_refs WHERE pull_repo_id = ? AND pull_number = ?",
+    seeded.repo,
+    pullNumber,
+  );
+  check(
+    pending?.repo_id === seeded.repo &&
+      pending.number === pendingNumber &&
+      pending.pull_repo_id === seeded.repo &&
+      pending.pull_number === pullNumber &&
+      pending.workspace_id === seeded.ws,
+    "J1: 未解決の参照が記録されていない",
+  );
+
+  const other = pushPull(84, "解決済みと禁止", `#${knownGithub} #${skippedNumber} RET-99`, false);
+  await syncPull(pullCtx, other);
+  check(!(await q(db, "SELECT repo_id FROM github_pull_pending_refs WHERE number = ?", knownGithub)), "J1: 解決できた参照が記録された");
+  check(!(await q(db, "SELECT repo_id FROM github_pull_pending_refs WHERE number = ?", skippedNumber)), "J1: 取り込み禁止の参照が記録された");
+  const pendingCount = await q<{ n: number }>(db, "SELECT COUNT(*) AS n FROM github_pull_pending_refs");
+  check(pendingCount?.n === 1, `J1: 未解決の参照以外が記録された (${pendingCount?.n})`);
+
+  await reconcileIssue(ctx, { repoId: seeded.repo, number: pendingNumber });
+  check(
+    queuedPulls.length === 1 && queuedPulls[0]?.repoId === seeded.repo && queuedPulls[0]?.number === pullNumber && queuedPulls[0]?.fullName === "acme/widgets",
+    `J1: PR が順番待ちに戻っていない (${queuedPulls.map((item) => item.number).join(",")})`,
+  );
+  check(!(await q(db, "SELECT repo_id FROM github_pull_pending_refs")), "J1: 紐づけのあとも記録が残っている");
+  check(
+    !(await q(db, "SELECT id FROM github_pull_links WHERE workspace_id = ? AND repo_id = ? AND number = ?", seeded.ws, seeded.repo, pullNumber)),
+    "J1: 順番待ちに戻しただけで PR が紐づいた",
+  );
+
+  const imported = await q<{ issue_id: string }>(db, "SELECT issue_id FROM github_issue_links WHERE repo_id = ? AND number = ?", seeded.repo, pendingNumber);
+  check(!!imported?.issue_id, "J1: やり直しで Issue が紐づいていない");
+  const issueId = imported?.issue_id ?? "";
+  const before = await q<{ state_id: string }>(db, "SELECT state_id FROM issues WHERE id = ?", issueId);
+  check(before?.state_id === seeded.state, "J1: 取り込み直後が未着手ではない");
+
+  const done = await q<{ id: string }>(db, "SELECT id FROM workflow_states WHERE team_id = ? AND name = ?", seeded.team, "完了");
+  if (!done) throw new Error("J1: 完了が無い");
+  await exec(db, "UPDATE github_repos SET pr_merged_state_id = ? WHERE team_id = ?", done.id, seeded.team);
+  try {
+    await syncPull(pullCtx, waiting);
+    const link = await q<{ issue_id: string; state: string }>(
+      db,
+      "SELECT issue_id, state FROM github_pull_links WHERE workspace_id = ? AND repo_id = ? AND number = ?",
+      seeded.ws,
+      seeded.repo,
+      pullNumber,
+    );
+    check(link?.issue_id === issueId && link.state === "merged", "J1: やり直しの PR が課題に紐づいていない");
+    const after = await q<{ state_id: string }>(db, "SELECT state_id FROM issues WHERE id = ?", issueId);
+    check(after?.state_id === done.id, "J1: マージで完了に動いていない");
+  } finally {
+    await exec(db, "UPDATE github_repos SET pr_merged_state_id = NULL WHERE team_id = ?", seeded.team);
+  }
 }
 
 async function scenarioSenUnsynced(db: D1Database, seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {

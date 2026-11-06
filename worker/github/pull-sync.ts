@@ -86,7 +86,9 @@ export async function syncPull(ctx: PullSyncCtx, payload: GitHubPullEvent | null
   const author = current.pull_request.user?.login?.trim() || null;
   const url = current.pull_request.html_url || `https://github.com/${repo.full_name}/pull/${current.pull_request.number}`;
   const title = current.pull_request.title ?? "";
-  const issueIds = await resolveIssueIds(ctx.env.DB, ctx.workspaceId, current);
+  const resolved = await resolvePullRefs(ctx.env.DB, ctx.workspaceId, current, true);
+  await replacePendingPullRefs(ctx, repo.repo_id, current.pull_request.number, resolved.pending);
+  const issueIds = resolved.ids;
   await rewritePullLinks(ctx, ws, {
     repoId: repo.repo_id,
     repo: repo.full_name,
@@ -116,6 +118,17 @@ function asPull(payload: unknown): GitHubPullEvent | null {
 }
 
 async function resolveIssueIds(db: D1Database, workspaceId: string, event: GitHubPullEvent): Promise<string[]> {
+  const { ids } = await resolvePullRefs(db, workspaceId, event, false);
+  return ids;
+}
+
+/** 課題 ID と、まだ紐づいていない GitHub の参照。Sen のキー（ENG-12 など）は pending に入れない */
+async function resolvePullRefs(
+  db: D1Database,
+  workspaceId: string,
+  event: GitHubPullEvent,
+  trackPending: boolean,
+): Promise<{ ids: string[]; pending: { repoId: number; number: number }[] }> {
   const teams = await all<{ key: string }>(db, "SELECT key FROM teams WHERE workspace_id = ?", workspaceId);
   const repo = await first<{ repo_id: number }>(
     db,
@@ -138,13 +151,58 @@ async function resolveIssueIds(db: D1Database, workspaceId: string, event: GitHu
     seen.add(id);
     ids.push(id);
   };
+  const pending: { repoId: number; number: number }[] = [];
+  const pendingSeen = new Set<string>();
   for (const ref of extracted.issues) add(await issueIdByKey(db, workspaceId, ref.key, ref.number));
   for (const ref of extracted.github) {
     const repoId = ref.repo ? await linkedRepoId(db, workspaceId, ref.repo) : (repo?.repo_id ?? null);
     if (repoId == null) continue;
-    add(await issueIdByGitHub(db, workspaceId, repoId, ref.number));
+    const issueId = await issueIdByGitHub(db, workspaceId, repoId, ref.number);
+    add(issueId);
+    if (!trackPending || issueId) continue;
+    if (await importSkipped(db, repoId, ref.number)) continue;
+    const key = `${repoId}:${ref.number}`;
+    if (pendingSeen.has(key)) continue;
+    pendingSeen.add(key);
+    pending.push({ repoId, number: ref.number });
   }
-  return ids;
+  return { ids, pending };
+}
+
+/** この PR の未解決の参照を書き直す。解決できたものと、取り込み禁止のものは残さない */
+async function replacePendingPullRefs(
+  ctx: PullSyncCtx,
+  pullRepoId: number,
+  pullNumber: number,
+  pending: { repoId: number; number: number }[],
+): Promise<void> {
+  await run(
+    ctx.env.DB,
+    "DELETE FROM github_pull_pending_refs WHERE workspace_id = ? AND pull_repo_id = ? AND pull_number = ?",
+    ctx.workspaceId,
+    pullRepoId,
+    pullNumber,
+  );
+  const now = Date.now();
+  for (const ref of pending) {
+    await run(
+      ctx.env.DB,
+      `INSERT INTO github_pull_pending_refs (
+         repo_id, number, pull_repo_id, pull_number, workspace_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+      ref.repoId,
+      ref.number,
+      pullRepoId,
+      pullNumber,
+      ctx.workspaceId,
+      now,
+    );
+  }
+}
+
+async function importSkipped(db: D1Database, repoId: number, number: number): Promise<boolean> {
+  const row = await first(db, "SELECT repo_id FROM github_import_skips WHERE repo_id = ? AND number = ?", repoId, number);
+  return !!row;
 }
 
 async function rewritePullLinks(

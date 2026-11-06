@@ -91,3 +91,15 @@ CREATE TABLE IF NOT EXISTS github_import_skips (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (repo_id, number)
 );
+
+-- 参照先の Issue がまだ取り込まれていないプルリクエスト。
+-- 紐づけができたら、そのプルリクエストを順番待ちに戻す。30 日より前のものは毎日の突き合わせで消す。
+CREATE TABLE IF NOT EXISTS github_pull_pending_refs (
+  repo_id INTEGER NOT NULL,
+  number INTEGER NOT NULL,
+  pull_repo_id INTEGER NOT NULL,
+  pull_number INTEGER NOT NULL,
+  workspace_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, number, pull_repo_id, pull_number)
+);

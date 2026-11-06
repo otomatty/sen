@@ -20,6 +20,8 @@ export interface GitHubProcessorContext {
   enqueueComment: (commentId: string) => Promise<void>;
   /** 完了・キャンセルにした課題を、Sen 側の変更として突き合わせに戻す */
   enqueueIssue: (issueId: string) => Promise<void>;
+  /** 参照先の Issue が紐づいたとき、その PR を順番待ちに戻す */
+  enqueuePull: (repoId: number, number: number, fullName: string) => Promise<void>;
 }
 
 export interface GitHubProcessorJob {
@@ -401,6 +403,7 @@ export class GitHubSyncRunner {
       labelCache: this.labels,
       enqueueComment: (commentId) => this.enqueueComment(commentId),
       enqueueIssue: (issueId) => this.enqueueIssue(issueId),
+      enqueuePull: (repoId, number, fullName) => this.enqueuePull(repoId, number, fullName),
     };
   }
 
@@ -413,6 +416,15 @@ export class GitHubSyncRunner {
   private async enqueueIssue(issueId: string): Promise<void> {
     if (!issueId) return;
     await this.putItem(`gh:dirty:issue:${issueId}`, Date.now());
+    await this.recomputeNext();
+  }
+
+  /** 番号とリポジトリだけ。処理の前に syncPull が getPull で今の PR を取り直す */
+  private async enqueuePull(repoId: number, number: number, fullName: string): Promise<void> {
+    await this.putItem(`gh:event:pull:${repoId}:${number}`, Date.now(), {
+      pull_request: { number },
+      repository: { id: repoId, full_name: fullName },
+    });
     await this.recomputeNext();
   }
 

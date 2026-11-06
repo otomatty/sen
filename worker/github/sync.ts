@@ -62,6 +62,11 @@ export interface SyncCtx {
   enqueueComment: (commentId: string) => Promise<void>;
   /** 突き合わせの途中で Sen が変わったとき、この課題を順番待ちに戻す */
   enqueueIssue?: (issueId: string) => Promise<void>;
+  /**
+   * 参照先の Issue が紐づいたとき、待っていた PR を順番待ちに戻す。
+   * 無いときは何もしない（未解決の参照の記録も残す）。
+   */
+  enqueuePull?: (repoId: number, number: number, fullName: string) => Promise<void>;
 }
 
 export interface IssueOp {
@@ -119,6 +124,8 @@ const ASSIGNEE_ERROR = /^担当者を GitHub に反映できませんでした�
 const RECOVERY_MARGIN_MS = 60_000;
 /** Issue の作り直し防止。時計のずれの分だけ、試行時刻より前を見る */
 const CREATE_MATCH_MARGIN_MS = 5_000;
+/** 参照先が取り込まれないまま残った PR の記録を、毎日の突き合わせで消すまでの期間 */
+const PENDING_PULL_REF_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function reconcileIssue(
   ctx: SyncCtx,
@@ -372,6 +379,13 @@ export async function scanSenUnsynced(
     SEN_UNSYNCED_LIMIT,
   );
   for (const row of comments) await enqueue.comment(row.id);
+
+  await run(
+    env.DB,
+    "DELETE FROM github_pull_pending_refs WHERE workspace_id = ? AND created_at < ?",
+    workspaceId,
+    Date.now() - PENDING_PULL_REF_TTL_MS,
+  );
 }
 
 export async function scanUpdates(
@@ -1061,6 +1075,39 @@ async function updateLinkBase(
 
 async function publishLink(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>, issueId: string): Promise<void> {
   await commitGitHubChanges(ctx.env, ws, [{ entity: "githubLink", entityId: issueId, op: "upsert" }]);
+  await releasePendingPulls(ctx, issueId);
+}
+
+/** この Issue を待っていた PR を順番待ちに戻して、記録を消す。enqueuePull が無ければ何もしない */
+async function releasePendingPulls(ctx: SyncCtx, issueId: string): Promise<void> {
+  if (!ctx.enqueuePull) return;
+  const link = await linkByIssue(ctx.env.DB, ctx.workspaceId, issueId);
+  if (!link) return;
+  const rows = await all<{ pull_repo_id: number; pull_number: number }>(
+    ctx.env.DB,
+    "SELECT pull_repo_id, pull_number FROM github_pull_pending_refs WHERE workspace_id = ? AND repo_id = ? AND number = ?",
+    ctx.workspaceId,
+    link.repo_id,
+    link.number,
+  );
+  for (const row of rows) {
+    const repo = await first<{ full_name: string }>(
+      ctx.env.DB,
+      "SELECT full_name FROM github_repos WHERE workspace_id = ? AND repo_id = ?",
+      ctx.workspaceId,
+      row.pull_repo_id,
+    );
+    // 連携が外れていれば順番待ちには入れず、記録だけ消す
+    if (repo) await ctx.enqueuePull(row.pull_repo_id, row.pull_number, repo.full_name);
+    await run(
+      ctx.env.DB,
+      "DELETE FROM github_pull_pending_refs WHERE repo_id = ? AND number = ? AND pull_repo_id = ? AND pull_number = ?",
+      link.repo_id,
+      link.number,
+      row.pull_repo_id,
+      row.pull_number,
+    );
+  }
 }
 
 async function deleteLink(ctx: SyncCtx, ws: NonNullable<Awaited<ReturnType<typeof loadWorkspace>>>, issueId: string): Promise<void> {
