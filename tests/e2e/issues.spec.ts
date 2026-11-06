@@ -36,9 +36,8 @@ test.describe("課題の操作", () => {
     await title.press("Enter");
     await expect(page.getByTestId("create-description")).toBeFocused();
     await page.keyboard.type("説明の下書き");
-    // 説明欄の Escape は編集を終える。フォーカスが外れるのを待ってから、もう一度でダイアログを閉じる
+    // 説明欄の Escape は編集を終える。もう一度でダイアログを閉じる
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("create-description")).not.toBeFocused();
     await page.keyboard.press("Escape");
     await expect(modal).toBeHidden();
 
@@ -62,6 +61,44 @@ test.describe("課題の操作", () => {
     await page.locator("body").click({ position: { x: 5, y: 5 } });
     await page.keyboard.press("c");
     await expect(title).toHaveValue("");
+  });
+
+  test("説明欄で同じフレームに Escape が 2 回届くと、課題作成のダイアログが閉じる", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    const description = page.getByTestId("create-description");
+    await expect(description).toHaveAttribute("contenteditable", "true");
+    await description.click();
+    await page.keyboard.type("同じフレームの説明");
+    await expect(description).toBeFocused();
+
+    // 1 回だけなら閉じず、説明欄のフォーカスが外れる
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeVisible();
+    await expect(description).not.toBeFocused();
+    await expect(description).toContainText("同じフレームの説明");
+
+    await description.click();
+    await expect(description).toBeFocused();
+    // 2 回の keydown を同じタスクで続けて送り、同じフレームに届く状態にする
+    await page.evaluate(() => {
+      const editor = document.querySelector("[data-testid='create-description']");
+      if (!(editor instanceof HTMLElement) || document.activeElement !== editor) {
+        throw new Error("説明欄にフォーカスがありません");
+      }
+      const down = () => {
+        const target = document.activeElement;
+        if (!(target instanceof HTMLElement)) throw new Error("フォーカスがありません");
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }),
+        );
+      };
+      down();
+      down();
+    });
+    await expect(modal).toBeHidden();
   });
 
   test.describe("説明欄の読み込みが遅いとき", () => {

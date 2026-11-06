@@ -15,6 +15,7 @@ import { InlineHtml, RawHtmlBlock } from "./editor/rawHtml";
 import { TableToolbar } from "./editor/TableToolbar";
 import { adjustEmphasisPunctuation } from "./editor/emphasis";
 import { createTableFromPipes, inTableCell, tableExtensions } from "./editor/table";
+import { CompositionGuard } from "./editor/composition";
 
 // リッチテキストエディタ。本文は GitHub 互換の Markdown（GFM）として読み書きする。
 //   "# " 見出し / "- " 箇条書き / "1. " 番号付き / "[] " チェックリスト / "```" コード / "> " 引用
@@ -94,6 +95,7 @@ export default function EditorImpl({
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: placeholder ?? "" }),
+      CompositionGuard,
       Extension.create({
         name: "senKeys",
         addKeyboardShortcuts() {
@@ -106,7 +108,10 @@ export default function EditorImpl({
               return false;
             },
             Escape: () => {
-              this.editor.commands.blur();
+              // Tiptap の blur は requestAnimationFrame まで遅れる。同じフレームの
+              // 2 回目の Escape も説明欄に届き、ダイアログが閉じなくなる。
+              (this.editor.view.dom as HTMLElement).blur();
+              window.getSelection()?.removeAllRanges();
               return true;
             },
           };
