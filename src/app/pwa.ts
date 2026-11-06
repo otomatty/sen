@@ -1,9 +1,9 @@
 import { create } from "zustand";
-import { useData } from "../store/data";
 import { dismissToast, toast } from "../store/ui";
 import { confirmDialog } from "../components/ConfirmDialog";
-import { hasIssueDraft } from "../features/issues/CreateIssueModal";
 import { hasCommentDraft } from "../features/issues/CommentComposer";
+import { hasUnsavedIssueDraft } from "../features/issues/issueDraft";
+import { lockScreen, waitForSync } from "./guard";
 
 // PWA（インストールできるアプリ）としての振る舞い
 //  - サービスワーカーを登録し、新しい版が届いたら「更新」を案内する
@@ -80,33 +80,18 @@ function hasCurrentCode(worker: ServiceWorker): Promise<boolean> {
   });
 }
 
-/** 未送信の変更がなくなるまで待つ。オフラインのときや時間内に送れなかったときは false */
-function waitForSync(timeout: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const check = (s: ReturnType<typeof useData.getState>) => {
-      if (s.pendingCount === 0) return finish(true);
-      if (s.syncStatus === "offline") return finish(false);
-    };
-    const finish = (ok: boolean) => {
-      clearTimeout(timer);
-      off();
-      resolve(ok);
-    };
-    const timer = setTimeout(() => finish(false), timeout);
-    const off = useData.subscribe(check);
-    check(useData.getState());
-  });
-}
-
 /** 新しい版に切り替えて、画面を読み込み直す */
 export async function applyUpdate() {
   const worker = waiting;
   if (!worker || updating) return;
-  // 読み込み直すと消える書きかけの内容は、確かめてから捨てる
-  if (hasIssueDraft() || hasCommentDraft()) {
+  // 読み込み直すと消える書きかけのコメントと、保存できなかった課題の下書きは、確かめてから捨てる
+  const unsavedIssue = hasUnsavedIssueDraft();
+  if (unsavedIssue || hasCommentDraft()) {
     const ok = await confirmDialog({
-      title: "書きかけの内容があります",
-      message: "作成中の課題や書きかけのコメントは、更新すると失われます。更新しますか？",
+      title: unsavedIssue ? "書きかけの内容があります" : "書きかけのコメントがあります",
+      message: unsavedIssue
+        ? "保存できなかった作成中の課題の下書きや、書きかけのコメントは、更新すると失われます。更新しますか？"
+        : "書きかけのコメントは、更新すると失われます。更新しますか？",
       confirmLabel: "更新する",
       danger: true,
     });
@@ -143,12 +128,6 @@ export async function applyUpdate() {
   target.postMessage({ type: "skip-waiting" });
   // 切り替わらなかったときは、操作できる状態に戻す
   setTimeout(() => fail("更新できませんでした。もう一度お試しください"), 10_000);
-}
-
-/** 画面全体の操作を止める・戻す */
-function lockScreen(locked: boolean) {
-  const root = document.getElementById("root");
-  if (root) root.inert = locked;
 }
 
 function showToast(message: string, action: { label: string; run: () => void }) {

@@ -723,7 +723,7 @@ function htmlPlain(src: string): string {
 }
 
 /**
- * 検索・シート用の行内文字。表示が文字参照を戻す所だけ戻す。
+ * 検索用の行内文字。表示が文字参照を戻す所だけ戻す。
  * 通常の文字（リンクや見出し、行内 HTML のタグの間を含む）と画像の代替テキストは戻し、コードは戻さない。
  * 行内 HTML のタグそのものは文字を残さない。
  */
@@ -830,70 +830,6 @@ export function markdownToText(md: string): string {
     if (textCache.size === before) break;
   }
   return text;
-}
-
-function plainLines(tokens: Token[]): string[] {
-  return tokens.flatMap((token) => plainBlockLines(token));
-}
-
-function plainBlockLines(token: Token): string[] {
-  switch (token.type) {
-    case "space":
-    case "hr":
-    case "def":
-    case "checkbox":
-    case "footnoteReference":
-      return [];
-    case "code":
-    case "codespan":
-      return softenNbsp(token.text).replace(/\n$/, "").split("\n");
-    case "heading":
-    case "paragraph":
-    case "strong":
-    case "em":
-    case "del":
-    case "link":
-      return plainInline(token.tokens).split("\n");
-    case "blockquote":
-    case "alert":
-    case "footnoteDefinition":
-      return plainLines((token as Tokens.Generic).tokens ?? []);
-    case "list": {
-      const list = token as Tokens.List;
-      return list.items.flatMap((item) => plainLines(item.tokens));
-    }
-    case "table":
-      return tableLines(token as Tokens.Table);
-    case "html":
-      return htmlPlain(token.text).split("\n");
-    case "text":
-      return (token.tokens?.length ? plainInline(token.tokens) : decodePlainText(token.text)).split("\n");
-    default:
-      if (token.type === "inlineHtml") return htmlPlain(String(token.raw ?? "")).split("\n");
-      return (token as Tokens.Generic).tokens ? plainLines((token as Tokens.Generic).tokens ?? []) : [];
-  }
-}
-
-function tableLines(table: Tokens.Table): string[] {
-  return [table.header, ...table.rows].flatMap((row) => {
-    const cells = row.map((cell) => plainInline(cell.tokens).split("\n"));
-    const height = Math.max(1, ...cells.map((lines) => lines.length));
-    const lines: string[] = [];
-    for (let i = 0; i < height; i++) lines.push(cells.map((cell) => cell[i] ?? "").join(" | "));
-    return lines;
-  });
-}
-
-/**
- * スプレッドシートの説明列用。段落・見出し・コードブロックの各行・引用・注記・脚注の定義、
- * リスト項目、表の行、改行（br）を改行で区切る。1 行の中の空白はまとめ、空行は詰める。
- * リンクの URL は含めず、HTML のタグは除く。結果は覚えない。
- */
-export function markdownToPlainLines(md: string): string {
-  return plainLines(createMarked().lexer(md))
-    .map((line) => restorePlain(line).replace(/\s+/g, " ").trim())
-    .filter((line) => line !== "")
-    .join("\n");
 }
 
 /** 空白だけ、または文字が無く、表示される画像も水平線も無いとき */

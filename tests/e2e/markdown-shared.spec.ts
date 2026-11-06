@@ -7,7 +7,6 @@ import {
   isMarkdownBlank,
   markdownTextCacheSize,
   markdownToHtml,
-  markdownToPlainLines,
   markdownToText,
   matchAlert,
   matchFootnoteDefinition,
@@ -129,18 +128,6 @@ test("markdownToText は検索に使う文字だけを残す", () => {
   expect(markdownToText("hello @taro")).toBe(markdownToText("hello @taro"));
 });
 
-test("markdownToPlainLines はブロックの区切りを改行で残す", () => {
-  expect(markdownToPlainLines("段落1\n\n段落2")).toBe("段落1\n段落2");
-  expect(markdownToPlainLines("- 項目1\n- 項目2")).toBe("項目1\n項目2");
-  expect(markdownToPlainLines("# 見出し")).toBe("見出し");
-  expect(markdownToPlainLines("| A | B |\n| --- | --- |\n| 1 | 2 |")).toBe("A | B\n1 | 2");
-  expect(markdownToPlainLines("a\nb")).toBe("a\nb");
-  expect(markdownToPlainLines("```\ncode1\ncode2\n```")).toBe("code1\ncode2");
-  expect(markdownToPlainLines("[文字](https://secret.example/path)")).toBe("文字");
-  expect(markdownToPlainLines("<div>タグの中</div>")).toBe("タグの中");
-  expect(markdownToPlainLines("<div>&amp;</div>")).toBe("&amp;");
-});
-
 test("isMarkdownBlank は文字も画像も水平線も無いときだけ真", () => {
   expect(isMarkdownBlank("")).toBe(true);
   expect(isMarkdownBlank("  \n")).toBe(true);
@@ -168,7 +155,6 @@ test("平文は、表示が文字参照を戻す所だけ戻す", () => {
   ];
   for (const [md, text] of samples) {
     expect(markdownToText(md), md).toBe(text);
-    expect(markdownToPlainLines(md), md).toBe(text);
   }
 });
 
@@ -177,27 +163,23 @@ test("名前付き文字参照は、表示では参照のまま、平文では H
   expect(shown.includes("&copy;") || shown.includes("©")).toBe(true);
   expect(shown).not.toContain("&amp;copy;");
   expect(markdownToText("&copy; 2026 &eacute;t&eacute;")).toBe("© 2026 été");
-  expect(markdownToPlainLines("&copy; 2026 &eacute;t&eacute;")).toBe("© 2026 été");
   expect(markdownToText("&reg; &hellip; &mdash; &yen;")).toBe("® … — ¥");
 
   const unknown = markdownToHtml("&foo;");
   expect(unknown).toContain("&foo;");
   expect(unknown).not.toContain("&amp;foo;");
   expect(markdownToText("&foo;")).toBe("&foo;");
-  expect(markdownToPlainLines("&foo;")).toBe("&foo;");
 
   const code = markdownToHtml("`&copy;`");
   expect(code).toContain("<code>&amp;copy;</code>");
   expect(code).not.toContain("©");
   expect(markdownToText("`&copy;`")).toBe("&copy;");
-  expect(markdownToPlainLines("`&copy;`")).toBe("&copy;");
   const block = markdownToHtml("```\n&copy;\n```");
   expect(block).toContain("&amp;copy;");
   expect(block).not.toContain("©");
   expect(markdownToText("```\n&copy;\n```")).toBe("&copy;");
 
   expect(markdownToText("<div>&copy;</div>")).toBe("&copy;");
-  expect(markdownToPlainLines("<div>&copy;</div>")).toBe("&copy;");
 
   const link = markdownToHtml("[&copy;](https://example.com)");
   expect(link).toContain("&copy;");

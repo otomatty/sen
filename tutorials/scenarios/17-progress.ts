@@ -7,14 +7,14 @@ export default defineScenario({
   order: 17,
   screen: "progress",
   title: "進捗を見る",
-  summary: "プロジェクトの進み具合を、活動一覧・WBS・タイムラインで確かめます。数え方はスプレッドシートと同じです。",
+  summary: "プロジェクトの進み具合を、活動一覧・WBS・タイムラインで確かめます。",
   start: "/inbox",
   async run(t) {
     await t.caption("サイドバーの「進捗」で、ワークスペース全体の進み具合が分かります");
     await t.click("[data-testid=nav-progress]");
     await t.expect("[data-testid=progress-page]");
 
-    await t.caption("プロジェクトごとの完了率と状況を、スプレッドシートと同じ数え方で出します");
+    await t.caption("プロジェクトごとの完了率と状況を、一覧で確かめます");
     await t.expect(`${MOBILE} [data-testid=progress-rate]`, { text: "28%（2/7）" });
     await t.expect(`${MOBILE} [data-testid=progress-status]`, { text: "保留あり" });
     await t.highlight(".progress-cards", 1100);
