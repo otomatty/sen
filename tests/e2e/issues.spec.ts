@@ -1,5 +1,5 @@
 import { devices, expect, test } from "@playwright/test";
-import { row, seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
+import { dismissWelcome, row, seedDemo, signupViaUi, touchDrag, waitForSynced } from "./helpers";
 
 test.describe("課題の操作", () => {
   test.beforeEach(async ({ page }) => {
@@ -24,6 +24,103 @@ test.describe("課題の操作", () => {
     // 再読み込みしても残っている＝サーバーに保存されている
     await page.reload();
     await expect(page.getByTestId("issue-row").filter({ hasText: "E2E で作った課題" })).toBeVisible();
+  });
+
+  test("書きかけの課題は、グループの＋から開いても、読み込み直しても残る", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    const title = page.getByTestId("create-title");
+    await title.fill("下書きの課題");
+    await title.press("Enter");
+    await page.keyboard.type("説明の下書き");
+    // 説明欄の Escape は編集を終える。もう一度でダイアログを閉じる
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    const header = page.locator(".group-header").first();
+    const label = (await header.locator(".group-label").innerText()).trim();
+    await header.hover();
+    await header.locator(".group-add").click();
+    await expect(title).toHaveValue("下書きの課題");
+    await expect(page.getByTestId("create-status")).toContainText(label);
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.reload();
+    await expect(page.getByTestId("issue-list")).toBeVisible();
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("下書きの課題");
+    await expect(page.getByTestId("create-description")).toContainText("説明の下書き");
+    await page.keyboard.press("Control+Enter");
+    await expect(modal).toBeHidden();
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("");
+  });
+
+  test("下書きを保存できなくなっても、閉じて開き直すと最新の内容が出る", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    const title = page.getByTestId("create-title");
+    await title.fill("最初の下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key.startsWith("sen:issue-draft:")) {
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        return original.call(this, key, value);
+      };
+    });
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("最初の下書き");
+    await title.fill("書き直した下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(title).toHaveValue("書き直した下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+  });
+
+  test("別のタブで下書きから課題を作ると、元のタブで開き直しても下書きは出ない", async ({ page }) => {
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    const modal = page.getByTestId("create-issue-modal");
+    await expect(modal).toBeVisible();
+    await page.getByTestId("create-title").fill("タブをまたぐ下書き");
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden();
+
+    const other = await page.context().newPage();
+    await other.goto(page.url());
+    await expect(other.getByTestId("issue-list")).toBeVisible();
+    await dismissWelcome(other);
+
+    await other.locator("body").click({ position: { x: 5, y: 5 } });
+    await other.keyboard.press("c");
+    const otherTitle = other.getByTestId("create-title");
+    await expect(otherTitle).toHaveValue("タブをまたぐ下書き");
+    await other.keyboard.press("Control+Enter");
+    await expect(other.getByTestId("create-issue-modal")).toBeHidden();
+
+    await page.locator("body").click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press("c");
+    await expect(page.getByTestId("create-title")).toHaveValue("");
+    await other.close();
   });
 
   test("キーボードでフォーカスしてステータスと優先度を変更できる", async ({ page }) => {
