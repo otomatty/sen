@@ -27,7 +27,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 - **リアルタイム同期**：Durable Object（WebSocket Hibernation）が変更を通知し、各クライアントが差分を取得
 - **ローカルファースト**：IndexedDB キャッシュによる瞬時の起動、サービスワーカーによるオフライン起動、`⌘Z` で直前の操作を元に戻す
 - **アプリとしてインストール（PWA）**：デスクトップやスマートフォンのホーム画面から専用のウィンドウで開けます。新しいバージョンを公開すると「更新」を案内します（[詳しく](docs/guide/12-app.md)）
-- **AI 連携（MCP）**：Claude Code・Cursor・VS Code などの AI ツールから、課題の作成・更新・検索・コメント・関係づけ。AI の変更には「Claude Code 経由」の印（[詳しく](docs/guide/10-ai.md)）
+- **AI 連携（MCP）**：Claude・ChatGPT・Claude Code・Cursor などから、OAuth で URL を入れるだけで接続。課題の作成・更新・検索・コメント・関係づけ。AI の変更には「Claude 経由」のような印（[詳しく](docs/guide/10-ai.md)）
 - **AI アシスタント**：画面の中で Sen の使い方を質問できる。説明・画面を開くボタン・使い方動画・聞き返しまでで、課題などのデータは AI に送らない（[詳しく](docs/guide/13-help.md)）
 - **進捗**：ワークスペースのメンバーが、プロジェクト（活動）ごとの完了率・直近期限・活動状況と、作業の WBS・タイムラインをアプリの中で見られます（[詳しく](docs/guide/07-progress.md)）
 - **GitHub 連携**：タイトル・説明・開閉・コメント（追加のみ）・同じ名前のラベル・登録した担当者を双方向に同期し、プルリクエストを課題に紐づけます（[詳しく](docs/guide/14-github.md)）
@@ -69,7 +69,7 @@ flowchart LR
   end
   Engine -- "bootstrap / mutate / sync" --> Worker
   UI -- "Google でログイン" --> Google["Google（OAuth）"] -- "/api/auth/callback/google" --> Worker
-  AI["AI ツール<br/>Claude Code・Cursor など"] -- "MCP（/api/mcp）" --> Worker
+  AI["AI ツール<br/>Claude・ChatGPT など"] -- "MCP（/api/mcp）" --> Worker
   Worker --> D1
   Worker -- "新しい syncId を通知" --> DO
   DO -- "WebSocket" --> Engine
@@ -104,16 +104,35 @@ flowchart LR
 
 ## AI 連携（MCP）
 
-Claude Code・Cursor・VS Code などの AI ツールから、Sen の課題を操作できます。手順と、ツールでできることは [AI ツールとの連携](docs/guide/10-ai.md) にあります。
+Claude・ChatGPT・Claude Code・Cursor などの AI ツールから、Sen の課題を操作できます。手順と、ツールでできることは [AI ツールとの連携](docs/guide/10-ai.md) にあります。
 
 **仕組み**
 
 - 接続先は `POST /api/mcp` です。MCP の Streamable HTTP で、セッションを持たないステートレスなサーバーです。
-- トークンはワークスペースごと・個人ごとに発行します。保存するのはハッシュだけで、トークン自体は発行したときだけ表示します。
+- 認証は Bearer です。OAuth のアクセストークン（`sen_at_…`）か、ワークスペースごと・個人ごとに発行する個人トークン（`sen_…`）を使います。Cookie は使わないため、CORS は全オリジンに開いています。
+- OAuth 2.1 の認可サーバーを Worker に内蔵しています。
+  - ディスカバリーは `/.well-known/oauth-protected-resource/api/mcp` と `/.well-known/oauth-authorization-server` です。MCP の 401 応答の `WWW-Authenticate` にある `resource_metadata` からも見つけられます。
+  - クライアントの登録は Client ID Metadata Document（CIMD）と DCR に対応します。DCR は `POST /api/oauth/register` です。
+  - 認可は `GET /api/oauth/authorize` から同意画面 `/oauth/consent` へ進みます。PKCE の S256 が必須です。
+  - トークンは `POST /api/oauth/token` で発行します。アクセストークンは 1 時間有効です。リフレッシュトークンは使うたびに入れ替え、その時点から 90 日有効です。
+  - 失効は `POST /api/oauth/revoke` です。接続と、それに属するアクセストークンをまとめて無効にします。
+  - `redirect_uri` は https、http のループバック（`localhost`・`127.0.0.1`・`[::1]`）、独自スキームに対応します。実行可能な危険なスキームなどは拒否します。登録した URI と照合し、ループバックではポートを問いません。
+- トークン・認可コード・`client_secret` はハッシュだけを保存します。個人トークンの値は発行時だけ表示します。OAuth の保存先は `oauth_clients`、`oauth_requests`、`oauth_codes`、`oauth_grants`、`oauth_access_tokens`（`migrations/0011_oauth.sql`）です。毎日の掃除で期限切れのリクエスト・コード・アクセストークン・接続と、参照されていない古いクライアントを削除します。
+- `BETTER_AUTH_URL` が issuer と resource の基準です。公開している URL と同じにしてください。
 - 書き込みは画面と同じミューテーションを通るので、検証・履歴・通知・リアルタイム同期がそのまま効きます。
 - 説明とコメントは、GitHub 互換の Markdown（GFM）の文字列を、変換せずにそのまま受け渡します。課題のタイトルは 256 文字、説明とコメントは 65,536 文字までです（JS の文字数で数えるので、GitHub より厳しいか、同じです）。
 
-手元で試すときは、`bun run dev` で起動し、発行したトークンで次を実行します。
+**手元で試すとき**
+
+`bun run dev` で起動し、次を実行します。
+
+```bash
+claude mcp add --transport http sen http://localhost:5173/api/mcp
+```
+
+Claude Code の `/mcp` で `sen` を選んで認証します。
+
+個人トークンで試すときは、設定の「AI 連携」で発行し、次を実行します。
 
 ```bash
 claude mcp add --transport http sen http://localhost:5173/api/mcp --header "Authorization: Bearer sen_..."
@@ -314,7 +333,7 @@ bun run typecheck
 bun run test:e2e     # ビルド → まっさらな DB で起動 → Playwright で実際に操作して検証
 ```
 
-Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、メール指定の招待と利用できるドメイン、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、Markdown のエディタ（記法の入力、表の操作、往復しても失われないこと、開いただけでは保存しないこと）、本文の移行、タイトルと説明・コメントの上限、招待メンバーへのリアルタイム反映と通知、オフライン時の再送、PWA（マニフェストとアイコン、オフラインでの起動、ショートカット、インストールの案内、新しいバージョンへの更新）、AI 連携（トークンの発行、MCP からの課題の作成・更新・検索・コメント・関係づけ、閲覧のみと認証）、GitHub 連携（Webhook の署名と重複、リポジトリの連携、課題とコメントの双方向の同期、手での紐づけ、PR の紐づけと自動の移動、模擬 GitHub サーバーを使うこと）などを確認します。
+Google ログイン（Google の画面への遷移・キャンセル時の表示）、初回のワークスペース作成、メール指定の招待と利用できるドメイン、ログアウト、課題の作成・キーボード操作・一括変更と元に戻す、フィルター、ボードのドラッグ＆ドロップ、詳細画面の編集、Markdown のエディタ（記法の入力、表の操作、往復しても失われないこと、開いただけでは保存しないこと）、本文の移行、タイトルと説明・コメントの上限、招待メンバーへのリアルタイム反映と通知、オフライン時の再送、PWA（マニフェストとアイコン、オフラインでの起動、ショートカット、インストールの案内、新しいバージョンへの更新）、AI 連携（OAuth のディスカバリー、DCR・CIMD、同意、PKCE、リフレッシュ、失効、トークンの発行、MCP からの課題の作成・更新・検索・コメント・関係づけ、閲覧のみと認証）、GitHub 連携（Webhook の署名と重複、リポジトリの連携、課題とコメントの双方向の同期、手での紐づけ、PR の紐づけと自動の移動、模擬 GitHub サーバーを使うこと）などを確認します。
 Google ログインは、ダミーの認証情報で「Google の画面へ移るところ」と「戻ってきたときの表示」までを確かめます（実際の Google には接続しません）。それ以外のテストは開発用のログインを使います。
 
 ## 利用者向けガイド
