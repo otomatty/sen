@@ -33,6 +33,7 @@ export async function isGrantMember(db: D1Database, workspaceId: string, userId:
 export async function deleteGrant(db: D1Database, id: string): Promise<void> {
   await db.batch([
     stmt(db, "DELETE FROM oauth_access_tokens WHERE grant_id = ?", id),
+    stmt(db, "DELETE FROM oauth_refresh_used WHERE grant_id = ?", id),
     stmt(db, "DELETE FROM oauth_grants WHERE id = ?", id),
   ]);
 }
@@ -85,6 +86,9 @@ export async function cleanupOAuth(db: D1Database, now: number): Promise<void> {
     stmt(db, "DELETE FROM oauth_requests WHERE expires_at <= ?", now),
     stmt(db, "DELETE FROM oauth_codes WHERE expires_at <= ?", now),
     stmt(db, "DELETE FROM oauth_access_tokens WHERE expires_at <= ? OR grant_id IN (SELECT id FROM oauth_grants WHERE refresh_expires_at <= ?)", now, now),
+    stmt(db, `DELETE FROM oauth_refresh_used WHERE created_at < ?
+      OR NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.id = oauth_refresh_used.grant_id)
+      OR grant_id IN (SELECT id FROM oauth_grants WHERE refresh_expires_at <= ?)`, now - 90 * 86_400_000, now),
     stmt(db, "DELETE FROM oauth_grants WHERE refresh_expires_at <= ?", now),
     stmt(db, `DELETE FROM oauth_clients WHERE kind = 'dcr' AND created_at < ?
       AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.client_id)

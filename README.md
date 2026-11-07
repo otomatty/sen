@@ -114,10 +114,10 @@ Claude・ChatGPT・Claude Code・Cursor などの AI ツールから、Sen の�
   - ディスカバリーは `/.well-known/oauth-protected-resource/api/mcp` と `/.well-known/oauth-authorization-server` です。MCP の 401 応答の `WWW-Authenticate` にある `resource_metadata` からも見つけられます。
   - クライアントの登録は Client ID Metadata Document（CIMD）と DCR に対応します。DCR は `POST /api/oauth/register` です。
   - 認可は `GET /api/oauth/authorize` から同意画面 `/oauth/consent` へ進みます。PKCE の S256 が必須です。
-  - トークンは `POST /api/oauth/token` で発行します。アクセストークンは 1 時間有効です。リフレッシュトークンは使うたびに入れ替え、その時点から 90 日有効です。入れ替えの直後 60 秒だけ、再送に備えて 1 つ前のトークンも使えます。それより後に使われたら、接続ごと無効にします。
+  - トークンは `POST /api/oauth/token` で発行します。アクセストークンは 1 時間有効です。リフレッシュトークンは使うたびに入れ替え、その時点から 90 日有効です。入れ替えの直後 60 秒だけ、再送に備えて 1 つ前のトークンも使えます。それより後に使われたら、接続ごと無効にします。入れ替えで使えなくなったトークンのハッシュも記録し、それが提示されたら接続ごと無効にします。
   - 失効は `POST /api/oauth/revoke` です。接続と、それに属するアクセストークンをまとめて無効にします。
   - `redirect_uri` は https、http のループバック（`localhost`・`127.0.0.1`・`[::1]`）、独自スキームに対応します。実行可能な危険なスキームなどは拒否します。登録した URI と照合し、ループバックではポートを問いません。
-- トークン・認可コード・`client_secret` はハッシュだけを保存します。個人トークンの値は発行時だけ表示します。OAuth の保存先は `oauth_clients`、`oauth_requests`、`oauth_codes`、`oauth_grants`、`oauth_access_tokens`（`migrations/0011_oauth.sql`）です。毎日の掃除で期限切れのリクエスト・コード・アクセストークン・接続と、参照されていない古いクライアントを削除します。
+- トークン・認可コード・`client_secret` はハッシュだけを保存します。個人トークンの値は発行時だけ表示します。OAuth の保存先は `oauth_clients`、`oauth_requests`、`oauth_codes`、`oauth_grants`、`oauth_access_tokens`、`oauth_refresh_used`（`migrations/0011_oauth.sql`）です。毎日の掃除で期限切れのリクエスト・コード・アクセストークン・接続と、参照されていない古いクライアントを削除します。
 - `BETTER_AUTH_URL` が issuer と resource の基準です。公開している URL と同じにしてください。
 - 書き込みは画面と同じミューテーションを通るので、検証・履歴・通知・リアルタイム同期がそのまま効きます。
 - 説明とコメントは、GitHub 互換の Markdown（GFM）の文字列を、変換せずにそのまま受け渡します。課題のタイトルは 256 文字、説明とコメントは 65,536 文字までです（JS の文字数で数えるので、GitHub より厳しいか、同じです）。

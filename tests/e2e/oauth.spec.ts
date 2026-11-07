@@ -313,22 +313,46 @@ test("リフレッシュトークンをローテーションし、失効でき�
   const rotate = (token: string) => refresh(page.request, { client_id: first.client_id, refresh_token: token });
   const second = await rotate(first.refresh_token);
   expect(second.status).toBe(200);
-  const third = await rotate(first.refresh_token);
+  const third = await rotate(second.body.refresh_token);
   expect(third.status).toBe(200);
   expect(new Set([first.refresh_token, second.body.refresh_token, third.body.refresh_token]).size).toBe(3);
   expect(new Set([first.access_token, second.body.access_token, third.body.access_token]).size).toBe(3);
-  invalidGrant(await rotate(second.body.refresh_token));
-  const fourth = await rotate(third.body.refresh_token);
-  expect(fourth.status).toBe(200);
-  expect(fourth.body.refresh_token).not.toBe(third.body.refresh_token);
-  invalidGrant(await rotate(first.refresh_token));
-  const client = await connectMcp(baseURL!, fourth.body.access_token);
+  const client = await connectMcp(baseURL!, third.body.access_token);
   try { expect((await client.listTools()).tools.length).toBeGreaterThan(0); }
   finally { await client.close(); }
-  const revoked = await page.request.post("/api/oauth/revoke", { form: { client_id: first.client_id, token: fourth.body.refresh_token } });
+  const revoked = await page.request.post("/api/oauth/revoke", { form: { client_id: first.client_id, token: third.body.refresh_token } });
   expect(revoked.status()).toBe(200);
-  expect((await postMcp(page.request, fourth.body.access_token)).status()).toBe(401);
-  invalidGrant(await rotate(fourth.body.refresh_token));
+  expect((await postMcp(page.request, third.body.access_token)).status()).toBe(401);
+  invalidGrant(await rotate(third.body.refresh_token));
+});
+
+test("猶予の中で 1 つ前のトークンを使ったあと、置き換えられたトークンが来たら接続ごと無効になる", async ({ page }) => {
+  await signupViaUi(page);
+  const first = await tokensFor(page);
+  const rotate = (token: string) => refresh(page.request, { client_id: first.client_id, refresh_token: token });
+  const second = await rotate(first.refresh_token);
+  expect(second.status).toBe(200);
+  const third = await rotate(first.refresh_token);
+  expect(third.status).toBe(200);
+  invalidGrant(await rotate(second.body.refresh_token));
+  expect((await postMcp(page.request, third.body.access_token)).status()).toBe(401);
+  invalidGrant(await rotate(third.body.refresh_token));
+});
+
+test("入れ替え済みの古いトークンが来たら接続ごと無効になる", async ({ page }) => {
+  await signupViaUi(page);
+  const first = await tokensFor(page);
+  const rotate = (token: string) => refresh(page.request, { client_id: first.client_id, refresh_token: token });
+  const second = await rotate(first.refresh_token);
+  expect(second.status).toBe(200);
+  const third = await rotate(second.body.refresh_token);
+  expect(third.status).toBe(200);
+  const other = await registered(page.request);
+  invalidGrant(await refresh(page.request, { client_id: other.client_id, refresh_token: first.refresh_token }));
+  expect((await postMcp(page.request, third.body.access_token)).status()).toBe(200);
+  invalidGrant(await rotate(first.refresh_token));
+  expect((await postMcp(page.request, third.body.access_token)).status()).toBe(401);
+  invalidGrant(await rotate(third.body.refresh_token));
 });
 
 test("猶予を過ぎて 1 つ前のリフレッシュトークンを使うと、接続ごと無効になる", async ({ page }) => {

@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS oauth_access_tokens (
   grant_id TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
+-- 入れ替えで使えなくなったリフレッシュトークンのハッシュ。提示されたら盗まれたものとみなし、接続ごと失効させる
+CREATE TABLE IF NOT EXISTS oauth_refresh_used (
+  token_hash TEXT PRIMARY KEY,
+  grant_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS oauth_refresh_used_grant ON oauth_refresh_used(grant_id);
 CREATE INDEX IF NOT EXISTS oauth_grants_workspace_user ON oauth_grants(workspace_id, user_id);
 CREATE INDEX IF NOT EXISTS oauth_grants_prev_refresh ON oauth_grants(prev_refresh_hash);
 CREATE INDEX IF NOT EXISTS oauth_access_tokens_grant ON oauth_access_tokens(grant_id);

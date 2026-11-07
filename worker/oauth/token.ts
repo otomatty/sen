@@ -100,7 +100,14 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
     if (!body.refresh_token) return error(c, "invalid_request");
     const hash = await hashToken(body.refresh_token);
     const grant = await first<GrantRow>(db, "SELECT * FROM oauth_grants WHERE refresh_hash = ? OR prev_refresh_hash = ?", hash, hash);
-    if (!grant || grant.client_id !== client.client_id || grant.refresh_expires_at <= now) return error(c, "invalid_grant");
+    if (!grant) {
+      const used = await first<{ id: string; client_id: string }>(db,
+        "SELECT g.id, g.client_id FROM oauth_refresh_used u JOIN oauth_grants g ON g.id = u.grant_id WHERE u.token_hash = ?", hash);
+      // 入れ替えで外れたトークンは、同じクライアントから提示された場合だけ接続ごと失効させる
+      if (used?.client_id === client.client_id) await deleteGrant(db, used.id);
+      return error(c, "invalid_grant");
+    }
+    if (grant.client_id !== client.client_id || grant.refresh_expires_at <= now) return error(c, "invalid_grant");
     if (!await isGrantMember(db, grant.workspace_id, grant.user_id)) {
       await deleteGrant(db, grant.id);
       return error(c, "invalid_grant");
@@ -119,8 +126,10 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
     const newHash = await hashToken(refresh);
     const prev = current ? grant.refresh_hash : grant.prev_refresh_hash;
     const rotatedAt = current ? now : grant.rotated_at;
+    const retired = current ? grant.prev_refresh_hash : grant.refresh_hash;
     const results = await db.batch([
       stmt(db, "UPDATE oauth_grants SET refresh_hash = ?, prev_refresh_hash = ?, rotated_at = ?, refresh_expires_at = ? WHERE id = ? AND refresh_hash = ? AND prev_refresh_hash IS ?", newHash, prev, rotatedAt, now + REFRESH_LIFETIME, grant.id, grant.refresh_hash, grant.prev_refresh_hash),
+      ...(retired !== null ? [stmt(db, "INSERT OR IGNORE INTO oauth_refresh_used (token_hash, grant_id, created_at) SELECT ?, id, ? FROM oauth_grants WHERE id = ? AND refresh_hash = ?", retired, now, grant.id, newHash)] : []),
       stmt(db, "INSERT INTO oauth_access_tokens (token_hash, grant_id, expires_at) SELECT ?, id, ? FROM oauth_grants WHERE id = ? AND refresh_hash = ?", await hashToken(access), now + 3_600_000, grant.id, newHash),
       stmt(db, "DELETE FROM oauth_access_tokens WHERE grant_id = ? AND expires_at <= ?", grant.id, now),
     ]);
