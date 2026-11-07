@@ -107,7 +107,7 @@ test("ボタンから PDF を添付するとダウンロード用リンクと安
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toBe("application/octet-stream");
   expect(response.headers()["content-disposition"]).toMatch(/^attachment/);
-  expect(response.headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
+  expect(response.headers()["cache-control"]).toBe("private, no-cache");
   expect(response.headers()["x-content-type-options"]).toBe("nosniff");
 });
 
@@ -161,6 +161,24 @@ test("添付は未ログインなら 401、別ワークスペースの人なら 
   } finally {
     await anonymous.close();
     await outsider.close();
+  }
+});
+
+test("ETag が一致しても未ログインなら 304 ではなく 401 になる", async ({ page, browser }) => {
+  const { ws } = await setupIssue(page);
+  const uploaded = await upload(page, ws, "private.png", PNG);
+  expect(uploaded.status()).toBe(201);
+  const file = await uploaded.json() as AttachmentUploadResponse;
+  const response = await page.request.get(file.url);
+  expect(response.status()).toBe(200);
+  const etag = response.headers()["etag"];
+  expect(etag).toBeTruthy();
+  const anonymous = await browser.newContext();
+  try {
+    const unauthenticated = await anonymous.request.get(file.url, { headers: { "If-None-Match": etag } });
+    expect(unauthenticated.status()).toBe(401);
+  } finally {
+    await anonymous.close();
   }
 });
 

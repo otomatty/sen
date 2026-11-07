@@ -92,7 +92,7 @@ export async function serveFile(c: Context<AppEnv>) {
   // 認可を毎回確認した後でキャッシュを使う。304 では R2 を読まない。
   if (c.req.header("if-none-match") === etag) {
     c.header("ETag", etag);
-    c.header("Cache-Control", "private, max-age=31536000, immutable");
+    c.header("Cache-Control", "private, no-cache");
     return c.body(null, 304);
   }
   const key = `${row.workspace_id}/${row.id}`;
@@ -112,6 +112,6 @@ export async function serveFile(c: Context<AppEnv>) {
   c.header("X-Content-Type-Options", "nosniff");
   c.header("Content-Security-Policy", "default-src 'none'; sandbox");
   c.header("Cross-Origin-Resource-Policy", "same-origin");
-  c.header("Cache-Control", "private, max-age=31536000, immutable");
+  c.header("Cache-Control", "private, no-cache");
   return body ? c.body(body) : c.body(null);
 }
