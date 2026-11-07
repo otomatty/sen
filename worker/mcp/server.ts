@@ -1,4 +1,4 @@
-// MCP Streamable HTTP（ステートレス）。セッションは発行しない。認証は API トークンだけ。
+// MCP Streamable HTTP（ステートレス）。セッションは発行しない。認証は Bearer トークン。
 
 import { MARKDOWN_MAX_LENGTH } from "../../shared/constants";
 import type { Context } from "hono";
@@ -6,14 +6,15 @@ import type { AppEnv } from "../env";
 import { MutationError, type MutationCtx } from "../mutations";
 import { notifyRealtime, writeChanges } from "../sync";
 import { scheduleGitHubSync } from "../github/config";
-import { authenticateApiToken, publicOrigin, type ApiTokenAuth } from "../tokens";
+import { publicOrigin, type ApiTokenAuth } from "../tokens";
+import { authenticateBearer } from "../oauth/grants";
 import { openResolver, ToolError } from "./context";
 import { findTool, READ_ONLY_MESSAGE, toolDefinitions, type McpTool } from "./tools";
 
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const AUTH_MESSAGE =
-  "Sen の API トークンが無効か、期限が切れています。Sen の 設定 → AI 連携 でトークンを発行し直してください。";
+  "Sen への接続が切れたか、期限が切れています。AI ツールから接続し直すか、Sen の 設定 → AI 連携 を確認してください。";
 
 function rpcResult(id: unknown, result: unknown) {
   return { jsonrpc: "2.0" as const, id, result };
@@ -52,10 +53,10 @@ export async function handleMcp(c: Context<AppEnv>): Promise<Response> {
     return c.json(rpcError(null, -32600, "Invalid Request"), 405, { Allow: "POST" });
   }
   try {
-    const auth = await authenticateApiToken(c.env.DB, c.req.header("authorization"), Date.now());
+    const auth = await authenticateBearer(c.env.DB, c.req.header("authorization"), Date.now());
     if (!auth) {
       return c.json(rpcError(null, -32001, AUTH_MESSAGE), 401, {
-        "WWW-Authenticate": 'Bearer realm="sen", error="invalid_token"',
+        "WWW-Authenticate": `Bearer realm="sen", resource_metadata="${publicOrigin(c)}/.well-known/oauth-protected-resource/api/mcp", scope="read write"${c.req.header("authorization") === undefined ? "" : ', error="invalid_token"'}`,
       });
     }
     let payload: unknown;

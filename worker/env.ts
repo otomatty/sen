@@ -15,6 +15,11 @@ export interface Env {
   INVITE_EMAIL_FROM?: string;
   /** "1" のとき /api/dev/* を有効化（ローカル開発・動画収録・デモ用） */
   DEV_TOOLS?: string;
+  /**
+   * DEV_TOOLS が "1" のときだけ有効。
+   * リフレッシュトークンの再送猶予（ミリ秒）。E2E 用の正の整数。本番では無視する。
+   */
+  OAUTH_REFRESH_GRACE_MS_FOR_TESTS?: string;
   /** "1" のとき Authorization: Bearer でのセッションを許可（ブラウザ内デモ用） */
   DEMO_MODE?: string;
   /** セッションの署名などに使う秘密の値（本番では必須。`wrangler secret put BETTER_AUTH_SECRET`） */

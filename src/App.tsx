@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AppShell, Toasts } from "./app/AppShell";
 import { initSessionSync, loadSession, pickWorkspaceKey, useSession } from "./app/session";
+import { OAuthConsentPage } from "./features/auth/OAuthConsentPage";
 import { InvitePage, LoginPage, NewWorkspacePage } from "./features/auth/AuthPages";
 import { IssuePage, MyIssuesPage, SearchPage, TeamIssuesPage, WorkspaceHome } from "./features/issues/pages";
 import { InboxPage } from "./features/inbox/InboxPage";
@@ -52,7 +53,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const status = useSession((s) => s.status);
   const location = useLocation();
   if (status === "unknown") return <Splash />;
-  if (status === "anon") return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
+  if (status === "anon") return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   return <>{children}</>;
 }
 
@@ -60,9 +61,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function GuestOnly({ children }: { children: React.ReactNode }) {
   const status = useSession((s) => s.status);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = params.get("next");
+  const destination = next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
   useEffect(() => {
-    if (status === "authed") navigate("/", { replace: true });
-  }, [status, navigate]);
+    if (status === "authed") navigate(destination, { replace: true });
+  }, [status, navigate, destination]);
   if (status === "unknown") return <Splash />;
   return <>{children}</>;
 }
@@ -86,6 +90,7 @@ function AppRoutes() {
         />
         {/* ログインは Google のみ。初めての人もログイン画面からアカウントを作る */}
         <Route path="/signup" element={<Navigate to="/login" replace />} />
+        <Route path="/oauth/consent" element={<OAuthConsentPage />} />
         <Route path="/invite/:token" element={<InvitePage />} />
         <Route
           path="/new-workspace"

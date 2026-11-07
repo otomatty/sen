@@ -8,10 +8,10 @@
   // 毎日 3:17（日本時間）に古い同期ログ、期限切れセッション、7日より前の AI アシスタント利用回数を掃除する
   "triggers": { "crons": ["17 18 * * *"] },
   // SPA と静的ファイル（チュートリアル動画を含む）は Workers Static Assets で配信し、
-  // /api/* だけ Worker を先に通す。
+  // /api/* と /.well-known/* は Worker を先に通す。
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/.well-known/*"]
   },
   "d1_databases": [
     {

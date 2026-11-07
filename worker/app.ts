@@ -38,6 +38,11 @@ import {
   toWorkspace,
 } from "./serialize";
 import { getLastSyncId, notifyRealtime, readChanges, writeChanges } from "./sync";
+import { applyOAuthCors } from "./oauth/cors";
+import { registerClient } from "./oauth/clients";
+import { registerAuthorization } from "./oauth/authorize";
+import { issueToken, revokeToken } from "./oauth/token";
+import { listConnections, deleteConnection } from "./oauth/grants";
 import { handleMcp } from "./mcp/server";
 import { createToken, deleteToken, listTokens, publicOrigin } from "./tokens";
 import {
@@ -87,11 +92,13 @@ export function createApp() {
   });
 
   // DB の準備 + CSRF 対策（状態を変えるリクエストには独自ヘッダーを必須にする）。
-  // /api/mcp は Cookie を使わず API トークンだけで認証するので対象外。MCP クライアントは x-sen-client を送らない。
+  // MCP と OAuth の登録・交換・失効は Cookie を使わず認証するので対象外。
   app.use("*", async (c, next) => {
+    const preflight = applyOAuthCors(c);
+    if (preflight) return preflight;
     await ensureMigrated(c.env.DB);
     // /api/github/webhook は GitHub からの POST。セッションも x-sen-client も無い。
-    const csrfExempt = c.req.path === "/api/mcp" || c.req.path === "/api/github/webhook";
+    const csrfExempt = ["/api/mcp", "/api/github/webhook", "/api/oauth/token", "/api/oauth/register", "/api/oauth/revoke"].includes(c.req.path);
     if (!csrfExempt && c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("x-sen-client") !== "1") {
       return err(c, "不正なリクエストです", 403);
     }
@@ -142,6 +149,13 @@ export function createApp() {
       .filter((r) => isEmailAllowed(email, parseAllowedDomains(r.allowed_domains)))
       .map((r) => ({ id: r.id, name: r.name, urlKey: r.url_key }));
   };
+
+  registerAuthorization(app, requireUser, listWorkspaces);
+  app.post("/oauth/register", registerClient);
+  app.post("/oauth/token", issueToken);
+  app.post("/oauth/revoke", revokeToken);
+  app.get("/ai/connections", requireUser, requireWorkspace, listConnections);
+  app.delete("/ai/connections/:id", requireUser, requireWorkspace, deleteConnection);
 
   app.get("/health", (c) => c.json({ ok: true, devTools: c.env.DEV_TOOLS === "1" }));
 
@@ -440,7 +454,7 @@ export function createApp() {
     return c.json({ ok: true });
   });
 
-  // AI ツール（MCP）。Cookie のログインは見ず、API トークンだけで認証する。
+  // AI ツール（MCP）。Cookie のログインは見ず、Bearer トークンで認証する。
   app.all("/mcp", handleMcp);
 
   // ---------------- リアルタイム（Durable Object へ転送） ----------------

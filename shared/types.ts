@@ -503,6 +503,32 @@ export interface ApiTokenCreateResponse {
   mcpUrl: string;
 }
 
+/** GET /api/oauth/requests/:id の応答（同意画面） */
+export interface OAuthConsentInfo {
+  clientName: string;
+  destination: string;
+  verifiedHost: string | null;
+  /** AI ツールが求めた範囲。同意画面の初期値 */
+  scope: ApiTokenScope;
+  workspaces: { id: string; name: string; urlKey: string }[];
+  defaultWorkspaceId: string | null;
+}
+export interface OAuthApproveRequest { workspaceId: string; scope: ApiTokenScope }
+export interface OAuthRedirectResponse { redirectTo: string }
+/** 設定画面に出す OAuth の接続 */
+export interface OAuthGrantSummary {
+  id: string;
+  clientName: string;
+  scope: ApiTokenScope;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+export interface AiConnectionsResponse {
+  mcpUrl: string;
+  grants: OAuthGrantSummary[];
+  tokens: ApiTokenSummary[];
+}
+
 /** GET /api/github/status の応答。トークンと Webhook の secret は含めない */
 export interface GitHubStatus {
   /** このワークスペースが連携の対象か */

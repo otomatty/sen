@@ -106,8 +106,9 @@ export default defineConfig(({ mode }) => {
       assistantKnowledge(),
     ],
     define: { __SEN_DEMO__: "false" },
-    server: { port: Number(process.env.PORT ?? 5173), strictPort: true },
-    preview: { port: Number(process.env.PORT ?? 4173), strictPort: true },
+    // CORS は Worker が決める。Vite が OPTIONS を先に返すと本番と挙動が変わるため無効にする。
+    server: { port: Number(process.env.PORT ?? 5173), strictPort: true, cors: false },
+    preview: { port: Number(process.env.PORT ?? 4173), strictPort: true, cors: false },
     build: { chunkSizeWarningLimit: 1500 },
   };
 });

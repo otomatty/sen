@@ -16,6 +16,9 @@ const ANTHROPIC_DUMMY = `ANTHROPIC_API_KEY=e2e-anthropic-key\\nANTHROPIC_API_ORI
 // 招待メールを送る設定があるときの表示を確かめる。ローカルの Miniflare は実際には送らず、記録するだけ。
 const INVITE_EMAIL_FROM = "INVITE_EMAIL_FROM=invite@example.com\\n";
 
+// リフレッシュトークンの猶予切れを E2E で短時間に確かめる。
+const OAUTH_REFRESH_GRACE = "OAUTH_REFRESH_GRACE_MS_FOR_TESTS=5000\\n";
+
 const githubOriginLine = `GITHUB_API_ORIGIN_FOR_TESTS=http://localhost:${GITHUB_PORT}`;
 if (!process.env.TEST_WORKER_INDEX) {
   fs.writeFileSync(
@@ -50,7 +53,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1360, height: 860 } } }],
   webServer: {
     // 毎回まっさらな DB で、本番と同じビルドを動かす
-    command: `rm -rf ${persist} && bunx vite build && printf '${GOOGLE_DUMMY}${INVITE_EMAIL_FROM}' >> dist/sen/.dev.vars && cat '${githubVarsPath}' >> dist/sen/.dev.vars && printf '${ANTHROPIC_DUMMY}' >> dist/sen/.dev.vars && bunx vite preview --port ${PORT} --strictPort`,
+    command: `rm -rf ${persist} && bunx vite build && printf '${GOOGLE_DUMMY}${INVITE_EMAIL_FROM}${OAUTH_REFRESH_GRACE}' >> dist/sen/.dev.vars && cat '${githubVarsPath}' >> dist/sen/.dev.vars && printf '${ANTHROPIC_DUMMY}' >> dist/sen/.dev.vars && bunx vite preview --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/api/health`,
     env: { SEN_PERSIST_DIR: persist, PORT: String(PORT) },
     reuseExistingServer: !process.env.CI,
