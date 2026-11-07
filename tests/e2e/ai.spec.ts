@@ -76,61 +76,64 @@ async function postMcp(request: APIRequestContext, headers: Record<string, strin
 test("画面からトークンを発行して、設定方法をコピーできる", async ({ page }) => {
   test.setTimeout(90_000);
   const baseURL = test.info().project.use.baseURL!;
-  const port = new URL(baseURL).port;
   const { ws } = await signupViaUi(page);
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(`/${ws}/settings/workspace`);
   await page.getByTestId("settings-nav-ai").click();
-  await expect(page.getByTestId("ai-connect")).toBeVisible();
-  await expect(page.getByTestId("ai-client-claude-code")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("ai-mcp-url")).toContainText(`${baseURL}/api/mcp`);
+  await expect(page.getByTestId("ai-client-claude")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("ai-client-claude-code").click();
+  const guide = page.getByTestId("ai-client-guide");
+  await expect(guide).toContainText(`claude mcp add --scope user --transport http sen ${baseURL}/api/mcp`);
+  await expect(guide).not.toContainText("--header");
+  await page.getByTestId("ai-client-cursor").click();
+  const href = await page.getByTestId("ai-cursor-install").getAttribute("href");
+  expect(href?.startsWith("cursor://anysphere.cursor-deeplink/mcp/install?")).toBe(true);
+  const encoded = new URL(href!).searchParams.get("config");
+  expect(JSON.parse(Buffer.from(encoded!, "base64").toString("utf8"))).toEqual({ url: `${baseURL}/api/mcp` });
 
+  await page.getByTestId("ai-token-name").fill("E2E トークン");
   await page.getByTestId("ai-token-create").click();
   const issued = page.getByTestId("ai-issued");
-  await expect(issued).toContainText(
-    `claude mcp add --scope user --transport http sen http://localhost:${port}/api/mcp --header "Authorization: Bearer sen_`,
-  );
-  const secret = (await issued.locator("code").innerText()).match(/sen_[A-Za-z0-9_-]{43}/)?.[0];
+  await expect(issued).toBeVisible();
+  await expect(issued.locator("code")).toHaveCount(3);
+  const secret = (await issued.locator("code").nth(1).innerText()).match(/sen_[A-Za-z0-9_-]{43}/)?.[0];
   expect(secret).toBeTruthy();
-
-  await page.getByTestId("ai-copy").click();
-  await expect(page.getByTestId("ai-copy")).toContainText("コピーしました");
+  await expect(issued.locator("code").nth(0)).toHaveText(`${baseURL}/api/mcp`);
+  await expect(issued.locator("code").nth(1)).toHaveText(`Authorization: Bearer ${secret}`);
+  await expect(issued.locator("code").nth(2)).toHaveText(
+    `claude mcp add --scope user --transport http sen ${baseURL}/api/mcp --header "Authorization: Bearer ${secret}"`,
+  );
+  await issued.getByTestId("ai-copy").nth(1).click();
+  await expect(issued.getByTestId("ai-copy").nth(1)).toContainText("コピーしました");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`Authorization: Bearer ${secret}`);
   await page.getByTestId("ai-issued-done").click();
-  await expect(page.getByTestId("ai-token-create")).toBeVisible();
+  await expect(issued).toBeHidden();
   await expect(page.getByTestId("confirm-dialog")).toHaveCount(0);
 
-  const claudeRow = page.getByTestId("ai-token-row").filter({ hasText: "Claude Code" });
-  await expect(claudeRow).toContainText("作成と変更");
-  await expect(claudeRow).toContainText("まだ使われていません");
+  const row = page.getByTestId("ai-connections").getByTestId("ai-token-row").filter({ hasText: "E2E トークン" });
+  await expect(row).toContainText("作成と変更");
+  await expect(row).toContainText("まだ使われていません");
   await page.reload();
-  await expect(page.getByTestId("ai-token-row").filter({ hasText: "Claude Code" })).toBeVisible();
-  await expect(page.getByTestId("ai-token-row")).toContainText("まだ使われていません");
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("まだ使われていません");
+  await expect(row).toContainText(`sen_…${secret!.slice(-4)}`);
+  expect(await page.content()).not.toContain(secret!);
   expect(await page.content()).not.toMatch(/sen_[A-Za-z0-9_-]{43}/);
-  await expect(page.locator("body")).toContainText(/sen_…[A-Za-z0-9_-]{4}/);
 
-  await page.getByTestId("ai-client-cursor").click();
-  await expect(page.getByTestId("ai-client-cursor")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("ai-token-name").fill("未コピーのトークン");
   await page.getByTestId("ai-token-create").click();
-  const href = await page.getByTestId("ai-cursor-install").getAttribute("href");
-  expect(href?.startsWith("cursor://anysphere.cursor-deeplink/mcp/install?name=sen&config=")).toBe(true);
-  const encoded = new URL(href!).searchParams.get("config");
-  const config = JSON.parse(Buffer.from(encoded ?? "", "base64").toString("utf8")) as {
-    url: string;
-    headers: { Authorization: string };
-  };
-  expect(config.url).toBe(`${baseURL}/api/mcp`);
-  expect(config.headers.Authorization).toMatch(/^Bearer sen_[A-Za-z0-9_-]{43}$/);
-
+  await expect(issued).toBeVisible();
   await page.getByTestId("ai-issued-done").click();
   await expect(page.getByTestId("confirm-dialog")).toContainText("設定をコピーしましたか？");
   await page.getByTestId("confirm-ok").click();
-  await expect(page.getByTestId("ai-token-create")).toBeVisible();
+  await expect(issued).toBeHidden();
 
-  const row = page.getByTestId("ai-token-row").filter({ hasText: "Claude Code" });
   await row.getByTestId("ai-token-revoke").click();
   await expect(page.getByTestId("confirm-dialog")).toContainText("無効にする");
   await page.getByTestId("confirm-ok").click();
-  await expect(page.getByTestId("ai-token-row").filter({ hasText: "Claude Code" })).toHaveCount(0);
-  await expect(connectMcp(baseURL, secret!)).rejects.toThrow();
+  await expect(row).toHaveCount(0);
+  expect((await postMcp(page.request, { authorization: `Bearer ${secret}` })).status()).toBe(401);
 });
 
 test("AI が課題をまとめて作り、画面にリアルタイムで「Claude Code 経由」と表示される", async ({ page }) => {
