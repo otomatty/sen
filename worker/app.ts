@@ -13,9 +13,9 @@ import type {
   MutateResponse,
   Mutation,
   ProgressStartedResponse,
-  Role,
 } from "../shared/types";
 import { isEmailAllowed, parseAllowedDomains } from "../shared/domains";
+import { workspaceAccess } from "./access";
 import { MAX_ACCOUNTS, forwardCookies, getAuth, getSession, getSessionUser, isGoogleConfigured } from "./auth";
 import { all, ensureMigrated, first, run } from "./db";
 import type { AppEnv, WorkspaceRow } from "./env";
@@ -55,6 +55,7 @@ import {
   previewInvitation,
   resendInvitation,
 } from "./invitations";
+import { serveFile, uploadFile } from "./files";
 import { loadStartedOn } from "./progress";
 import { scheduleGitHubSync, isGitHubTarget } from "./github/config";
 import { handleGitHubWebhook } from "./github/webhook";
@@ -121,20 +122,10 @@ export function createApp() {
     if (!key) return err(c, "ワークスペースを指定してください");
     const ws = await first<WorkspaceRow>(c.env.DB, "SELECT * FROM workspaces WHERE url_key = ?", key);
     if (!ws) return err(c, "ワークスペースが見つかりません", 404);
-    const user = c.get("user");
-    const m = await first<{ role: Role }>(
-      c.env.DB,
-      "SELECT role FROM members WHERE workspace_id = ? AND user_id = ?",
-      ws.id,
-      user.id,
-    );
-    if (!m) return err(c, "このワークスペースへのアクセス権がありません", 403);
-    const domains = parseAllowedDomains(ws.allowed_domains);
-    if (!isEmailAllowed(user.email, domains)) {
-      return err(c, `このワークスペースは ${domains.join("、")} のメールアドレスだけが利用できます`, 403);
-    }
+    const access = await workspaceAccess(c.env.DB, ws, c.get("user"));
+    if ("error" in access) return err(c, access.error, 403);
     c.set("workspace", ws);
-    c.set("role", m.role);
+    c.set("role", access.role);
     await next();
   };
 
@@ -157,7 +148,10 @@ export function createApp() {
   app.get("/ai/connections", requireUser, requireWorkspace, listConnections);
   app.delete("/ai/connections/:id", requireUser, requireWorkspace, deleteConnection);
 
-  app.get("/health", (c) => c.json({ ok: true, devTools: c.env.DEV_TOOLS === "1" }));
+  app.get("/health", (c) => c.json({ ok: true, devTools: c.env.DEV_TOOLS === "1", files: !!c.env.FILES }));
+
+  app.post("/files", requireUser, requireWorkspace, uploadFile);
+  app.get("/files/:id/:name?", serveFile);
 
   // ---------------- 認証（Google のみ。Better Auth） ----------------
   app.post("/auth/sign-in/social", async (c, next) => {

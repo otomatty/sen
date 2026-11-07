@@ -2,8 +2,9 @@
 // Cloudflare の初期設定（初回だけ実行）
 //   1. wrangler にログインしているか確認
 //   2. D1 データベース「sen-db」を作成（すでにあれば再利用）
-//   3. wrangler.jsonc の database_id を書き換える
-//   4. スキーマを本番 D1 に適用
+//   3. R2 バケット「sen-files」を作成（すでにあれば再利用）
+//   4. wrangler.jsonc の database_id を書き換える
+//   5. スキーマを本番 D1 に適用
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -43,6 +44,11 @@ if (!db) {
 if (!db) throw new Error("D1 データベースを作成できませんでした");
 const id = db.uuid ?? db.database_id ?? db.id;
 console.log(`database_id: ${id}`);
+
+step("R2 バケット sen-files を用意しています");
+if (!/^name:\s*sen-files\s*$/m.test(sh("bunx wrangler r2 bucket list"))) {
+  execSync("bunx wrangler r2 bucket create sen-files", { cwd: root, stdio: "inherit" });
+}
 
 step("wrangler.jsonc を更新しています");
 const config = readFileSync(configPath, "utf8");

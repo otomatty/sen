@@ -558,3 +558,12 @@ export interface GitHubRepoPatch {
 export interface ProgressStartedResponse {
   startedOn: Record<string, string>;
 }
+
+/** 添付ファイルのアップロード結果 */
+export interface AttachmentUploadResponse {
+  id: string;
+  url: string;
+  name: string;
+  kind: "image" | "file";
+  size: number;
+}

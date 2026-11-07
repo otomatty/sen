@@ -285,6 +285,7 @@ function ProjectCreateModal({ defaultTeamId }: { defaultTeamId?: string }) {
   const navigate = useNavigate();
   const p = useWsPath();
   const [name, setName] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<ProjectStatus>("planned");
   const [leadId, setLeadId] = useState<string | null>(meId);
@@ -294,7 +295,7 @@ function ProjectCreateModal({ defaultTeamId }: { defaultTeamId?: string }) {
   const [dateAnchor, setDateAnchor] = useState<DOMRect | null>(null);
   const close = () => useUI.setState({ projectCreateOpen: false });
   const submit = () => {
-    if (!name.trim()) return;
+    if (uploading || !name.trim()) return;
     const id = createProject({ name: name.trim(), description, status, leadId, teamIds, targetDate, color });
     close();
     navigate(p(`/project/${id}`));
@@ -317,7 +318,7 @@ function ProjectCreateModal({ defaultTeamId }: { defaultTeamId?: string }) {
             onKeyDown={(e) => !e.nativeEvent.isComposing && e.key === "Enter" && submit()}
           />
         </div>
-        <Editor value={description} onChange={setDescription} placeholder="概要・目的を書く…" className="create-description" onSubmit={submit} />
+        <Editor value={description} onUploadingChange={setUploading} onChange={setDescription} placeholder="概要・目的を書く…" className="create-description" onSubmit={submit} />
       </div>
       <div className="form-grid">
         <label>
@@ -376,7 +377,7 @@ function ProjectCreateModal({ defaultTeamId }: { defaultTeamId?: string }) {
         <Button variant="ghost" onClick={close}>
           キャンセル
         </Button>
-        <Button variant="primary" onClick={submit} disabled={!name.trim()} data-testid="project-create-submit">
+        <Button variant="primary" onClick={submit} disabled={uploading || !name.trim()} title={uploading ? "添付をアップロード中" : undefined} data-testid="project-create-submit">
           プロジェクトを作成
         </Button>
       </div>

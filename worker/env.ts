@@ -1,4 +1,4 @@
-import type { SendEmail } from "@cloudflare/workers-types";
+import type { R2Bucket, SendEmail } from "@cloudflare/workers-types";
 import type { Me, Role } from "../shared/types";
 
 export interface RealtimeNotifier {
@@ -7,6 +7,8 @@ export interface RealtimeNotifier {
 
 export interface Env {
   DB: D1Database;
+  /** 添付ファイルの保存先。無ければ添付を無効にする */
+  FILES?: R2Bucket;
   REALTIME?: DurableObjectNamespace;
   ASSETS?: Fetcher;
   /** 招待メールの送信に使う（Cloudflare Email Service）。送信元のドメインを Email Sending に登録し、INVITE_EMAIL_FROM を設定したときだけ送る */

@@ -17,7 +17,7 @@ Sen は [Linear](https://linear.app) の設計思想（待ち時間のない操�
 
 - **課題**：チームごとの連番 ID（`ENG-12`）、ステータス・優先度・担当者・ラベル・プロジェクト・サイクル・見積もり・期日・親子関係
 - **一覧**：リスト / ボード（ドラッグ＆ドロップ。スマホのリストでは長押ししてから動かす）、グループ分け（ステータス・担当者・優先度・プロジェクト・サイクル・ラベル）、並び順、フィルター、表示項目の切り替え（画面ごとに保存）
-- **課題の詳細**：GitHub と同じ Markdown（GFM）のエディタ、サブ課題、変更履歴、コメント（`@` メンション）、購読（[詳しく](docs/guide/02-issues.md#markdown)）
+- **課題の詳細**：GitHub と同じ Markdown（GFM）のエディタ、画像とファイルの添付（貼り付け・ドラッグ）、サブ課題、変更履歴、コメント（`@` メンション）、購読（[詳しく](docs/guide/02-issues.md#markdown)）
 - **課題どうしの関係**：「ブロックされている / ブロックしている」「関連」「重複」。未完了の課題に止められている課題には一覧・ボードで印が付き、重複にした課題は自動で「重複」ステータスへ（`M → B / X / R / M`）
 - **受信トレイ**：割り当て・コメント・メンション・ステータス変更の通知を課題ごとにまとめて表示、キーボードで既読 / 削除
 - **自分の課題**：担当・作成・購読中
@@ -65,12 +65,14 @@ flowchart LR
     Assets["Static Assets<br/>SPA・使い方動画"]
     Worker["Worker（Hono API + Better Auth）"]
     D1[("D1<br/>データ + 同期ログ")]
+    R2[("R2<br/>添付ファイル")]
     DO["Durable Object<br/>ワークスペースごとの WebSocket"]
   end
   Engine -- "bootstrap / mutate / sync" --> Worker
   UI -- "Google でログイン" --> Google["Google（OAuth）"] -- "/api/auth/callback/google" --> Worker
   AI["AI ツール<br/>Claude・ChatGPT など"] -- "MCP（/api/mcp）" --> Worker
   Worker --> D1
+  Worker --> R2
   Worker -- "新しい syncId を通知" --> DO
   DO -- "WebSocket" --> Engine
   DO -- "書き込み" --> GH["GitHub（REST API）"]
@@ -238,9 +240,11 @@ bun run dev          # http://localhost:5173
 ### 手元から（初回）
 
 ```bash
-bun run cf:setup     # Cloudflare にログイン → D1「sen-db」を作成 → wrangler.jsonc に ID を記入 → スキーマ適用
+bun run cf:setup     # Cloudflare にログイン → D1「sen-db」と R2 バケット「sen-files」を作成 → wrangler.jsonc に ID を記入 → スキーマ適用
 bun run deploy       # ビルド → 開発用設定の除去 → wrangler deploy
 ```
+
+すでにデプロイ済みの環境では、一度だけ `bunx wrangler r2 bucket create sen-files` を実行してください。GitHub Actions のデプロイでは自動で作成します。
 
 `https://sen.<あなたのサブドメイン>.workers.dev` で公開されます。独自ドメインは Cloudflare のダッシュボード（Workers → sen → Settings → Domains & Routes）から設定できます。
 
