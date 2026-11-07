@@ -3,6 +3,8 @@ import { addDays, todayYmd } from "../shared/dates";
 import { createApp } from "./app";
 import { all, ensureMigrated, run } from "./db";
 import type { Env } from "./env";
+import { handleWellKnown } from "./oauth/metadata";
+import { cleanupOAuth } from "./oauth/grants";
 import { requestGitHubReconcile } from "./github/issues";
 import { GitHubSyncRunner } from "./github/runner";
 
@@ -11,12 +13,13 @@ const app = createApp();
 export default {
   fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/.well-known/")) return handleWellKnown(request, env);
     if (url.pathname.startsWith("/api/")) return app.fetch(request, env, ctx);
-    // /api 以外は静的アセット（SPA）。run_worker_first の設定上ここには通常来ない。
+    // API とディスカバリー以外は静的アセット（SPA）。通常は Static Assets が直接返す。
     return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   },
 
-  /** 毎日の掃除：30日より古い同期ログ、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータ、古い招待と、7 日より前の AI アシスタントの利用回数を削除する */
+  /** 毎日の掃除：30日より古い同期ログ、期限切れの OAuth データと古いクライアント、期限切れから30日経った API トークン、期限切れのセッション・ログイン途中のデータ、古い招待と、7 日より前の AI アシスタントの利用回数を削除する */
   async scheduled(_event, env) {
     await ensureMigrated(env.DB);
     const cutoff = Date.now() - 30 * 86_400_000;
@@ -51,6 +54,11 @@ export default {
     );
     // 7日より前の利用回数（日本時間の日付。YYYY-MM-DD なので文字列の比較で足りる）
     await run(env.DB, "DELETE FROM assistant_usage WHERE day < ?", addDays(todayYmd(), -7));
+    try {
+      await cleanupOAuth(env.DB, Date.now());
+    } catch (e) {
+      console.error("oauth cleanup failed", e instanceof Error ? e.name : "error");
+    }
     // Webhook の重複除け。7 日より古い行を消す。失敗しても、下の突き合わせは頼む。
     try {
       await run(env.DB, "DELETE FROM github_deliveries WHERE received_at < ?", Date.now() - 7 * 86_400_000);

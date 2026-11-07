@@ -1235,6 +1235,12 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       await run(db, "DELETE FROM members WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
       // このワークスペースで発行した AI 連携トークンも無効にする
       await run(db, "DELETE FROM api_tokens WHERE workspace_id = ? AND user_id = ?", ws.id, uid);
+      // メンバーの接続と未交換の認可コードも無効にする
+      await db.batch([
+        db.prepare("DELETE FROM oauth_access_tokens WHERE grant_id IN (SELECT id FROM oauth_grants WHERE workspace_id = ? AND user_id = ?)").bind(ws.id, uid),
+        db.prepare("DELETE FROM oauth_grants WHERE workspace_id = ? AND user_id = ?").bind(ws.id, uid),
+        db.prepare("DELETE FROM oauth_codes WHERE workspace_id = ? AND user_id = ?").bind(ws.id, uid),
+      ]);
       if (removed) {
         // 外した人あての、まだ使われていない招待も取り消す
         await run(

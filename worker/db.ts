@@ -6,6 +6,7 @@ import aiTokensSql from "../migrations/0005_ai_tokens.sql?raw";
 import defaultWorkspaceSql from "../migrations/0006_default_workspace.sql?raw";
 import invitationsSql from "../migrations/0007_invitations.sql?raw";
 import assistantUsageSql from "../migrations/0008_assistant_usage.sql?raw";
+import oauthSql from "../migrations/0011_oauth.sql?raw";
 import githubSql from "../migrations/0010_github.sql?raw";
 // sync.ts は db.ts を import する。writeChanges は移行の関数の中でしか呼ばないので、循環しても読み込み時には問題にならない。
 import { migrateBodiesToMarkdown } from "./markdown-migration";
@@ -62,6 +63,7 @@ const MIGRATIONS: Migration[] = [
       ),
   },
   { name: "0010_github.sql", sql: githubSql },
+  { name: "0011_oauth.sql", sql: oauthSql },
 ];
 
 export function splitSql(sql: string): string[] {

@@ -7,7 +7,7 @@ import { isEmailAllowed, parseAllowedDomains } from "../shared/domains";
 import type { ApiTokenClient, ApiTokenCreateRequest, ApiTokenScope, ApiTokenSummary, Me, Role } from "../shared/types";
 import { randomToken } from "./auth";
 import { all, first, run } from "./db";
-import type { AppEnv, WorkspaceRow } from "./env";
+import type { AppEnv, Env, WorkspaceRow } from "./env";
 import { MutationError } from "./mutations";
 import { toMe } from "./serialize";
 
@@ -19,6 +19,7 @@ const LAST_USED_INTERVAL = 60_000;
 const DAY_MS = 86_400_000;
 
 export interface ApiTokenAuth {
+  kind: "token" | "oauth";
   tokenId: string;
   scope: ApiTokenScope;
   /** 履歴・コメント・通知に残すツール名 */
@@ -76,9 +77,14 @@ export function viaLabel(row: { client: string; name: string }): string {
 
 /** 公開 URL。BETTER_AUTH_URL があればそれ（末尾の / は除く）、無ければリクエストのオリジン */
 export function publicOrigin(c: Context<AppEnv>): string {
-  const configured = c.env.BETTER_AUTH_URL?.replace(/\/+$/, "");
+  return originOf(c.env, c.req.url);
+}
+
+/** Hono を通らないディスカバリーでも同じ公開 URL を使う */
+export function originOf(env: Env, requestUrl: string): string {
+  const configured = env.BETTER_AUTH_URL?.replace(/\/+$/, "");
   if (configured) return configured;
-  return new URL(c.req.url).origin;
+  return new URL(requestUrl).origin;
 }
 
 export async function listTokens(db: D1Database, workspaceId: string, userId: string): Promise<ApiTokenSummary[]> {
@@ -251,6 +257,7 @@ export async function authenticateApiToken(
     updated_at: row.ws_updated_at,
   };
   return {
+    kind: "token",
     tokenId: row.token_id,
     scope: row.scope,
     via: viaLabel({ client: row.client, name: row.token_name }),
