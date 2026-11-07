@@ -100,7 +100,12 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
         SELECT ?, client_id, workspace_id, user_id, scope, ?, ?, NULL, ?, ?, NULL FROM oauth_codes WHERE code_hash = ? AND grant_id = ?`, id, client.name, await hashToken(refresh), now + REFRESH_LIFETIME, now, code.code_hash, id),
       stmt(db, "INSERT INTO oauth_access_tokens (token_hash, grant_id, expires_at) SELECT ?, id, ? FROM oauth_grants WHERE id = ?", await hashToken(access), now + 3_600_000, id),
     ]);
-    if (!results[0].meta.changes) return error(c, "invalid_grant");
+    if (!results[0].meta.changes) {
+      // 同時の交換で後から来た再利用も、順に来たときと同じく接続を失効させる
+      const used = await first<{ grant_id: string | null }>(db, "SELECT grant_id FROM oauth_codes WHERE code_hash = ?", code.code_hash);
+      if (used?.grant_id) await deleteGrant(db, used.grant_id);
+      return error(c, "invalid_grant");
+    }
     return success(c, access, refresh, code.scope);
   }
   if (body.grant_type === "refresh_token") {

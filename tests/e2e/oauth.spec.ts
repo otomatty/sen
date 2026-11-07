@@ -307,6 +307,25 @@ test("コードと PKCE を検証し、コードの再利用で接続を失効�
   expect((await postMcp(page.request, first.body.access_token)).status()).toBe(401);
 });
 
+test("同じ認可コードを同時に交換すると、接続ごと無効になる", async ({ page }) => {
+  await signupViaUi(page);
+  const { client_id } = await registered(page.request);
+  const form = await codeFor(page, client_id);
+  const results = await Promise.all([
+    exchange(page.request, form),
+    exchange(page.request, form),
+  ]);
+  expect(results.some((result) => result.body.error === "invalid_grant")).toBe(true);
+  for (const result of results) {
+    if (result.status === 200) {
+      expect((await postMcp(page.request, result.body.access_token)).status()).toBe(401);
+      invalidGrant(await refresh(page.request, { client_id, refresh_token: result.body.refresh_token }));
+    } else {
+      invalidGrant(result);
+    }
+  }
+});
+
 test("リフレッシュトークンをローテーションし、失効できる", async ({ page, baseURL }) => {
   await signupViaUi(page);
   const first = await tokensFor(page);
