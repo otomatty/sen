@@ -10,6 +10,7 @@ import { deleteGrant, isGrantMember, type GrantRow } from "./grants";
 import { isAllowedResource } from "./metadata";
 
 const REFRESH_LIFETIME = 90 * 86_400_000;
+const REFRESH_REUSE_GRACE_MS = 60_000;
 type Params = Record<string, string>;
 
 function error(c: Context<AppEnv>, code: string, description = "認証情報が不正か、有効期限が切れています", basic = false): Response {
@@ -75,12 +76,13 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
     if (!body.code || !body.code_verifier) return error(c, "invalid_request");
     const code = await first<CodeRow>(db, "SELECT * FROM oauth_codes WHERE code_hash = ?", await hashToken(body.code));
     if (!code || code.expires_at <= now) return error(c, "invalid_grant");
+    if (code.client_id !== client.client_id || (body.redirect_uri !== undefined && body.redirect_uri !== code.redirect_uri)
+      || !PKCE_RE.test(body.code_verifier) || await pkceChallenge(body.code_verifier) !== code.code_challenge) return error(c, "invalid_grant");
+    // コードと verifier を持つ同じクライアントからの再送だけを、漏えいとみなして失効させる
     if (code.used_at !== null) {
       if (code.grant_id) await deleteGrant(db, code.grant_id);
       return error(c, "invalid_grant");
     }
-    if (code.client_id !== client.client_id || (body.redirect_uri !== undefined && body.redirect_uri !== code.redirect_uri)
-      || !PKCE_RE.test(body.code_verifier) || await pkceChallenge(body.code_verifier) !== code.code_challenge) return error(c, "invalid_grant");
     if (body.resource !== undefined && !isAllowedResource(body.resource, publicOrigin(c))) return error(c, "invalid_target");
     if (!await isGrantMember(db, code.workspace_id, code.user_id)) return error(c, "invalid_grant");
     const id = crypto.randomUUID(), access = "sen_at_" + randomToken(32), refresh = "sen_rt_" + randomToken(32);
@@ -103,12 +105,22 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
       await deleteGrant(db, grant.id);
       return error(c, "invalid_grant");
     }
+    const testGrace = Number(c.env.OAUTH_REFRESH_GRACE_MS_FOR_TESTS);
+    const grace = c.env.DEV_TOOLS === "1" && Number.isSafeInteger(testGrace) && testGrace > 0
+      ? testGrace : REFRESH_REUSE_GRACE_MS;
+    const current = grant.refresh_hash === hash;
+    // 猶予を過ぎた入れ替え済みトークンの再利用は、接続ごと失効させる
+    if (!current && (grant.rotated_at == null || now - grant.rotated_at > grace)) {
+      await deleteGrant(db, grant.id);
+      return error(c, "invalid_grant");
+    }
     if (body.resource !== undefined && !isAllowedResource(body.resource, publicOrigin(c))) return error(c, "invalid_target");
     const access = "sen_at_" + randomToken(32), refresh = "sen_rt_" + randomToken(32);
     const newHash = await hashToken(refresh);
-    const prev = grant.refresh_hash === hash ? grant.refresh_hash : grant.prev_refresh_hash;
+    const prev = current ? grant.refresh_hash : grant.prev_refresh_hash;
+    const rotatedAt = current ? now : grant.rotated_at;
     const results = await db.batch([
-      stmt(db, "UPDATE oauth_grants SET refresh_hash = ?, prev_refresh_hash = ?, refresh_expires_at = ? WHERE id = ? AND refresh_hash = ? AND prev_refresh_hash IS ?", newHash, prev, now + REFRESH_LIFETIME, grant.id, grant.refresh_hash, grant.prev_refresh_hash),
+      stmt(db, "UPDATE oauth_grants SET refresh_hash = ?, prev_refresh_hash = ?, rotated_at = ?, refresh_expires_at = ? WHERE id = ? AND refresh_hash = ? AND prev_refresh_hash IS ?", newHash, prev, rotatedAt, now + REFRESH_LIFETIME, grant.id, grant.refresh_hash, grant.prev_refresh_hash),
       stmt(db, "INSERT INTO oauth_access_tokens (token_hash, grant_id, expires_at) SELECT ?, id, ? FROM oauth_grants WHERE id = ? AND refresh_hash = ?", await hashToken(access), now + 3_600_000, grant.id, newHash),
       stmt(db, "DELETE FROM oauth_access_tokens WHERE grant_id = ? AND expires_at <= ?", grant.id, now),
     ]);

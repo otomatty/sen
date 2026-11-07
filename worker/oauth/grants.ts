@@ -16,6 +16,7 @@ export interface GrantRow {
   client_name: string;
   refresh_hash: string;
   prev_refresh_hash: string | null;
+  rotated_at: number | null;
   refresh_expires_at: number;
   created_at: number;
   last_used_at: number | null;

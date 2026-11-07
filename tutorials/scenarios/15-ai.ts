@@ -50,6 +50,7 @@ export default defineScenario({
       // 204 で Sen の画面を保ち、外部ツールの画面や認証情報を映さない。
       await route.fulfill({ status: 204 });
     };
+    let cleanupError: Error | null = null;
     try {
       const verifier = randomBytes(32).toString("base64url");
       const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -188,18 +189,28 @@ export default defineScenario({
       try {
         // 交換後に失敗した場合も一覧の差分で拾う。戻り先にいても同じ Cookie で片付ける。
         const list = await t.page.request.get(`${origin}${connectionsUrl}`, { headers: { "x-sen-client": "1" } });
-        if (!list.ok()) throw new Error("片付け用の接続一覧を取得できませんでした");
-        const body = await list.json() as { grants: { id: string; clientName: string }[] };
-        for (const grant of body.grants) {
-          if (before.includes(grant.id) || grant.clientName !== "Claude") continue;
-          const res = await t.page.request.delete(`${origin}/api/ai/connections/${encodeURIComponent(grant.id)}?ws=${encodeURIComponent(t.ws)}`, {
-            headers: { "x-sen-client": "1" },
-          });
-          if (!res.ok()) throw new Error("接続を解除できませんでした");
+        if (!list.ok()) {
+          cleanupError = new Error("片付け用の接続一覧を取得できませんでした");
+        } else {
+          const body = await list.json() as { grants: { id: string; clientName: string }[] };
+          for (const grant of body.grants) {
+            if (before.includes(grant.id) || grant.clientName !== "Claude") continue;
+            const res = await t.page.request.delete(`${origin}/api/ai/connections/${encodeURIComponent(grant.id)}?ws=${encodeURIComponent(t.ws)}`, {
+              headers: { "x-sen-client": "1" },
+            });
+            if (!res.ok()) cleanupError ??= new Error("接続を解除できませんでした");
+          }
         }
+      } catch (error) {
+        cleanupError = error instanceof Error ? error : new Error(String(error));
       } finally {
-        await t.page.unroute(CALLBACK_ROUTE, callback);
+        try {
+          await t.page.unroute(CALLBACK_ROUTE, callback);
+        } catch (error) {
+          cleanupError ??= error instanceof Error ? error : new Error(String(error));
+        }
       }
     }
+    if (cleanupError) throw cleanupError;
   },
 });

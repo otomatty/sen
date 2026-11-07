@@ -297,6 +297,12 @@ test("コードと PKCE を検証し、コードの再利用で接続を失効�
   const first = await exchange(page.request, form);
   expect(first.status).toBe(200);
   expect((await postMcp(page.request, first.body.access_token)).status()).toBe(200);
+  invalidGrant(await exchange(page.request, { ...form, code_verifier: pkce().verifier }));
+  expect((await postMcp(page.request, first.body.access_token)).status()).toBe(200);
+  const reusedByOther = await exchange(page.request, { ...form, client_id: other.client_id });
+  expect([400, 401]).toContain(reusedByOther.status);
+  expect(["invalid_grant", "invalid_client"]).toContain(reusedByOther.body.error);
+  expect((await postMcp(page.request, first.body.access_token)).status()).toBe(200);
   invalidGrant(await exchange(page.request, form));
   expect((await postMcp(page.request, first.body.access_token)).status()).toBe(401);
 });
@@ -323,6 +329,18 @@ test("リフレッシュトークンをローテーションし、失効でき�
   expect(revoked.status()).toBe(200);
   expect((await postMcp(page.request, fourth.body.access_token)).status()).toBe(401);
   invalidGrant(await rotate(fourth.body.refresh_token));
+});
+
+test("猶予を過ぎて 1 つ前のリフレッシュトークンを使うと、接続ごと無効になる", async ({ page }) => {
+  await signupViaUi(page);
+  const first = await tokensFor(page);
+  const second = await refresh(page.request, { client_id: first.client_id, refresh_token: first.refresh_token });
+  expect(second.status).toBe(200);
+  // E2E 用の猶予 5000ms を確実に過ぎてから、1 つ前のトークンを再利用する。
+  await page.waitForTimeout(6000);
+  invalidGrant(await refresh(page.request, { client_id: first.client_id, refresh_token: first.refresh_token }));
+  expect((await postMcp(page.request, second.body.access_token)).status()).toBe(401);
+  invalidGrant(await refresh(page.request, { client_id: first.client_id, refresh_token: second.body.refresh_token }));
 });
 
 test("秘密を持つクライアントは正しい Basic 認証で交換できる", async ({ page }) => {

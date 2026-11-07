@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS oauth_grants (
   client_name TEXT NOT NULL,
   refresh_hash TEXT NOT NULL UNIQUE,
   prev_refresh_hash TEXT,
+  rotated_at INTEGER,
   refresh_expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER
