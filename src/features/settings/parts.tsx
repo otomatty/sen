@@ -23,9 +23,19 @@ export function Section({
   );
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({
+  label,
+  hint,
+  className,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="field">
+    <div className={cx("field", className)}>
       <div className="field-label">
         <span>{label}</span>
         {hint && <span className="muted small">{hint}</span>}

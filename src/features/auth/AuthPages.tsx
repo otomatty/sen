@@ -11,7 +11,7 @@ import type { InvitePreview, PendingInvitation, Role } from "../../../shared/typ
 const isDemo = typeof __SEN_DEMO__ !== "undefined" && __SEN_DEMO__;
 const DAY_MS = 86_400_000;
 
-function AuthLayout({
+export function AuthLayout({
   title,
   subtitle,
   icon,
