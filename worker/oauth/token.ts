@@ -64,6 +64,13 @@ function success(c: Context<AppEnv>, access: string, refresh: string, scope: Api
   return c.json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: scope === "write" ? "read write" : "read" });
 }
 
+async function revokeIfUsed(db: D1Database, hash: string, clientId: string): Promise<void> {
+  const used = await first<{ id: string; client_id: string }>(db,
+    "SELECT g.id, g.client_id FROM oauth_refresh_used u JOIN oauth_grants g ON g.id = u.grant_id WHERE u.token_hash = ?", hash);
+  // 入れ替えで外れたトークンは、同じクライアントから提示された場合だけ接続ごと失効させる
+  if (used?.client_id === clientId) await deleteGrant(db, used.id);
+}
+
 export async function issueToken(c: Context<AppEnv>): Promise<Response> {
   c.header("Pragma", "no-cache");
   const body = await readParams(c);
@@ -101,10 +108,7 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
     const hash = await hashToken(body.refresh_token);
     const grant = await first<GrantRow>(db, "SELECT * FROM oauth_grants WHERE refresh_hash = ? OR prev_refresh_hash = ?", hash, hash);
     if (!grant) {
-      const used = await first<{ id: string; client_id: string }>(db,
-        "SELECT g.id, g.client_id FROM oauth_refresh_used u JOIN oauth_grants g ON g.id = u.grant_id WHERE u.token_hash = ?", hash);
-      // 入れ替えで外れたトークンは、同じクライアントから提示された場合だけ接続ごと失効させる
-      if (used?.client_id === client.client_id) await deleteGrant(db, used.id);
+      await revokeIfUsed(db, hash, client.client_id);
       return error(c, "invalid_grant");
     }
     if (grant.client_id !== client.client_id || grant.refresh_expires_at <= now) return error(c, "invalid_grant");
@@ -133,7 +137,11 @@ export async function issueToken(c: Context<AppEnv>): Promise<Response> {
       stmt(db, "INSERT INTO oauth_access_tokens (token_hash, grant_id, expires_at) SELECT ?, id, ? FROM oauth_grants WHERE id = ? AND refresh_hash = ?", await hashToken(access), now + 3_600_000, grant.id, newHash),
       stmt(db, "DELETE FROM oauth_access_tokens WHERE grant_id = ? AND expires_at <= ?", grant.id, now),
     ]);
-    if (!results[0].meta.changes) return error(c, "invalid_grant");
+    if (!results[0].meta.changes) {
+      // 同時の更新で後から来た入れ替え済みトークンも、漏えいとみなして失効させる
+      await revokeIfUsed(db, hash, client.client_id);
+      return error(c, "invalid_grant");
+    }
     return success(c, access, refresh, grant.scope);
   }
   return error(c, "unsupported_grant_type", "この grant_type は利用できません");

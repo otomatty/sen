@@ -355,6 +355,28 @@ test("入れ替え済みの古いトークンが来たら接続ごと無効に�
   invalidGrant(await rotate(third.body.refresh_token));
 });
 
+test("同時に更新しても、入れ替え済みのトークンが混じれば接続ごと無効になる", async ({ page }) => {
+  await signupViaUi(page);
+  const first = await tokensFor(page);
+  const rotate = (token: string) => refresh(page.request, { client_id: first.client_id, refresh_token: token });
+  const second = await rotate(first.refresh_token);
+  expect(second.status).toBe(200);
+  const results = await Promise.all([
+    rotate(second.body.refresh_token),
+    rotate(first.refresh_token),
+  ]);
+  expect(results.some((result) => result.body.error === "invalid_grant")).toBe(true);
+  expect((await postMcp(page.request, second.body.access_token)).status()).toBe(401);
+  for (const result of results) {
+    if (result.status === 200) {
+      expect((await postMcp(page.request, result.body.access_token)).status()).toBe(401);
+      invalidGrant(await rotate(result.body.refresh_token));
+    } else {
+      invalidGrant(result);
+    }
+  }
+});
+
 test("猶予を過ぎて 1 つ前のリフレッシュトークンを使うと、接続ごと無効になる", async ({ page }) => {
   await signupViaUi(page);
   const first = await tokensFor(page);
