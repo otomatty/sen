@@ -40,36 +40,43 @@ export async function uploadFile(c: Context<AppEnv>) {
   } catch {
     return err(c, "ファイル名が不正です");
   }
-  const db = c.env.DB;
-  const workspace = c.get("workspace");
-  const user = c.get("user");
-  const now = Date.now();
-  const daily = await first<{ count: number }>(db,
-    "SELECT COUNT(*) AS count FROM attachments WHERE uploader_id = ? AND created_at >= ?", user.id, now - 86_400_000);
-  if ((daily?.count ?? 0) >= ATTACHMENT_DAILY_MAX) {
-    return err(c, "添付できるのは 1 日 500 件までです。しばらくしてからやり直してください", 429);
-  }
-  const usage = await first<{ size: number | null }>(db,
-    "SELECT SUM(size) AS size FROM attachments WHERE workspace_id = ?", workspace.id);
-  if ((usage?.size ?? 0) + size > ATTACHMENT_WORKSPACE_MAX_BYTES) {
-    return err(c, "ワークスペースの保存容量（10 GB）がいっぱいです", 409);
-  }
   const body = await c.req.arrayBuffer();
   if (body.byteLength !== size) return err(c, "ファイルを受け取れませんでした");
   const imageType = sniffImageType(new Uint8Array(body));
   const kind: AttachmentKind = imageType ? "image" : "file";
   const contentType = imageType ?? "application/octet-stream";
   if (imageType && size > ATTACHMENT_IMAGE_MAX_BYTES) return err(c, SIZE_ERROR, 413);
+  const db = c.env.DB;
+  const workspace = c.get("workspace");
+  const user = c.get("user");
+  const now = Date.now();
   const id = crypto.randomUUID();
+  // 件数と容量の確認を行の作成と同じ文で行い、同時アップロードの枠も確保する。
+  const reserved = await db.prepare(
+    `INSERT INTO attachments (id, workspace_id, uploader_id, name, kind, content_type, size, created_at, unreferenced_at)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE (SELECT COUNT(*) FROM attachments WHERE uploader_id = ? AND created_at >= ?) < ?
+       AND (SELECT COALESCE(SUM(size), 0) FROM attachments WHERE workspace_id = ?) + ? <= ?`,
+  ).bind(
+    id, workspace.id, user.id, name, kind, contentType, size, now, now,
+    user.id, now - 86_400_000, ATTACHMENT_DAILY_MAX,
+    workspace.id, size, ATTACHMENT_WORKSPACE_MAX_BYTES,
+  ).run();
+  if (reserved.meta.changes === 0) {
+    const usage = await first<{ count: number; size: number }>(db,
+      `SELECT (SELECT COUNT(*) FROM attachments WHERE uploader_id = ? AND created_at >= ?) AS count,
+              (SELECT COALESCE(SUM(size), 0) FROM attachments WHERE workspace_id = ?) AS size`,
+      user.id, now - 86_400_000, workspace.id);
+    if ((usage?.count ?? 0) >= ATTACHMENT_DAILY_MAX) {
+      return err(c, "添付できるのは 1 日 500 件までです。しばらくしてからやり直してください", 429);
+    }
+    return err(c, "ワークスペースの保存容量（10 GB）がいっぱいです", 409);
+  }
   const key = `${workspace.id}/${id}`;
-  await files.put(key, body, { httpMetadata: { contentType } });
   try {
-    await run(db,
-      `INSERT INTO attachments (id, workspace_id, uploader_id, name, kind, content_type, size, created_at, unreferenced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, workspace.id, user.id, name, kind, contentType, size, now, now);
+    await files.put(key, body, { httpMetadata: { contentType } });
   } catch (e) {
-    await files.delete(key);
+    await run(db, "DELETE FROM attachments WHERE id = ?", id);
     throw e;
   }
   return c.json<AttachmentUploadResponse>({ id, url: attachmentUrl(publicOrigin(c), id, name), name, kind, size }, 201);

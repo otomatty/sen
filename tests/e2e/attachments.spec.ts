@@ -123,6 +123,16 @@ test("画像は image/png と inline で取得できる", async ({ page }) => {
   expect(response.headers()["content-disposition"]).toMatch(/^inline/);
 });
 
+test("同じ人が同時に 5 件アップロードしてもすべて成功し、別々の id になる", async ({ page }) => {
+  const { ws } = await setupIssue(page);
+  const responses = await Promise.all(
+    Array.from({ length: 5 }, (_, index) => upload(page, ws, `screen-${index}.png`, PNG)),
+  );
+  for (const response of responses) expect(response.status()).toBe(201);
+  const files = await Promise.all(responses.map(async (response) => await response.json() as AttachmentUploadResponse));
+  expect(new Set(files.map((file) => file.id)).size).toBe(5);
+});
+
 test("拡張子が png の SVG は画像ではなくダウンロードになる", async ({ page }) => {
   const { ws } = await setupIssue(page);
   const uploaded = await upload(page, ws, "evil.png", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'));
