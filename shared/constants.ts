@@ -108,3 +108,18 @@ export const ISSUE_TITLE_MAX_LENGTH = 256;
 
 // GitHub の Issue 本文・コメントの上限に合わせる。JS の string.length（UTF-16）で数えるので、GitHub より厳しいか同じになる
 export const MARKDOWN_MAX_LENGTH = 65_536;
+
+// 添付画像 1 つの上限
+export const ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+// 画像以外の添付 1 つと、アップロード全体の上限
+export const ATTACHMENT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+// ワークスペース全体の保存容量の上限
+export const ATTACHMENT_WORKSPACE_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+// 1 人が直近 24 時間にアップロードできる数
+export const ATTACHMENT_DAILY_MAX = 500;
+// 画面で一度に選べる添付の数
+export const ATTACHMENT_BATCH_MAX = 10;
+// 画面から同時に送信する添付の数
+export const ATTACHMENT_UPLOAD_CONCURRENCY = 3;
+// 添付ファイル名の上限（コードポイント数）
+export const ATTACHMENT_NAME_MAX = 255;

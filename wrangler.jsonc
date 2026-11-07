@@ -22,6 +22,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  // 添付ファイルの本体を置く
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "sen-files" }],
   "durable_objects": {
     "bindings": [{ "name": "REALTIME", "class_name": "WorkspaceRealtime" }]
   },

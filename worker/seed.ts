@@ -481,6 +481,8 @@ export async function seedDemo(db: Db, wsId: string, ownerId: string): Promise<v
 
   // 既存のサンプルを片付ける
   await batch(db, [
+    stmt(db, "DELETE FROM attachment_refs WHERE attachment_id IN (SELECT id FROM attachments WHERE workspace_id = ?)", wsId),
+    stmt(db, "UPDATE attachments SET unreferenced_at = ? WHERE workspace_id = ? AND unreferenced_at IS NULL", now, wsId),
     stmt(db, "DELETE FROM issues WHERE workspace_id = ?", wsId),
     stmt(db, "DELETE FROM activities WHERE workspace_id = ?", wsId),
     stmt(db, "DELETE FROM comments WHERE workspace_id = ?", wsId),

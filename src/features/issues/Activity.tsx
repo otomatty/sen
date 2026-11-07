@@ -256,6 +256,7 @@ export function CommentCard({ c }: { c: Comment }) {
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(c.body);
+  const [uploading, setUploading] = useState(false);
   const mine = c.userId === meId;
   return (
     <div className="comment" data-testid="comment">
@@ -281,12 +282,12 @@ export function CommentCard({ c }: { c: Comment }) {
       </div>
       {editing ? (
         <div className="comment-edit">
-          <Editor value={draft} onChange={setDraft} autoFocus onSubmit={() => save()} />
+          <Editor value={draft} onUploadingChange={setUploading} onChange={setDraft} autoFocus onSubmit={() => save()} />
           <div className="comment-edit-actions">
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               キャンセル
             </Button>
-            <Button size="sm" variant="primary" onClick={() => save()} disabled={isMarkdownBlank(draft)}>
+            <Button size="sm" variant="primary" onClick={() => save()} disabled={uploading || isMarkdownBlank(draft)} title={uploading ? "添付をアップロード中" : undefined}>
               保存
             </Button>
           </div>
@@ -320,7 +321,7 @@ export function CommentCard({ c }: { c: Comment }) {
   );
 
   function save() {
-    if (isMarkdownBlank(draft)) return;
+    if (uploading || isMarkdownBlank(draft)) return;
     updateComment(c.id, draft);
     setEditing(false);
   }

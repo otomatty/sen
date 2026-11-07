@@ -15,6 +15,7 @@ export function hasCommentDraft() {
 }
 
 export function CommentComposer({ issueId }: { issueId: string }) {
+  const [uploading, setUploading] = useState(false);
   const [markdown, setMarkdown] = useState("");
   const [key, setKey] = useState(0);
   const editorRef = useRef<TiptapEditor | null>(null);
@@ -50,7 +51,7 @@ export function CommentComposer({ issueId }: { issueId: string }) {
   };
 
   const submit = () => {
-    if (isMarkdownBlank(markdown)) return;
+    if (uploading || isMarkdownBlank(markdown)) return;
     addComment(issueId, markdown);
     setMarkdown("");
     setKey((k) => k + 1);
@@ -88,6 +89,7 @@ export function CommentComposer({ issueId }: { issueId: string }) {
           detectMention();
         }}
         onSubmit={submit}
+        onUploadingChange={setUploading}
         className="composer-editor"
         testId="comment-input"
       />
@@ -110,7 +112,7 @@ export function CommentComposer({ issueId }: { issueId: string }) {
       )}
       <div className="composer-actions">
         <span className="muted small">{MOD} + Enter で送信</span>
-        <button className="send-btn" onClick={submit} disabled={isMarkdownBlank(markdown)} aria-label="コメントを送信" data-testid="comment-submit">
+        <button className="send-btn" onClick={submit} disabled={uploading || isMarkdownBlank(markdown)} title={uploading ? "添付をアップロード中" : undefined} aria-label="コメントを送信" data-testid="comment-submit">
           <ArrowUp size={15} />
         </button>
       </div>

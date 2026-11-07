@@ -1,4 +1,5 @@
 import { AVATAR_COLORS, DEFAULT_STATES, ISSUE_TITLE_MAX_LENGTH, MARKDOWN_MAX_LENGTH, PALETTE } from "../shared/constants";
+import { extractAttachmentIds } from "../shared/attachments";
 import { isMarkdownBlank, markdownToText } from "../shared/markdown";
 import { addDays, isValidYmd, mondayOf, todayYmd } from "../shared/dates";
 import {
@@ -435,6 +436,43 @@ export function nextCycleDates(lastEnd: string | null, durationWeeks: number): {
   return { startsAt, endsAt: addDays(startsAt, durationWeeks * 7 - 1) };
 }
 
+/** 本文の保存後に参照を更新する。参照の失敗で本文の保存を失敗させない */
+export async function syncAttachmentRefs(ctx: MutationCtx, ownerType: "issue" | "comment" | "project", ownerId: string, markdown: string): Promise<void> {
+  try {
+    const { db, ws, now } = ctx;
+    const ids = extractAttachmentIds(markdown);
+    const next = new Set<string>();
+    // workspace_id のパラメータを含め、1 文 100 個以内に収める
+    for (let i = 0; i < ids.length; i += 99) {
+      const chunk = ids.slice(i, i + 99);
+      const rows = await all<{ id: string }>(db,
+        `SELECT id FROM attachments WHERE workspace_id = ? AND id IN (${chunk.map(() => "?").join(",")})`, ws.id, ...chunk);
+      rows.forEach((row) => next.add(row.id));
+    }
+    const current = await all<{ attachment_id: string }>(db,
+      "SELECT attachment_id FROM attachment_refs WHERE owner_type = ? AND owner_id = ?", ownerType, ownerId);
+    const previous = new Set(current.map((row) => row.attachment_id));
+    const removed = [...previous].filter((id) => !next.has(id));
+    const added = [...next].filter((id) => !previous.has(id));
+    const statements: D1PreparedStatement[] = [];
+    for (const id of removed) {
+      statements.push(stmt(db, "DELETE FROM attachment_refs WHERE attachment_id = ? AND owner_type = ? AND owner_id = ?", id, ownerType, ownerId));
+    }
+    for (const id of added) {
+      statements.push(stmt(db, "INSERT OR IGNORE INTO attachment_refs (attachment_id, owner_type, owner_id) VALUES (?, ?, ?)", id, ownerType, ownerId));
+      statements.push(stmt(db, "UPDATE attachments SET unreferenced_at = NULL WHERE id = ? AND workspace_id = ?", id, ws.id));
+    }
+    for (const id of removed) {
+      statements.push(stmt(db,
+        `UPDATE attachments SET unreferenced_at = ? WHERE id = ? AND workspace_id = ?
+         AND NOT EXISTS (SELECT 1 FROM attachment_refs WHERE attachment_id = attachments.id)`, now, id, ws.id));
+    }
+    await batch(db, statements);
+  } catch (e) {
+    console.error(e instanceof Error ? e.name : "error");
+  }
+}
+
 // ---- 本体 ----
 export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void> {
   const { db, ws, user, now } = ctx;
@@ -469,6 +507,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const number = await nextIssueNumber(ctx, team.id);
       const ts = stateTimestamps(state.type, {}, now);
       const subscribers = [...new Set([user.id, assigneeId].filter(Boolean))];
+      const description = cleanMarkdown(a.description ?? "", "説明");
       await run(
         db,
         `INSERT INTO issues (id, workspace_id, team_id, number, title, description, state_id, priority, assignee_id, creator_id,
@@ -480,7 +519,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         team.id,
         number,
         title,
-        cleanMarkdown(a.description ?? "", "説明"),
+        description,
         stateId,
         priority,
         assigneeId,
@@ -499,6 +538,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         (ts as Row).completed_at ?? null,
         (ts as Row).canceled_at ?? null,
       );
+      await syncAttachmentRefs(ctx, "issue", a.id, description);
       touch(ctx, "issue", a.id);
       await addActivity(ctx, a.id, "created", { stateType: state.type });
       if (assigneeId) await addNotifications(ctx, [assigneeId], a.id, "assigned");
@@ -635,6 +675,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       if (ctx.expectedUpdatedAt != null && !(await issueWriteLanded(db, result.meta?.changes, row.id, now))) {
         throw new StaleIssueWrite();
       }
+      if (p.description !== undefined) await syncAttachmentRefs(ctx, "issue", row.id, set.description);
       touch(ctx, "issue", row.id);
       for (const [type, data] of acts) await addActivity(ctx, row.id, type, data);
       for (const [targets, type, data] of notify) await addNotifications(ctx, targets, row.id, type, data);
@@ -711,6 +752,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         ctx.via ?? null,
         githubAuthor,
       );
+      await syncAttachmentRefs(ctx, "comment", a.id, body);
       touch(ctx, "comment", a.id);
       const members = await all<Row>(
         db,
@@ -746,6 +788,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const body = cleanMarkdown(a.body, "コメント");
       if (isMarkdownBlank(body)) fail("コメントを入力してください");
       await run(db, "UPDATE comments SET body = ?, updated_at = ?, edited_at = ? WHERE id = ?", body, now, now, a.id);
+      await syncAttachmentRefs(ctx, "comment", a.id, body);
       touch(ctx, "comment", a.id);
       return;
     }
@@ -756,6 +799,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       if (!c) fail("コメントが見つかりません", 404);
       if (c.user_id !== user.id && ctx.role !== "admin") fail("このコメントは削除できません", 403);
       await run(db, "DELETE FROM comments WHERE id = ?", a.id);
+      await syncAttachmentRefs(ctx, "comment", a.id, "");
       ctx.changes.push({ entity: "comment", entityId: a.id, op: "delete" });
       return;
     }
@@ -818,6 +862,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       const teamIds: string[] = [];
       for (const t of Array.isArray(a.teamIds) ? a.teamIds : []) teamIds.push((await getTeam(ctx, t)).id);
       const r = await first<{ m: number | null }>(db, "SELECT MAX(sort_order) AS m FROM projects WHERE workspace_id = ?", ws.id);
+      const description = cleanMarkdown(a.description ?? "", "説明");
       await run(
         db,
         `INSERT INTO projects (id, workspace_id, name, description, status, lead_id, team_ids, start_date, target_date, color, icon,
@@ -825,7 +870,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         a.id,
         ws.id,
         name,
-        cleanMarkdown(a.description ?? "", "説明"),
+        description,
         ["backlog", "planned", "started", "paused", "completed", "canceled"].includes(a.status) ? a.status : "planned",
         leadId,
         JSON.stringify(teamIds),
@@ -837,6 +882,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
         now,
         now,
       );
+      await syncAttachmentRefs(ctx, "project", a.id, description);
       touch(ctx, "project", a.id);
       return;
     }
@@ -868,6 +914,7 @@ export async function applyMutation(ctx: MutationCtx, m: Mutation): Promise<void
       set.updated_at = now;
       const keys = Object.keys(set);
       await run(db, `UPDATE projects SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, ...keys.map((k) => set[k]), a.id);
+      if (p.description !== undefined) await syncAttachmentRefs(ctx, "project", a.id, set.description);
       touch(ctx, "project", a.id);
       return;
     }

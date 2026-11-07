@@ -7,6 +7,12 @@ function httpSrc(src: unknown): string | null {
 
 /** 画像。http(s) 以外は読み込まず、代替テキストだけを見せて Markdown には残す */
 export const SafeImage = Image.extend({
+  renderMarkdown(node) {
+    const src = node.attrs?.src ?? "";
+    const alt = String(node.attrs?.alt ?? "").replace(/[\[\]]/g, "\\$&");
+    const title = node.attrs?.title ?? "";
+    return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+  },
   renderHTML({ node }) {
     const src = httpSrc(node.attrs.src);
     const alt = String(node.attrs.alt ?? "");

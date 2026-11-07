@@ -7,6 +7,12 @@ import { Extension } from "@tiptap/core";
 import { Markdown } from "@tiptap/markdown";
 import { Marked, marked as markedFn } from "marked";
 import type { EditorView } from "@tiptap/pm/view";
+import { TextSelection } from "@tiptap/pm/state";
+import { Paperclip } from "lucide-react";
+import { useFilesEnabled, useOnline } from "../lib/attachments";
+import { useData } from "../store/data";
+import { toast } from "../store/ui";
+import { attachmentInCode, startUploads, uploadExtension } from "./editor/upload";
 import { cx } from "../lib/utils";
 import { Alert } from "./editor/alert";
 import { FootnoteDefinition, FootnoteReference } from "./editor/footnote";
@@ -26,6 +32,7 @@ export interface EditorProps {
   placeholder?: string;
   autoFocus?: boolean;
   onSubmit?: () => void;
+  onUploadingChange?: (uploading: boolean) => void;
   onBlur?: () => void;
   className?: string;
   editable?: boolean;
@@ -52,12 +59,33 @@ export default function EditorImpl({
   placeholder,
   autoFocus,
   onSubmit,
+  onUploadingChange,
   onBlur,
   className,
   editable = true,
   testId,
   editorRef,
 }: EditorProps) {
+  const filesEnabled = useFilesEnabled();
+  const online = useOnline();
+  const wsKey = useData((s) => s.workspace?.urlKey);
+  const uploading = useRef(false);
+  const uploadingChangeRef = useRef(onUploadingChange);
+  uploadingChangeRef.current = onUploadingChange;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const attachPosition = useRef<number | null>(null);
+  const dragDepth = useRef(0);
+  const [dragover, setDragover] = useState(false);
+  const uploadRef = useRef<(view: EditorView, files: File[], pos: number) => void>(() => {});
+  uploadRef.current = (view, files, pos) => {
+    if (!editable) return;
+    pos = TextSelection.near(view.state.doc.resolve(pos)).from;
+    const reason = !navigator.onLine ? "オフラインのため添付できません"
+      : !filesEnabled || !wsKey ? "この環境ではファイルを添付できません"
+      : attachmentInCode(view, pos) ? "コードの中には添付できません" : null;
+    if (reason) { toast(reason, { kind: "error" }); return; }
+    if (wsKey) startUploads(view, files, pos, wsKey);
+  };
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const onSubmitRef = useRef(onSubmit);
@@ -96,11 +124,19 @@ export default function EditorImpl({
       TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: placeholder ?? "" }),
       CompositionGuard,
+      uploadExtension((value) => {
+        uploading.current = value;
+        uploadingChangeRef.current?.(value);
+      }),
       Extension.create({
         name: "senKeys",
         addKeyboardShortcuts() {
           return {
             "Mod-Enter": () => {
+              if (uploading.current) {
+                toast("添付をアップロード中です", { kind: "error" });
+                return true;
+              }
               if (onSubmitRef.current) {
                 onSubmitRef.current();
                 return true;
@@ -148,11 +184,15 @@ export default function EditorImpl({
         return false;
       },
       handlePaste(view, event) {
-        return pasteMarkdown(view, event, () => instance.current);
+        return pasteMarkdown(view, event, () => instance.current, (files) => uploadRef.current(view, files, view.state.selection.from));
       },
-      handleDrop(_view, event) {
+      handleDrop(view, event) {
         if (event.dataTransfer?.files?.length) {
           event.preventDefault();
+          dragDepth.current = 0;
+          setDragover(false);
+          const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from;
+          uploadRef.current(view, Array.from(event.dataTransfer.files), pos);
           return true;
         }
         return false;
@@ -183,9 +223,69 @@ export default function EditorImpl({
   }, [editable, editor]);
 
   return (
-    <div className={cx("editor", className)}>
+    <div
+      className={cx("editor", className, dragover && "is-dragover")}
+      onDragEnter={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        dragDepth.current++;
+        if (editable) setDragover(true);
+      }}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        if (editable) setDragover(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (!dragDepth.current) setDragover(false);
+      }}
+      onDrop={(event) => {
+        dragDepth.current = 0;
+        setDragover(false);
+        if (!event.dataTransfer.files.length || event.defaultPrevented) return;
+        event.preventDefault();
+        if (editor) {
+          const pos = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? editor.state.selection.from;
+          uploadRef.current(editor.view, Array.from(event.dataTransfer.files), pos);
+        }
+      }}
+    >
       {editor && <TableToolbar editor={editor} />}
       <EditorContent editor={editor} />
+      {editable && filesEnabled && (
+        <div className="editor-attach-row">
+          <button
+            type="button"
+            className="icon-btn editor-attach-btn"
+            aria-label="ファイルを添付"
+            title={online ? "ファイルを添付" : "オフラインのため添付できません"}
+            data-testid="editor-attach"
+            disabled={!online || !editor}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (!editor) return;
+              attachPosition.current = editor.isFocused ? editor.state.selection.from : editor.state.doc.content.size - 1;
+              inputRef.current?.click();
+            }}
+          >
+            <Paperclip size={16} />
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            data-testid="editor-attach-input"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              if (editor && files.length) uploadRef.current(editor.view, files, attachPosition.current ?? editor.state.selection.from);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -198,15 +298,16 @@ function inCode(view: EditorView): boolean {
   return false;
 }
 
-/** 文字だけの貼り付けは Markdown として読む。画像ファイルは捨てる。コードの中は文字のまま */
-function pasteMarkdown(view: EditorView, event: ClipboardEvent, getEditor: () => TiptapEditor | null): boolean {
+/** 文字だけの貼り付けは Markdown として読む。ファイルだけなら添付し、コードの中は文字のまま */
+function pasteMarkdown(view: EditorView, event: ClipboardEvent, getEditor: () => TiptapEditor | null, upload: (files: File[]) => void): boolean {
   const data = event.clipboardData;
   if (!data) return false;
   const files = Array.from(data.files);
   const html = data.getData("text/html").trim();
   const text = data.getData("text/plain");
-  if (files.some((file) => file.type.startsWith("image/")) && !html && !text) {
+  if (files.length && !html && !text) {
     event.preventDefault();
+    upload(files);
     return true;
   }
   if (inCode(view)) {

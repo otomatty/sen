@@ -27,6 +27,7 @@ function CreateIssueDialog() {
   const d = useData();
   const navigate = useNavigate();
   const p = useWsPath();
+  const [uploading, setUploading] = useState(false);
   const [keepOpen, setKeepOpen] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   // 説明欄のエディタは遅延読み込み。Enter の時点でまだ無ければ、読み込みが終わったときにフォーカスを移す。
@@ -60,6 +61,10 @@ function CreateIssueDialog() {
   };
 
   const submit = () => {
+    if (uploading) {
+      toast("添付をアップロード中です", { kind: "error" });
+      return;
+    }
     const title = draft.title.trim();
     if (!title) {
       titleRef.current?.focus();
@@ -143,6 +148,7 @@ function CreateIssueDialog() {
           className="create-description"
           autoFocus={focusDescriptionOnLoad}
           onSubmit={submit}
+          onUploadingChange={setUploading}
           testId="create-description"
         />
       </div>
@@ -201,7 +207,7 @@ function CreateIssueDialog() {
           <Switch checked={keepOpen} onChange={setKeepOpen} label="続けて作成" />
           続けて作成
         </label>
-        <Button variant="primary" onClick={submit} data-testid="create-submit">
+        <Button variant="primary" onClick={submit} disabled={uploading} title={uploading ? "添付をアップロード中" : undefined} data-testid="create-submit">
           課題を作成
           <span className="btn-kbd">{MOD}↵</span>
         </Button>
